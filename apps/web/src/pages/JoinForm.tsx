@@ -1,9 +1,10 @@
 import { NICKNAME_MAX_LENGTH, normalizeInviteCode } from "@project/shared";
 import { useState, type FormEvent } from "react";
 import { Button, Card, Notice, TextField } from "../components/ui";
-import { ApiError, joinRoom } from "../lib/api";
+import { joinKeepingIdentity } from "../features/room/identity";
+import { ApiError } from "../lib/api";
 import { navigate, roomPath } from "../lib/router";
-import { roomToken, savedNickname } from "../lib/storage";
+import { savedNickname } from "../lib/storage";
 
 export function JoinForm({ initialCode = "" }: { initialCode?: string }) {
   const [code, setCode] = useState(initialCode);
@@ -21,9 +22,9 @@ export function JoinForm({ initialCode = "" }: { initialCode?: string }) {
     setBusy(true);
     setError("");
     try {
-      const joined = await joinRoom(inviteCode, nickname.trim());
+      // 已經有這一房的有效身份（例如房主開了自己的邀請連結）就沿用，不覆寫。
+      const joined = await joinKeepingIdentity(inviteCode, nickname.trim());
       savedNickname.set(nickname.trim());
-      roomToken.set(joined.roomId, joined.memberToken);
       navigate(roomPath(joined.roomId));
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "加入失敗，請稍後再試。");

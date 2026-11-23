@@ -41,7 +41,7 @@ export function MemberList({
       <ul className="grid gap-2">
         {members.map((member) => {
           const status =
-            member.role === "member"
+            member.role === "member" && member.online
               ? quality(memberStatus[member.memberId])
               : null;
           return (

@@ -3,7 +3,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Layout } from "../components/Layout";
 import { Button, Card, Notice, TextField } from "../components/ui";
 import { ApiError, createRoom, getHealth } from "../lib/api";
-import { navigate, roomPath } from "../lib/router";
+import { navigate, readNotice, roomPath } from "../lib/router";
 import { roomToken, savedNickname } from "../lib/storage";
 import { JoinForm } from "./JoinForm";
 
@@ -18,8 +18,9 @@ function CreateRoomCard() {
     setError("");
     try {
       const room = await createRoom(nickname.trim());
-      savedNickname.set(nickname.trim());
+      // 先存 token（記憶體一定成功），再存暱稱。
       roomToken.set(room.roomId, room.hostToken);
+      savedNickname.set(nickname.trim());
       navigate(roomPath(room.roomId));
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "建立失敗，請稍後再試。");
@@ -69,9 +70,25 @@ function ServiceStatus() {
   );
 }
 
+/** 從房間被送回首頁時（房間關閉、被踢、身份失效）顯示原因。 */
+function ExitNotice() {
+  const [notice] = useState(() => readNotice(history.state));
+  useEffect(() => {
+    // 顯示一次就好，重新整理首頁不要再出現。
+    if (notice) history.replaceState(null, "", location.pathname);
+  }, [notice]);
+  if (!notice) return null;
+  return (
+    <div className="mb-6">
+      <Notice tone="warning">{notice}</Notice>
+    </div>
+  );
+}
+
 export function HomePage() {
   return (
     <Layout>
+      <ExitNotice />
       <h1 className="mb-2 text-2xl font-bold text-white sm:text-3xl">
         一起看電影
       </h1>

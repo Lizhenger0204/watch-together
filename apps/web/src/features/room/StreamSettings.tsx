@@ -5,7 +5,7 @@ import {
   type RoomInfo,
 } from "@project/shared";
 import { Card, Notice, Segmented } from "../../components/ui";
-import { estimateP2pUpload, formatMbps } from "./room-state";
+import { estimateP2pUpload, formatMbps, type RoomUpdate } from "./room-state";
 
 const MODE_OPTIONS: { value: Mode; label: string; description: string }[] = [
   {
@@ -37,11 +37,7 @@ export function StreamSettings({
 }: {
   room: RoomInfo;
   viewers: number;
-  onChange: (patch: {
-    mode?: Mode;
-    quality?: Quality;
-    locked?: boolean;
-  }) => void;
+  onChange: (patch: RoomUpdate) => void;
 }) {
   const upload = estimateP2pUpload(room.quality, viewers);
   return (
