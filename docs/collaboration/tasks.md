@@ -24,13 +24,13 @@
 | T-105 | 前端頁面：首頁（建房 / 輸入邀請碼）、`/join/:code`、房間頁（房主版 / 收看者版）、成員列表與連線品質、模式與畫質選項卡、複製邀請碼 | Claude | T-102 | TODO |
 | T-106 | 選片：檔案選擇、開播前檢查、本地播放與自訂控制列、captureStream、房主音量實測並更新 streaming.md | GPT | T-101 | DONE |
 | T-107 | P2P 傳輸：房主 mesh、收看者連線、codec 偏好、畫質與縮放、ICE restart、統計 | Claude | T-103, T-104, T-114 | TODO |
-| T-108 | 轉發轉接：WHIP / WHEP → Cloudflare Realtime（參考官方範例，先確認授權） | GPT | T-103 | DOING |
+| T-108 | 轉發轉接：WHIP / WHEP → Cloudflare Realtime（參考官方範例，先確認授權） | GPT | T-103 | DONE |
 | T-109 | 轉發傳輸客戶端（WHIP / WHEP）+ 模式切換流程 | Claude | T-107, T-108 | TODO |
 | T-110 | 收看端播放器：srcObject、點擊開始觀看、狀態提示、重新連線按鈕 | Claude | T-107 | TODO |
 | T-111 | E2E：3 個 context 的 P2P 流程 | GPT | T-105, T-106, T-110 | TODO |
 | T-112 | 部署：給零經驗使用者的 Cloudflare 帳號與網域設定圖文指南、`pnpm deploy`、secrets 設定、CI | GPT | T-103 | DOING |
 | T-113 | 人工驗收清單（ADR 0002 待驗證項目），做完後交給使用者與朋友實測 | Claude | T-109, T-111, T-112 | TODO |
-| T-114 | T-103 審查修正：邀請碼重產與關房序列化、關房清理可重試、限流後備、token 常數時間比對；spec 補房主接手（4000）時的 `peer:request` 順序、未驗證連線格式錯誤以 4400 關閉、ICE 新路徑同步 shared 與版本說明 | Claude | T-103 | TODO |
+| T-114 | T-103 審查修正：邀請碼重產與關房序列化、關房清理可重試、限流後備、token 常數時間比對；spec 補房主接手（4000）時的 `peer:request` 順序、未驗證連線格式錯誤以 4400 關閉、ICE 新路徑同步 shared 與版本說明；關房時呼叫 `RoomDO.closeRelayResources()`（失敗保留記錄重試） | Claude | T-103, T-108 | TODO |
 
 可平行的組合：T-101 完成後 → T-102（Claude）∥ T-106（GPT）；T-102 完成後 → T-103、T-105（Claude，依序）∥ T-104（GPT）；T-103 完成後 → T-108、T-112（GPT）。
 
@@ -75,3 +75,11 @@ Review（Claude）：TURN 回傳的 port 53 位址會被瀏覽器擋下，由 T-
 4. 驗證方式：`pnpm typecheck && pnpm lint && pnpm test && pnpm e2e`。
 
 Review（GPT，監工核對）：結論「小修後可合併」，沒有安全漏洞（token 只存雜湊、收看者 signal 只能送房主、伺服器端角色檢查、踢人後 token 失效皆符合）。合併到 main 時 typecheck／lint／test 121／e2e 3 全過。待修項目開為 T-114，需在 T-107 前完成：並發重產邀請碼會讓其中一個回傳碼失效並留下孤兒對照；關房清理 RPC 失敗後 alarm 重試會跳過；直播中房主被同一成員新連線取代時不會重發 `peer:request`；未驗證連線的首幀格式錯誤未斷線、五秒期限在雜湊前判斷；缺限流綁定時放行；token 比對非常數時間；shared 的 ICE 路由註解仍是舊路徑。測試缺口：休眠喚醒還原、alarm 共用、混合 port 53 的 TURN 過濾斷言。
+
+### T-108（GPT，2026-11-24）— DONE
+1. 做了什麼：`relay/sdp.ts`（SDP offer 檢查）、`relay/realtime.ts`（Cloudflare Realtime 客戶端，5 秒逾時，上游錯誤一律轉成 `503 RELAY_UNAVAILABLE`）、`relay/index.ts`（`createRelayRoutes({ requireHost, requireMember })`）；RoomDO 新增 `getRelayPublication`／`registerRelayResource`／`getRelayResource`／`removeRelayResource`／`closeRelayResources`（獨立 storage key `relay`）；`services.ts` 新增 `RelayService`。
+2. 介面變動：依既有契約啟用 `POST /api/rooms/:roomId/whip`、`POST /api/rooms/:roomId/whep`、`DELETE <Location>`；`Location` 為 `/api/rooms/:roomId/relay/:resourceId`（UUID）。shared 與 WebSocket 契約沒有變更。
+3. 已知限制：WHIP／WHEP 不檢查 `room.mode`；若 SFU 要求額外 SDP 協商，WHEP 回 503；Realtime 沒有刪除 session 的 API，改為強制關閉 tracks；房主斷線、換片、關房時的清理時機待定（關房整合併入 T-114）。官方範例 `cloudflare/realtime-examples` 沒有明確授權條款，未複製程式碼，依官方 Connection API 與 OpenAPI schema 自行實作。
+4. 驗證方式：`pnpm typecheck && pnpm lint && pnpm test && pnpm e2e`（signal 64 個，上游一律用假 fetch）。
+
+Review（Claude 監工）：路由沿用 `requireHost`／`requireMember`，沒有新的 log，錯誤回應不含金鑰與上游內容，沒有新增套件，`relay/` 沒有使用 Workers 專屬 API，改動範圍符合 ownership.md。合併前四項檢查全過。留給 T-109 確認：(a) 是否要求 `mode === 'relay'`；(b) WHEP 單次 offer／answer 能否在真實 SFU 運作（列入 T-113 實測）；(c) 房主重新 WHIP 時，舊的發布資源留在 storage，直到關房或 DELETE 才清掉。
