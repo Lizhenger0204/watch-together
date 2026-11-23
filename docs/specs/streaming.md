@@ -26,7 +26,8 @@
 
 - 房主端用**自訂控制列**操作本地 `<video>`（播放、暫停、拖進度、音量）。收看者看到的是擷取後的畫面，不需要額外同步。
 - `const stream = video.captureStream()`，只呼叫一次，同一個 stream 給所有傳輸共用；換片時要重新擷取並替換所有連線的 track（`RTCRtpSender.replaceTrack`）。
-- 房主端的靜音與音量**可能影響推出去的音訊**（各瀏覽器行為不同，需實測）。在驗證前：房主端音量控制只調整本地監聽，實作方式由 T-106 實測決定並記錄於此。
+- 房主端音量：T-106 在 Chrome 158（macOS）實測，`video.volume = 0` 與 `video.muted = true` 都**不影響**擷取出去的音訊（AnalyserNode RMS 幾乎相同），因此房主本地音量直接調 `video.volume`。Windows Edge 列入 T-113 驗收。
+- **影片播完時 Chrome 會把擷取的 track 從 stream 移除**；房主再按播放或拖回前面時會加入新的 track。傳輸層必須監聽 `useLocalSource(onStreamChange)`（對應 stream 的 `addtrack` / `removetrack`），用 `replaceTrack` 換上新 track，不能假設 track 物件永遠不變。
 - 房主關閉或重新整理分頁 = 停止直播。分頁在背景時要能繼續推流（實測項目）。
 
 ## 2. 編碼與畫質（`features/transport/common/`）

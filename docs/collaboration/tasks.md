@@ -22,7 +22,7 @@
 | T-103 | 房間核心 + REST（建房 / 加入 / 重產邀請碼）+ RoomDO / InviteDirectoryDO + WebSocket 驗證 + 信令轉送 + 生命週期 + 限流 | Claude | T-102 | DOING |
 | T-104 | `/api/ice`：STUN 清單 + Cloudflare TURN 短效憑證（沒有 secrets 時只回 STUN） | GPT | T-102 | DONE |
 | T-105 | 前端頁面：首頁（建房 / 輸入邀請碼）、`/join/:code`、房間頁（房主版 / 收看者版）、成員列表與連線品質、模式與畫質選項卡、複製邀請碼 | Claude | T-102 | TODO |
-| T-106 | 選片：檔案選擇、開播前檢查、本地播放與自訂控制列、captureStream、房主音量實測並更新 streaming.md | GPT | T-101 | DOING |
+| T-106 | 選片：檔案選擇、開播前檢查、本地播放與自訂控制列、captureStream、房主音量實測並更新 streaming.md | GPT | T-101 | DONE |
 | T-107 | P2P 傳輸：房主 mesh、收看者連線、codec 偏好、畫質與縮放、ICE restart、統計 | Claude | T-103, T-104 | TODO |
 | T-108 | 轉發轉接：WHIP / WHEP → Cloudflare Realtime（參考官方範例，先確認授權） | GPT | T-103 | TODO |
 | T-109 | 轉發傳輸客戶端（WHIP / WHEP）+ 模式切換流程 | Claude | T-107, T-108 | TODO |
@@ -58,3 +58,11 @@ Review（Claude，commit 7f5b1eb）：改用更名後的 `@cloudflare/vitest-plu
 4. 驗證方式：`pnpm typecheck && pnpm lint && pnpm test`。
 
 Review（Claude）：TURN 回傳的 port 53 位址會被瀏覽器擋下，由 T-103 一併過濾。
+
+### T-106（GPT，2026-11-24）— DONE
+1. 做了什麼：`features/source/`：選檔、開播前檢查（TIMEOUT / VIDEO_UNDECODABLE / NO_AUDIO / CAPTURE_UNSUPPORTED）、無音軌確認、`HostSourcePlayer` 自訂控制列、每片一次 `captureStream()`、`computeScaleDownBy`。E2E 測試影片在 `e2e/fixtures/`。
+2. 介面變動：匯出 `useLocalSource(onStreamChange?)`（回傳 `videoRef`、`title`、`stream`、`check`、`selectFile`、`continueWithoutAudio`）、`HostSourcePlayer`、`computeScaleDownBy`。
+3. 已知限制：`App.tsx` 的 `?demo=source` 是暫時入口，T-105 由 Claude 移除並搬移 E2E 入口。CI 需安裝 Playwright Chromium（health）與 Google Chrome（source）。
+4. 驗證方式：`pnpm typecheck && pnpm lint && pnpm test && pnpm e2e`。
+
+實測結論（已寫入 streaming.md §1）：Chrome 的房主音量不影響擷取音訊；影片播完時擷取 track 會被移除；HEVC + AAC 測試片在本機 Chrome 可解碼。
