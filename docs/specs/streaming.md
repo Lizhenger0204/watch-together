@@ -81,9 +81,9 @@
 
 ## 5. ICE 設定（`apps/signal/src/ice/`）
 
-- `GET /api/ice` 回傳 `{ iceServers }`，客戶端在**每次建立連線前**取得（TURN 憑證有時效）。
+- `GET /api/rooms/:roomId/ice` 回傳 `{ iceServers }`，客戶端在**每次建立連線前**取得（TURN 憑證有時效）。
 - STUN：`stun:stun.cloudflare.com:3478`，再加一個中國大陸可用的 STUN（候選如 `stun:stun.miwifi.com:3478`，上線前實測）。**不可只用 Google STUN**。
-- TURN：Cloudflare TURN 短效憑證（TTL 4 小時），由伺服器用 API 產生，金鑰存在 Workers secrets，不可出現在前端程式碼。
+- TURN：Cloudflare TURN 短效憑證（TTL 4 小時），由伺服器用 API 產生，金鑰存在 Workers secrets，不可出現在前端程式碼。回傳前過濾掉 port 53 的位址（瀏覽器會擋）。
 - 轉發模式同樣使用這份 ICE 設定。
 
 ## 6. 模式切換

@@ -1,0 +1,43 @@
+import type { Context } from "hono";
+import type { AppEnv } from "../../app";
+import type { Services } from "../../services";
+import { INVITE_DIRECTORY_NAME, type Env } from "./env";
+
+export function workersServices(c: Context<AppEnv>): Services {
+  const env = c.env as unknown as Env;
+  const directory = () => env.INVITE_DIRECTORY.getByName(INVITE_DIRECTORY_NAME);
+  const room = (roomId: string) => env.ROOM.getByName(roomId);
+
+  return {
+    rooms: {
+      async createRoom(nickname) {
+        const roomId = crypto.randomUUID();
+        const inviteCode = await directory().reserve(roomId);
+        const { hostToken, memberId } = await room(roomId).init({
+          roomId,
+          inviteCode,
+          nickname,
+        });
+        return { roomId, inviteCode, hostToken, memberId };
+      },
+      async joinRoom(inviteCode, nickname) {
+        const roomId = await directory().lookup(inviteCode);
+        if (!roomId) return { ok: false, code: "ROOM_NOT_FOUND" };
+        const result = await room(roomId).join({ inviteCode, nickname });
+        return result.ok
+          ? { ok: true, value: { roomId, ...result.value } }
+          : result;
+      },
+      authenticate: (roomId, token) => room(roomId).authenticate(token),
+      regenerateInviteCode: (roomId, hostMemberId) =>
+        room(roomId).regenerateInviteCode(hostMemberId),
+      connect: (roomId, request) => room(roomId).fetch(request),
+    },
+    joinLimiter: {
+      async allow(key) {
+        if (!env.JOIN_RATE_LIMITER) return true;
+        return (await env.JOIN_RATE_LIMITER.limit({ key })).success;
+      },
+    },
+  };
+}

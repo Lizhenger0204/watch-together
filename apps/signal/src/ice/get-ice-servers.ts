@@ -83,8 +83,9 @@ async function fetchTurnServers(
   const { iceServers } = iceResponseSchema.parse(await response.json());
   const turnServers: IceServer[] = [];
   for (const { urls, username, credential } of iceServers) {
-    const turnUrls = (typeof urls === "string" ? [urls] : urls).filter((url) =>
-      /^turns?:.+/.test(url),
+    // 瀏覽器會擋 port 53，留著只會拖慢 ICE（Cloudflare TURN 文件也建議過濾）。
+    const turnUrls = (typeof urls === "string" ? [urls] : urls).filter(
+      (url) => /^turns?:.+/.test(url) && !/:53(\?|$)/.test(url),
     );
     if (turnUrls.length === 0) continue;
     if (!username || !credential) {

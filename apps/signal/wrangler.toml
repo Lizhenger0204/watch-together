@@ -19,3 +19,9 @@ class_name = "InviteDirectoryDO"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["RoomDO", "InviteDirectoryDO"]
+
+# POST /api/rooms/join：每 IP 每分鐘 10 次（room-and-invite.md）
+[[ratelimits]]
+name = "JOIN_RATE_LIMITER"
+namespace_id = "1001"
+simple = { limit = 10, period = 60 }

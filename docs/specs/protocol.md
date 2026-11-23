@@ -17,7 +17,7 @@
 | POST | `/api/rooms` | 無 | `{ nickname }` | `201 { roomId, inviteCode, hostToken, memberId }` |
 | POST | `/api/rooms/join` | 無 | `{ inviteCode, nickname }` | `200 { roomId, memberToken, memberId }` |
 | POST | `/api/rooms/:roomId/invite-code` | host | — | `200 { inviteCode }`（重新產生） |
-| GET | `/api/ice` | 任一成員 | — | `200 { iceServers: RTCIceServer[] }` |
+| GET | `/api/rooms/:roomId/ice` | 任一成員 | — | `200 { iceServers: RTCIceServer[] }` |
 | POST | `/api/rooms/:roomId/whip` | host | SDP offer（`application/sdp`） | `201` SDP answer + `Location` |
 | POST | `/api/rooms/:roomId/whep` | member | SDP offer | `201` SDP answer + `Location`；未開播 `409 STREAM_NOT_LIVE` |
 | DELETE | `<Location>` | 同建立者 | — | `200` |
@@ -30,6 +30,19 @@
 - 第一則訊息必須是 `auth`，否則斷線（見 room-and-invite.md）。
 - 需要回應的請求帶 `reqId`，伺服器回 `ack { reqId, ok: true } | { reqId, ok: false, code }`。
 - 心跳：客戶端每 20 秒送 `ping`，伺服器回 `pong`。
+- 同一成員只保留一條連線：新連線驗證成功後，舊連線以 `4000` 關閉。
+
+### 關閉碼
+
+| code | 意義 | 客戶端該做什麼 |
+| --- | --- | --- |
+| `4000` | 被同一成員的新連線取代 | 不要自動重連（另一個分頁接手了） |
+| `4001` | 房間已關閉 | 回首頁 |
+| `4003` | 被踢出 | 清除 token，回首頁 |
+| `4400` | 格式錯誤或未驗證就送訊息、協定版本不符 | 重新整理頁面 |
+| `4401` | token 無效 | 清除 token，回首頁 |
+| `4408` | 5 秒內沒有送 `auth` | 重連 |
+| 其他 | 網路中斷等 | 指數退避重連，重連後重新 `auth` |
 
 ### 客戶端 → 伺服器
 

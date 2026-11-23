@@ -1,7 +1,7 @@
-import { DurableObject } from "cloudflare:workers";
-import app from "../../app";
+import { createApp } from "../../app";
+import { workersServices } from "./services";
 
-export class RoomDO extends DurableObject {}
-export class InviteDirectoryDO extends DurableObject {}
+export { InviteDirectoryDO } from "./invite-directory-do";
+export { RoomDO } from "./room-do";
 
-export default app;
+export default createApp(workersServices);

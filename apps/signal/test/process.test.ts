@@ -1,0 +1,365 @@
+import { describe, expect, test } from "vitest";
+import { createRoomState, type RoomState } from "../src/room/room";
+import {
+  CLOSE,
+  onAuth,
+  onDisconnect,
+  onMessage,
+  type Effect,
+} from "../src/signaling/process";
+
+const T0 = 1_000_000;
+
+function roomWith(overrides: Partial<RoomState> = {}): RoomState {
+  const base = createRoomState({
+    roomId: "r1",
+    inviteCode: "ABCDEFGH",
+    host: { memberId: "host", nickname: "房主", tokenHash: "h-host" },
+    now: T0,
+  });
+  return {
+    ...base,
+    members: [
+      ...base.members,
+      {
+        memberId: "a",
+        nickname: "A",
+        role: "member",
+        tokenHash: "h-a",
+        joinedAt: T0,
+        lastSeenAt: T0,
+      },
+      {
+        memberId: "b",
+        nickname: "B",
+        role: "member",
+        tokenHash: "h-b",
+        joinedAt: T0,
+        lastSeenAt: T0,
+      },
+    ],
+    ...overrides,
+  };
+}
+const LIVE = { live: true, title: "電影", startedAt: T0 };
+
+/** 取出送給某成員的訊息 type。 */
+const sentTo = (effects: Effect[], memberId: string) =>
+  effects
+    .filter(
+      (e) =>
+        e.kind === "send" && "memberId" in e.to && e.to.memberId === memberId,
+    )
+    .map((e) => (e.kind === "send" ? e.message : null));
+const typesTo = (effects: Effect[], memberId: string) =>
+  sentTo(effects, memberId).map((m) => m?.type);
+
+describe("onAuth", () => {
+  test("協定版本不符：回錯誤並關閉連線", () => {
+    const outcome = onAuth(
+      roomWith(),
+      { tokenHash: "h-a", protocolVersion: 99 },
+      1,
+      new Set(),
+      T0,
+    );
+    expect(outcome.accepted).toBe(false);
+    expect(outcome.effects).toContainEqual(
+      expect.objectContaining({ kind: "close", code: CLOSE.BAD_REQUEST }),
+    );
+  });
+
+  test("token 不對：UNAUTHORIZED 並關閉", () => {
+    const outcome = onAuth(
+      roomWith(),
+      { tokenHash: "nope", protocolVersion: 1 },
+      1,
+      new Set(),
+      T0,
+    );
+    expect(outcome.accepted).toBe(false);
+    expect(outcome.effects).toContainEqual(
+      expect.objectContaining({ kind: "close", code: CLOSE.UNAUTHORIZED }),
+    );
+  });
+
+  test("成功：送 snapshot 給自己、成員列表給其他人，清除閒置計時", () => {
+    const outcome = onAuth(
+      roomWith(),
+      { tokenHash: "h-a", protocolVersion: 1, reqId: "1" },
+      1,
+      new Set(["host"]),
+      T0 + 5,
+    );
+    if (!outcome.accepted) throw new Error("應該接受");
+    expect(outcome.memberId).toBe("a");
+    expect(outcome.state.idleSince).toBeNull();
+    expect(typesTo(outcome.effects, "a")).toEqual(["room:snapshot", "ack"]);
+    expect(typesTo(outcome.effects, "host")).toEqual(["room:members"]);
+    const snapshot = sentTo(outcome.effects, "a")[0];
+    expect(snapshot).toMatchObject({ you: { memberId: "a", role: "member" } });
+    expect(snapshot).not.toHaveProperty("room.inviteCode");
+  });
+
+  test("P2P 直播中，收看者上線會請房主發起連線", () => {
+    const outcome = onAuth(
+      roomWith({ stream: LIVE }),
+      { tokenHash: "h-a", protocolVersion: 1 },
+      1,
+      new Set(["host"]),
+      T0,
+    );
+    expect(sentTo(outcome.effects, "host")).toContainEqual({
+      type: "peer:request",
+      memberId: "a",
+    });
+  });
+
+  test("轉發模式不送 peer:request", () => {
+    const outcome = onAuth(
+      roomWith({ stream: LIVE, mode: "relay" }),
+      { tokenHash: "h-a", protocolVersion: 1 },
+      1,
+      new Set(["host"]),
+      T0,
+    );
+    expect(typesTo(outcome.effects, "host")).not.toContain("peer:request");
+  });
+});
+
+describe("onMessage 權限", () => {
+  const online = new Set(["host", "a", "b"]);
+
+  test.each([
+    { type: "room:update", reqId: "1", locked: true },
+    { type: "room:kick", reqId: "1", memberId: "b" },
+    { type: "stream:status", reqId: "1", live: true, title: null },
+  ] as const)("收看者送 $type → FORBIDDEN", (message) => {
+    const state = roomWith();
+    const outcome = onMessage(state, "a", message, online, T0);
+    expect(outcome.state).toBe(state);
+    expect(sentTo(outcome.effects, "a")).toEqual([
+      { type: "ack", reqId: "1", ok: false, code: "FORBIDDEN" },
+    ]);
+  });
+
+  test("房主送 member:status → FORBIDDEN", () => {
+    const outcome = onMessage(
+      roomWith(),
+      "host",
+      { type: "member:status", state: "playing" },
+      online,
+      T0,
+    );
+    expect(sentTo(outcome.effects, "host")[0]).toMatchObject({
+      type: "error",
+      code: "FORBIDDEN",
+    });
+  });
+});
+
+describe("signal 轉送", () => {
+  const online = new Set(["host", "a", "b"]);
+  const offer = { type: "offer", sdp: "v=0" } as const;
+
+  test("房主 → 收看者", () => {
+    const outcome = onMessage(
+      roomWith(),
+      "host",
+      { type: "signal", to: "a", data: offer },
+      online,
+      T0,
+    );
+    expect(sentTo(outcome.effects, "a")).toEqual([
+      { type: "signal", from: "host", data: offer },
+    ]);
+  });
+
+  test("收看者 → 房主", () => {
+    const outcome = onMessage(
+      roomWith(),
+      "a",
+      { type: "signal", to: "host", data: offer },
+      online,
+      T0,
+    );
+    expect(sentTo(outcome.effects, "host")).toEqual([
+      { type: "signal", from: "a", data: offer },
+    ]);
+  });
+
+  test("收看者 → 其他收看者：被擋下", () => {
+    const outcome = onMessage(
+      roomWith(),
+      "a",
+      { type: "signal", to: "b", data: offer },
+      online,
+      T0,
+    );
+    expect(sentTo(outcome.effects, "b")).toEqual([]);
+    expect(sentTo(outcome.effects, "a")[0]).toMatchObject({
+      type: "error",
+      code: "FORBIDDEN",
+    });
+  });
+
+  test("對方離線：回錯誤", () => {
+    const outcome = onMessage(
+      roomWith(),
+      "host",
+      { type: "signal", to: "b", data: offer },
+      new Set(["host", "a"]),
+      T0,
+    );
+    expect(sentTo(outcome.effects, "host")[0]).toMatchObject({
+      type: "error",
+      code: "BAD_REQUEST",
+    });
+  });
+});
+
+describe("房主操作", () => {
+  const online = new Set(["host", "a", "b"]);
+
+  test("開播：廣播 stream:status，P2P 模式對每位收看者送 peer:request", () => {
+    const outcome = onMessage(
+      roomWith(),
+      "host",
+      { type: "stream:status", reqId: "1", live: true, title: "電影" },
+      online,
+      T0 + 10,
+    );
+    expect(outcome.state.stream).toEqual({
+      live: true,
+      title: "電影",
+      startedAt: T0 + 10,
+    });
+    expect(typesTo(outcome.effects, "a")).toEqual(["stream:status"]);
+    expect(sentTo(outcome.effects, "host")).toEqual(
+      expect.arrayContaining([
+        { type: "peer:request", memberId: "a" },
+        { type: "peer:request", memberId: "b" },
+      ]),
+    );
+  });
+
+  test("直播中更新片名不會重送 peer:request，startedAt 不變", () => {
+    const outcome = onMessage(
+      roomWith({ stream: LIVE }),
+      "host",
+      { type: "stream:status", live: true, title: "新片" },
+      online,
+      T0 + 99,
+    );
+    expect(outcome.state.stream.startedAt).toBe(T0);
+    expect(typesTo(outcome.effects, "host")).not.toContain("peer:request");
+  });
+
+  test("從轉發切回 P2P 時送 peer:request；room:updated 只有房主看得到邀請碼", () => {
+    const outcome = onMessage(
+      roomWith({ stream: LIVE, mode: "relay" }),
+      "host",
+      { type: "room:update", mode: "p2p" },
+      online,
+      T0,
+    );
+    expect(outcome.state.mode).toBe("p2p");
+    expect(typesTo(outcome.effects, "host")).toContain("peer:request");
+    const toHost = sentTo(outcome.effects, "host").find(
+      (m) => m?.type === "room:updated",
+    );
+    const toA = sentTo(outcome.effects, "a").find(
+      (m) => m?.type === "room:updated",
+    );
+    expect(toHost).toHaveProperty("room.inviteCode", "ABCDEFGH");
+    expect(toA).not.toHaveProperty("room.inviteCode");
+  });
+
+  test("踢人：移除成員、通知並關閉其連線、廣播成員列表", () => {
+    const outcome = onMessage(
+      roomWith(),
+      "host",
+      { type: "room:kick", memberId: "b" },
+      online,
+      T0,
+    );
+    expect(outcome.state.members.map((m) => m.memberId)).toEqual(["host", "a"]);
+    expect(sentTo(outcome.effects, "b")).toContainEqual({
+      type: "room:closed",
+      reason: "kicked",
+    });
+    expect(outcome.effects).toContainEqual(
+      expect.objectContaining({
+        kind: "close",
+        to: { memberId: "b" },
+        code: CLOSE.KICKED,
+      }),
+    );
+    expect(typesTo(outcome.effects, "a")).toEqual(["room:members"]);
+  });
+
+  test("不能踢房主", () => {
+    const outcome = onMessage(
+      roomWith(),
+      "host",
+      { type: "room:kick", reqId: "1", memberId: "host" },
+      online,
+      T0,
+    );
+    expect(sentTo(outcome.effects, "host")).toEqual([
+      { type: "ack", reqId: "1", ok: false, code: "BAD_REQUEST" },
+    ]);
+  });
+
+  test("收看者回報狀態只轉給房主", () => {
+    const outcome = onMessage(
+      roomWith(),
+      "a",
+      { type: "member:status", state: "playing", rttMs: 30 },
+      online,
+      T0,
+    );
+    expect(sentTo(outcome.effects, "host")).toEqual([
+      {
+        type: "member:status",
+        memberId: "a",
+        status: { state: "playing", rttMs: 30 },
+      },
+    ]);
+    expect(sentTo(outcome.effects, "b")).toEqual([]);
+  });
+});
+
+describe("onDisconnect", () => {
+  test("房主斷線：直播中止並通知收看者", () => {
+    const outcome = onDisconnect(
+      roomWith({ stream: LIVE, idleSince: null }),
+      "host",
+      new Set(["a"]),
+      T0 + 1,
+    );
+    expect(outcome.state.stream.live).toBe(false);
+    expect(typesTo(outcome.effects, "a")).toEqual([
+      "room:members",
+      "stream:status",
+    ]);
+  });
+
+  test("最後一人離線：開始閒置計時", () => {
+    const outcome = onDisconnect(
+      roomWith({ idleSince: null }),
+      "a",
+      new Set(),
+      T0 + 7,
+    );
+    expect(outcome.state.idleSince).toBe(T0 + 7);
+  });
+
+  test("同一成員仍有其他連線：不視為離線", () => {
+    const state = roomWith({ idleSince: null });
+    expect(onDisconnect(state, "a", new Set(["a"]), T0)).toEqual({
+      state,
+      effects: [],
+    });
+  });
+});
