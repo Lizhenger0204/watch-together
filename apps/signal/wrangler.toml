@@ -3,7 +3,6 @@ main = "src/runtime/workers/index.ts"
 compatibility_date = "2026-11-15"
 
 [vars]
-PUBLIC_ORIGIN = "http://localhost:5173"
 ROOM_MAX_MEMBERS = 8
 ROOM_IDLE_TTL_MS = 1800000
 ROOM_MAX_AGE_MS = 86400000
@@ -38,7 +37,6 @@ run_worker_first = ["/api", "/api/*"]
 
 # vars、Durable Object bindings、Rate Limiting bindings 不會繼承。
 [env.production.vars]
-PUBLIC_ORIGIN = "https://watch.example.com"
 ROOM_MAX_MEMBERS = 8
 ROOM_IDLE_TTL_MS = 1800000
 ROOM_MAX_AGE_MS = 86400000

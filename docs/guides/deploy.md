@@ -60,9 +60,7 @@ Realtime SFU 是「轉發模式」使用的影音服務。TURN 是直連受網�
 
 ## 6. 第一次部署並設定機密
 
-用文字編輯器打開 `apps/signal/wrangler.toml`，找 **`[env.production.vars]`** 下的 `PUBLIC_ORIGIN`。把右邊的示範網址換成自己打算綁定的網址，保留引號及 `https://`，結尾省略斜線。上方本機用的 `[vars]` 有另一個 `PUBLIC_ORIGIN`，請在正式環境那一段填寫。
-
-儲存後在專案根目錄執行以下命令。它會先建置網頁，再發布 Worker。成功時應看到類似 `Uploaded remote-sync-player-signal-production` 的訊息。正式站用自訂網址，所以要等下一步綁定網域後才能從瀏覽器開啟。[Wrangler 指令](https://developers.cloudflare.com/workers/wrangler/commands/)
+不需要修改任何設定檔：網頁和伺服器在同一個網址，邀請連結會自動使用你綁定的網址。在專案根目錄執行以下命令。它會先建置網頁，再發布 Worker。成功時應看到類似 `Uploaded remote-sync-player-signal-production` 的訊息。正式站用自訂網址，所以要等下一步綁定網域後才能從瀏覽器開啟。[Wrangler 指令](https://developers.cloudflare.com/workers/wrangler/commands/)
 
 ```sh
 pnpm deploy
@@ -83,7 +81,7 @@ pnpm --filter @project/signal exec wrangler secret put TURN_KEY_TOKEN --env prod
 
 1. 在 Cloudflare 後台開啟 **Workers & Pages**，在 **Overview** 選 **remote-sync-player-signal-production**。
 2. 依序按 **Settings → Domains & Routes → Add → Custom Domain**。
-3. 填入第 6 步的主機名稱（例如 `watch.example.com`，省略 `https://`），再按 **Add Custom Domain**。Cloudflare 會建立 DNS 記錄和 HTTPS 憑證。[Cloudflare 自訂網域操作步驟](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/)
+3. 填入你要使用的網址（例如 `watch.example.com`，省略 `https://`），再按 **Add Custom Domain**。Cloudflare 會建立 DNS 記錄和 HTTPS 憑證。[Cloudflare 自訂網域操作步驟](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/)
 
 > 📷 截圖：Cloudflare 後台 → Workers & Pages → remote-sync-player-signal-production → Settings → Domains & Routes → Add → Custom Domain（待補）
 
@@ -94,7 +92,7 @@ pnpm --filter @project/signal exec wrangler secret put TURN_KEY_TOKEN --env prod
 
 ## 8. 以後更新
 
-取得新版專案後，保留第 6 步的正式網址設定，在專案根目錄執行下面兩行。看到 `Uploaded …` 後，再開一次正式站的 `/api/health` 確認。網域和機密設定在同一個 Worker 上，機密值有更新時才需要重新輸入。[Wrangler 指令](https://developers.cloudflare.com/workers/wrangler/commands/)
+取得新版專案後，在專案根目錄執行下面兩行。看到 `Uploaded …` 後，再開一次正式站的 `/api/health` 確認。網域和機密設定在同一個 Worker 上，機密值有更新時才需要重新輸入。[Wrangler 指令](https://developers.cloudflare.com/workers/wrangler/commands/)
 
 ```sh
 pnpm install --frozen-lockfile
