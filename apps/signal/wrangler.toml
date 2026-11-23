@@ -1,6 +1,6 @@
 name = "remote-sync-player-signal"
 main = "src/runtime/workers/index.ts"
-compatibility_date = "2026-08-15"
+compatibility_date = "2026-11-15"
 
 [vars]
 PUBLIC_ORIGIN = "http://localhost:5173"

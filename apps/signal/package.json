@@ -10,11 +10,11 @@
   },
   "dependencies": {
     "@project/shared": "workspace:*",
-    "hono": "4.13.21"
+    "hono": "4.13.19"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "0.23.0",
-    "@cloudflare/workers-types": "5.20261123.1",
+    "@cloudflare/vitest-plugin": "1.8.3",
+    "@cloudflare/workers-types": "5.20261116.1",
     "vitest": "4.1.12",
     "wrangler": "4.166.0",
     "esbuild": "0.28.2"
