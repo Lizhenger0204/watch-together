@@ -44,6 +44,8 @@ export function workersServices(c: Context<AppEnv>): Services {
         room(roomId).registerRelayResource(resource),
       getResource: (roomId, id) => room(roomId).getRelayResource(id),
       remove: (roomId, id) => room(roomId).removeRelayResource(id),
+      retainForCleanup: (roomId, resource) =>
+        room(roomId).retainRelayCleanup(resource),
     },
     joinLimiter: {
       async allow(key) {

@@ -32,23 +32,43 @@ type Attachment = { memberId: string | null; authDeadline: number };
 
 const STATE_KEY = "state";
 const RELAY_KEY = "relay";
-/** 關房後尚未清理完的外部資源（邀請碼對照、轉發 tracks）。存在時房間已不可用。 */
+/** 進行中的換碼：邀請目錄可能已換好但回應遺失，之後用同一個 opId 查回結果。 */
+const ROTATION_KEY = "rotation";
+/** 房間已關閉，記錄還沒在邀請目錄釋放的東西。存在時房間已不可用。 */
 const CLOSING_KEY = "closing";
+/** 清理外部資源（邀請碼、轉發 tracks）的重試排程。 */
+const RETRY_KEY = "retry";
+
+type Rotation = { opId: string; from: string };
+type CloseReason = "expired" | "host_closed";
 type Closing = {
   roomId: string;
-  inviteCode: string;
   reason: CloseReason;
-  attempts: number;
+  /** 還沒釋放的邀請碼。 */
+  inviteCodes: string[];
+  /** 關房時還沒確認結果的換碼；先查回換到的碼，才釋放邀請碼。 */
+  rotation: Rotation | null;
 };
-type CloseReason = "expired" | "host_closed";
-/** 清理失敗的重試間隔：30 秒起跳、每次加倍、最多 1 小時；超過次數就放棄並記錄。 */
+/** `attempts`：已經失敗的輪數（含第一次）。`at` 為 null 表示已放棄。 */
+type Retry = { attempts: number; at: number | null };
+/** 清理失敗的重試間隔：30 秒起跳、每次加倍、最多 1 小時；含第一次最多嘗試 12 次。 */
 const CLEANUP_RETRY_BASE_MS = 30_000;
 const CLEANUP_RETRY_MAX_MS = 60 * 60_000;
 const CLEANUP_MAX_ATTEMPTS = 12;
 type RelayState = {
   publicationId: string | null;
   resources: Record<string, RelayResource>;
+  /** 登記被拒、回滾也失敗的 tracks，等 alarm 關掉。 */
+  orphans: Record<string, RelayResource>;
 };
+
+function readRelay(stored: RelayState | undefined): RelayState {
+  return {
+    publicationId: stored?.publicationId ?? null,
+    resources: stored?.resources ?? {},
+    orphans: stored?.orphans ?? {},
+  };
+}
 
 /**
  * 每個房間一個實例。使用 WebSocket Hibernation API：
@@ -57,7 +77,8 @@ type RelayState = {
 export class RoomDO extends DurableObject<Env> {
   private room: RoomState | null = null;
   private closing: Closing | null = null;
-  /** 會呼叫其他 DO 的操作（重產邀請碼、關房）依序執行，見 exclusive()。 */
+  private retry: Retry | null = null;
+  /** 會呼叫外部服務的操作（重產邀請碼、關房、清理）依序執行，見 exclusive()。 */
   private queue: Promise<unknown> = Promise.resolve();
   private readonly config: RoomConfig;
 
@@ -67,23 +88,21 @@ export class RoomDO extends DurableObject<Env> {
     void ctx.blockConcurrencyWhile(async () => {
       this.room = (await ctx.storage.get<RoomState>(STATE_KEY)) ?? null;
       this.closing = (await ctx.storage.get<Closing>(CLOSING_KEY)) ?? null;
+      this.retry = (await ctx.storage.get<Retry>(RETRY_KEY)) ?? null;
     });
   }
 
   // ── RPC（由 Worker 呼叫）──────────────────────────────────
 
   async getRelayPublication(): Promise<RelayResource | null> {
-    const relay = await this.ctx.storage.get<RelayState>(RELAY_KEY);
-    if (!this.room?.stream.live || !relay?.publicationId) return null;
+    const relay = readRelay(await this.ctx.storage.get<RelayState>(RELAY_KEY));
+    if (!this.room?.stream.live || !relay.publicationId) return null;
     return relay.resources[relay.publicationId] ?? null;
   }
 
   async registerRelayResource(resource: RelayResource): Promise<Result<null>> {
     return this.ctx.storage.transaction(async (txn) => {
-      const relay = (await txn.get<RelayState>(RELAY_KEY)) ?? {
-        publicationId: null,
-        resources: {},
-      };
+      const relay = readRelay(await txn.get<RelayState>(RELAY_KEY));
       if (!this.room) return { ok: false, code: "ROOM_NOT_FOUND" };
       const owner = findMember(this.room, resource.ownerId);
       if (
@@ -115,25 +134,38 @@ export class RoomDO extends DurableObject<Env> {
 
   async removeRelayResource(id: string): Promise<void> {
     await this.ctx.storage.transaction(async (txn) => {
-      const relay = await txn.get<RelayState>(RELAY_KEY);
-      if (!relay || !Object.hasOwn(relay.resources, id)) return;
+      const stored = await txn.get<RelayState>(RELAY_KEY);
+      if (!stored) return;
+      const relay = readRelay(stored);
+      if (
+        !Object.hasOwn(relay.resources, id) &&
+        !Object.hasOwn(relay.orphans, id)
+      )
+        return;
       delete relay.resources[id];
+      delete relay.orphans[id];
       if (relay.publicationId === id) relay.publicationId = null;
       await txn.put(RELAY_KEY, relay);
     });
   }
 
-  async closeRelayResources(): Promise<void> {
-    const relay = await this.ctx.storage.get<RelayState>(RELAY_KEY);
-    if (!relay || !Object.keys(relay.resources).length) return;
-    const realtime = createRealtime(this.env);
-    for (const resource of Object.values(relay.resources)) {
-      await realtime.closeTracks(
-        resource.sessionId,
-        resource.tracks.map(({ mid }) => mid),
-      );
-      await this.removeRelayResource(resource.id);
-    }
+  /**
+   * WHIP／WHEP 登記被拒（例如房間剛關閉）且回滾也失敗時，把 tracks 記成清理待辦，
+   * 由 alarm 重試關閉。房間不論開著、關房中或已清空都收。
+   */
+  async retainRelayCleanup(resource: RelayResource): Promise<void> {
+    await this.exclusive(async () => {
+      await this.ctx.storage.transaction(async (txn) => {
+        const relay = readRelay(await txn.get<RelayState>(RELAY_KEY));
+        relay.orphans[resource.id] = resource;
+        await txn.put(RELAY_KEY, relay);
+      });
+      if (!this.retry || this.retry.at === null) {
+        this.retry = { attempts: 0, at: Date.now() + CLEANUP_RETRY_BASE_MS };
+        await this.ctx.storage.put(RETRY_KEY, this.retry);
+      }
+      await this.scheduleAlarm();
+    });
   }
 
   async init(input: {
@@ -198,8 +230,7 @@ export class RoomDO extends DurableObject<Env> {
   async regenerateInviteCode(
     hostMemberId: string,
   ): Promise<Result<{ inviteCode: string }>> {
-    // 呼叫 InviteDirectoryDO 期間其他請求可能進來；兩次重產交錯會讓其中一個回傳的碼失效、
-    // 並在對照表留下孤兒，所以和關房一起排隊。
+    // 和關房一起排隊：依序執行時最後一次換到的碼有效，對照表不留孤兒。
     return this.exclusive(() => this.regenerateInviteCodeNow(hostMemberId));
   }
 
@@ -212,14 +243,24 @@ export class RoomDO extends DurableObject<Env> {
     }
     const { roomId } = this.room;
     const directory = this.directory();
-    const inviteCode = await directory.replace(this.room.inviteCode, roomId);
-    if (!this.room) {
-      // 不應發生（關房也在佇列裡），保險起見不留下孤兒。
-      await directory.release(inviteCode, roomId);
-      return { ok: false, code: "ROOM_NOT_FOUND" };
+    // 上次換碼的回應遺失：用同一個 opId 查回當時換到的碼，先套用。
+    const unfinished = await this.ctx.storage.get<Rotation>(ROTATION_KEY);
+    if (unfinished) {
+      await this.applyRotation(
+        await directory.replace(unfinished.from, roomId, unfinished.opId),
+      );
     }
-    this.room = { ...this.room, inviteCode };
-    await this.save();
+    const rotation: Rotation = {
+      opId: generateId(),
+      from: this.openRoom().inviteCode,
+    };
+    await this.ctx.storage.put(ROTATION_KEY, rotation);
+    const inviteCode = await directory.replace(
+      rotation.from,
+      roomId,
+      rotation.opId,
+    );
+    await this.applyRotation(inviteCode);
     // 只有房主看得到邀請碼。
     this.apply(
       [
@@ -228,13 +269,29 @@ export class RoomDO extends DurableObject<Env> {
           to: { memberId: hostMemberId },
           message: {
             type: "room:updated",
-            room: toRoomInfo(this.room, "host"),
+            room: toRoomInfo(this.openRoom(), "host"),
           },
         },
       ],
       null,
     );
     return { ok: true, value: { inviteCode } };
+  }
+
+  /** 換碼完成：記下新碼並清掉進行中的換碼紀錄（同一筆交易）。 */
+  private async applyRotation(inviteCode: string) {
+    const room = { ...this.openRoom(), inviteCode };
+    await this.ctx.storage.transaction(async (txn) => {
+      await txn.put(STATE_KEY, room);
+      await txn.delete(ROTATION_KEY);
+    });
+    this.room = room;
+  }
+
+  /** 排在佇列裡的操作用：關房也在同一個佇列，所以執行期間房間不會消失。 */
+  private openRoom(): RoomState {
+    if (!this.room) throw new Error("房間已關閉");
+    return this.room;
   }
 
   // ── WebSocket ──────────────────────────────────────────────
@@ -362,18 +419,17 @@ export class RoomDO extends DurableObject<Env> {
   // ── 關房 ───────────────────────────────────────────────────
 
   /**
-   * 同一個 alarm 有三種用途：關房（閒置或到期）、關掉逾時未驗證的連線、重試關房清理。
+   * 同一個 alarm 有三種用途：重試清理、關房（閒置或到期）、關掉逾時未驗證的連線。
    * 每次執行完都依目前狀態重新排下一次（scheduleAlarm 取最早的時間）。
    */
   override async alarm() {
-    if (this.closing) {
-      await this.exclusive(() => this.finishClose());
-      return;
-    }
     const now = Date.now();
+    // 房間已關閉時，alarm 只會是為了清理而排的，響了就做。
+    if (this.retry?.at != null && (now >= this.retry.at || !this.room)) {
+      await this.exclusive(() => this.runCleanup());
+    }
     if (this.room && now >= closeAt(this.room, this.config)) {
       await this.closeRoom("expired");
-      return;
     }
     for (const ws of this.ctx.getWebSockets()) {
       const attachment = this.attachmentOf(ws);
@@ -392,56 +448,157 @@ export class RoomDO extends DurableObject<Env> {
     return this.exclusive(async () => {
       const room = this.room;
       if (!room) return;
-      this.apply(closeRoomEffects(this.online(), reason), null);
+      // 排隊期間房間可能有新的活動（例如房主重新連線），用取得執行權時的狀態重算期限。
+      if (reason === "expired" && Date.now() < closeAt(room, this.config)) {
+        return;
+      }
+      const closing: Closing = {
+        roomId: room.roomId,
+        reason,
+        inviteCodes: [room.inviteCode],
+        rotation: (await this.ctx.storage.get<Rotation>(ROTATION_KEY)) ?? null,
+      };
+      const retry: Retry = { attempts: 0, at: Date.now() };
+      // 先提交「已關房」再通知與斷線：提交失敗時房間維持原狀，下次 alarm 再關。
+      // 之後清理外部資源失敗、甚至 DO 重啟，alarm 都能接著重試。
+      await this.ctx.storage.transaction(async (txn) => {
+        await txn.delete(STATE_KEY);
+        await txn.delete(ROTATION_KEY);
+        await txn.put(CLOSING_KEY, closing);
+        await txn.put(RETRY_KEY, retry);
+      });
+      const online = this.online();
+      this.room = null;
+      this.closing = closing;
+      this.retry = retry;
+      this.apply(closeRoomEffects(online, reason), null);
       for (const ws of this.ctx.getWebSockets()) {
         closeSocket(ws, CLOSE.ROOM_CLOSED, reason);
       }
-      // 先在 storage 記下「關房中」並刪掉房間狀態（同一筆交易），
-      // 之後清理外部資源失敗、甚至 DO 重啟，alarm 都能接著重試。
-      const closing: Closing = {
-        roomId: room.roomId,
-        inviteCode: room.inviteCode,
-        reason,
-        attempts: 0,
-      };
-      this.room = null;
-      this.closing = closing;
-      await this.ctx.storage.transaction(async (txn) => {
-        await txn.delete(STATE_KEY);
-        await txn.put(CLOSING_KEY, closing);
-      });
       console.log(JSON.stringify({ event: "room.closed", reason }));
-      await this.finishClose();
+      await this.runCleanup();
     });
   }
 
-  /** 釋放邀請碼、關掉轉發 tracks；全部成功才刪除 storage。失敗就排 alarm 重試。 */
-  private async finishClose() {
-    const closing = this.closing;
-    if (!closing) return;
-    try {
-      await this.directory().release(closing.inviteCode, closing.roomId);
-      await this.closeRelayResources();
-    } catch {
-      const attempts = closing.attempts + 1;
-      if (attempts < CLEANUP_MAX_ATTEMPTS) {
-        this.closing = { ...closing, attempts };
-        await this.ctx.storage.put(CLOSING_KEY, this.closing);
-        const delay = Math.min(
-          CLEANUP_RETRY_MAX_MS,
-          CLEANUP_RETRY_BASE_MS * 2 ** (attempts - 1),
-        );
-        await this.ctx.storage.setAlarm(Date.now() + delay);
-        console.log(
-          JSON.stringify({ event: "room.cleanup_retry", attempts, delay }),
-        );
+  /**
+   * 清理外部資源：關房後是邀請碼與全部轉發 tracks，房間開著時只有登記失敗的 tracks。
+   * 邀請碼與每個轉發資源各自嘗試、完成一項就保存一項，互不阻擋。
+   * 有沒做完的就排 alarm 重試；含第一次失敗滿 12 次就放棄，保留沒做完的紀錄。
+   * 只能在 exclusive() 裡呼叫。
+   */
+  private async runCleanup() {
+    if (this.closing) await this.releaseInviteCodes();
+    const relayLeft = await this.closeRelayTracks(this.closing !== null);
+    const inviteLeft = this.closing
+      ? this.closing.inviteCodes.length + (this.closing.rotation ? 1 : 0)
+      : 0;
+
+    if (relayLeft + inviteLeft === 0) {
+      this.retry = null;
+      if (!this.room) {
+        // 房間已關閉且全部清乾淨：刪掉整個 DO 的資料。
+        await this.ctx.storage.deleteAlarm();
+        await this.ctx.storage.deleteAll();
+        this.closing = null;
         return;
       }
-      console.log(JSON.stringify({ event: "room.cleanup_gave_up", attempts }));
+      await this.ctx.storage.delete(RETRY_KEY);
+      await this.scheduleAlarm();
+      return;
     }
-    await this.ctx.storage.deleteAlarm();
-    await this.ctx.storage.deleteAll();
-    this.closing = null;
+
+    const attempts = (this.retry?.attempts ?? 0) + 1;
+    if (attempts >= CLEANUP_MAX_ATTEMPTS) {
+      this.retry = { attempts, at: null };
+      console.log(
+        JSON.stringify({
+          event: "room.cleanup_gave_up",
+          attempts,
+          inviteLeft,
+          relayLeft,
+        }),
+      );
+    } else {
+      const delay = Math.min(
+        CLEANUP_RETRY_MAX_MS,
+        CLEANUP_RETRY_BASE_MS * 2 ** (attempts - 1),
+      );
+      this.retry = { attempts, at: Date.now() + delay };
+      console.log(
+        JSON.stringify({ event: "room.cleanup_retry", attempts, delay }),
+      );
+    }
+    await this.ctx.storage.put(RETRY_KEY, this.retry);
+    await this.scheduleAlarm();
+  }
+
+  /** 先查回未確認的換碼結果，再逐一釋放邀請碼；每完成一步就寫回 closing。 */
+  private async releaseInviteCodes() {
+    const directory = this.directory();
+    let closing = this.closing;
+    if (!closing) return;
+    if (closing.rotation) {
+      const { from, opId } = closing.rotation;
+      try {
+        const code = await directory.replace(from, closing.roomId, opId);
+        closing = {
+          ...closing,
+          inviteCodes: [...closing.inviteCodes, code],
+          rotation: null,
+        };
+        await this.saveClosing(closing);
+      } catch {
+        // 換碼結果還查不到就先不釋放：release 會刪掉目錄裡的換碼紀錄，之後就查不回來了。
+        return;
+      }
+    }
+    for (const code of closing.inviteCodes) {
+      try {
+        await directory.release(code, closing.roomId);
+      } catch {
+        continue;
+      }
+      closing = {
+        ...closing,
+        inviteCodes: closing.inviteCodes.filter((c) => c !== code),
+      };
+      await this.saveClosing(closing);
+    }
+  }
+
+  private async saveClosing(closing: Closing) {
+    await this.ctx.storage.put(CLOSING_KEY, closing);
+    this.closing = closing;
+  }
+
+  /** 逐一關閉轉發 tracks，成功一個就從 storage 移除一個。回傳還沒關掉的數量。 */
+  private async closeRelayTracks(includeActive: boolean): Promise<number> {
+    const relay = readRelay(await this.ctx.storage.get<RelayState>(RELAY_KEY));
+    const targets = [
+      ...Object.values(relay.orphans),
+      ...(includeActive ? Object.values(relay.resources) : []),
+    ];
+    if (!targets.length) return 0;
+    let realtime: ReturnType<typeof createRealtime>;
+    try {
+      realtime = createRealtime(this.env);
+    } catch {
+      return targets.length; // 沒有 Realtime 憑證：留著，之後重試
+    }
+    let left = 0;
+    for (const resource of targets) {
+      try {
+        await realtime.closeTracks(
+          resource.sessionId,
+          resource.tracks.map(({ mid }) => mid),
+        );
+      } catch {
+        left += 1;
+        continue;
+      }
+      await this.removeRelayResource(resource.id);
+    }
+    return left;
   }
 
   // ── 工具 ───────────────────────────────────────────────────
@@ -523,19 +680,35 @@ export class RoomDO extends DurableObject<Env> {
   }
 
   private async scheduleAlarm() {
-    if (!this.room) return;
-    let next = closeAt(this.room, this.config);
-    for (const ws of this.ctx.getWebSockets()) {
-      const attachment = this.attachmentOf(ws);
-      if (attachment?.memberId === null && attachment.authDeadline > 0) {
-        next = Math.min(next, attachment.authDeadline + 100);
+    let next = Infinity;
+    if (this.room) {
+      next = closeAt(this.room, this.config);
+      for (const ws of this.ctx.getWebSockets()) {
+        const attachment = this.attachmentOf(ws);
+        if (attachment?.memberId === null && attachment.authDeadline > 0) {
+          next = Math.min(next, attachment.authDeadline + 100);
+        }
       }
     }
-    await this.ctx.storage.setAlarm(next);
+    if (this.retry?.at != null) next = Math.min(next, this.retry.at);
+    if (next === Infinity) await this.ctx.storage.deleteAlarm();
+    else await this.ctx.storage.setAlarm(next);
   }
 }
 
+/** 關閉連線。未驗證的連線一併清掉 auth 期限，之後不再為它排 alarm。 */
 function closeSocket(ws: WebSocket, code: number, reason: string) {
+  try {
+    const attachment = ws.deserializeAttachment() as Attachment | null;
+    if (attachment?.memberId === null && attachment.authDeadline > 0) {
+      ws.serializeAttachment({
+        memberId: null,
+        authDeadline: 0,
+      } satisfies Attachment);
+    }
+  } catch {
+    // 連線已不可用，附件寫不進去也無妨
+  }
   try {
     ws.close(code, reason);
   } catch {

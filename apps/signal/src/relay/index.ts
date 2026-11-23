@@ -71,23 +71,28 @@ export function createRelayRoutes({
         if (!tracks.length) throw new AppError("BAD_REQUEST");
         const session = await realtime.open(offer, tracks);
         const id = crypto.randomUUID();
+        const resource: RelayResource = {
+          id,
+          ownerId: memberId,
+          sessionId: session.sessionId,
+          tracks: session.tracks,
+          publicationId: publication?.id ?? null,
+        };
         try {
-          unwrap(
-            await relay.register(roomId, {
-              id,
-              ownerId: memberId,
-              sessionId: session.sessionId,
-              tracks: session.tracks,
-              publicationId: publication?.id ?? null,
-            }),
-          );
+          unwrap(await relay.register(roomId, resource));
         } catch (error) {
+          // 登記被拒（例如房間剛關閉）：關掉剛開的 tracks。
+          // 關不掉就交給 RoomDO 記成清理待辦，由 alarm 重試，不能就這樣丟著。
           await realtime
             .closeTracks(
               session.sessionId,
               session.tracks.map(({ mid }) => mid),
             )
-            .catch(() => {});
+            .catch(() =>
+              relay.retainForCleanup(roomId, resource).catch(() => {
+                console.log(JSON.stringify({ event: "relay.cleanup_lost" }));
+              }),
+            );
           throw error;
         }
         return c.body(session.sdp, 201, {

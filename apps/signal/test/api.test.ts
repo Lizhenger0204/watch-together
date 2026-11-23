@@ -14,6 +14,8 @@ import {
 } from "cloudflare:test";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { createApp } from "../src/app";
+import type { RelayResource } from "../src/relay";
+import type { RoomState } from "../src/room/room";
 import type { Env } from "../src/runtime/workers/env";
 import { RoomDO } from "../src/runtime/workers/room-do";
 import { workersServices } from "../src/runtime/workers/services";
@@ -42,6 +44,77 @@ async function joinRoom(inviteCode: string, nickname = "朋友") {
   const res = await post("/api/rooms/join", { inviteCode, nickname });
   expect(res.status).toBe(200);
   return joinRoomResponseSchema.parse(await res.json());
+}
+
+type DirectoryLike = {
+  replace?: (oldCode: string, roomId: string, opId: string) => Promise<string>;
+  release?: (code: string, roomId: string) => Promise<void>;
+};
+/** 測試用：存取 RoomDO 的內部成員（換掉邀請目錄、改時間、補 Realtime 憑證）。 */
+type RoomInternals = {
+  room: RoomState | null;
+  env: Env;
+  directory: () => DirectoryLike;
+  sendTo: (ws: WebSocket, message: ServerMessage) => void;
+};
+const internals = (instance: RoomDO) => instance as unknown as RoomInternals;
+
+const REALTIME = {
+  REALTIME_APP_ID: "test-app",
+  REALTIME_APP_TOKEN: "private-realtime-credential",
+};
+
+function relayResource(id: string, ownerId: string): RelayResource {
+  return {
+    id,
+    ownerId,
+    sessionId: `session-${id}`,
+    tracks: [{ mid: "0", trackName: "media-0" }],
+    publicationId: null,
+  };
+}
+
+/** 假的 Realtime SFU：只接受 tracks/close，記下關閉的 session；`fail` 回 true 時回 503。 */
+function fakeSfu(fail: (sessionId: string) => boolean = () => false) {
+  const closed: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof fetch>(async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      const match = /\/sessions\/([^/]+)\/tracks\/close$/.exec(url.pathname);
+      if (!match) throw new Error(`未預期的 Realtime 請求 ${url.pathname}`);
+      const body = JSON.parse(String(init?.body)) as {
+        tracks: { mid: string }[];
+        force: boolean;
+      };
+      expect(body.force).toBe(true);
+      closed.push(match[1]!);
+      return fail(match[1]!)
+        ? new Response(null, { status: 503 })
+        : Response.json({ tracks: body.tracks });
+    }),
+  );
+  return closed;
+}
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => (resolve = r));
+  return { promise, resolve };
+}
+
+async function alarmTime(stub: DurableObjectStub<RoomDO>) {
+  return runInDurableObject(stub, (_i, state) => state.storage.getAlarm());
+}
+
+/** 把時鐘撥到 `now` 再執行已排定的 alarm。 */
+async function runAlarmAt(stub: DurableObjectStub<RoomDO>, now: number) {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  try {
+    return await runDurableObjectAlarm(stub);
+  } finally {
+    clock.mockRestore();
+  }
 }
 
 /** 開 WebSocket，收集伺服器訊息，提供 next(type) 等待特定訊息。 */
@@ -349,6 +422,80 @@ describe("WebSocket", () => {
     viewer.close();
   });
 
+  test("房主被取代（4000）時，收看者先收到停播，房主才收到 snapshot", async () => {
+    const room = await createRoom();
+    const member = await joinRoom(room.inviteCode);
+    const host = await connect(room.roomId);
+    host.auth(room.hostToken);
+    await host.next("room:snapshot");
+    const viewer = await connect(room.roomId);
+    viewer.auth(member.memberToken);
+    await viewer.next("room:snapshot");
+    host.send({ type: "stream:status", live: true, title: "電影" });
+    await viewer.next("stream:status");
+
+    const order: string[] = [];
+    await runInDurableObject(env.ROOM.getByName(room.roomId), (instance) => {
+      const target = internals(instance);
+      const send = target.sendTo.bind(instance);
+      target.sendTo = (ws, message) => {
+        const { memberId } = ws.deserializeAttachment() as {
+          memberId: string | null;
+        };
+        if (message.type === "stream:status" && memberId === member.memberId)
+          order.push("viewer stream:status");
+        if (message.type === "room:snapshot" && memberId === room.memberId)
+          order.push("host room:snapshot");
+        send(ws, message);
+      };
+    });
+    const replacement = await connect(room.roomId);
+    replacement.auth(room.hostToken);
+    await replacement.next("room:snapshot");
+    expect(await viewer.next("stream:status")).toMatchObject({ live: false });
+    expect(order).toEqual(["viewer stream:status", "host room:snapshot"]);
+    replacement.close();
+    viewer.close();
+  });
+
+  test("auth 在期限前開始雜湊、期限後才完成：以 4408 關閉", async () => {
+    const room = await createRoom();
+    const pending = await connect(room.roomId);
+    await runInDurableObject(
+      env.ROOM.getByName(room.roomId),
+      async (instance, state) => {
+        const ws = state.getWebSockets()[0]!;
+        const { authDeadline } = ws.deserializeAttachment() as {
+          authDeadline: number;
+        };
+        let now = authDeadline - 1;
+        const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+        const digest = crypto.subtle.digest.bind(crypto.subtle);
+        const slow = vi
+          .spyOn(crypto.subtle, "digest")
+          .mockImplementation(async (algorithm, data) => {
+            const hash = await digest(algorithm, data);
+            now = authDeadline + 1;
+            return hash;
+          });
+        try {
+          await instance.webSocketMessage(
+            ws,
+            JSON.stringify({
+              type: "auth",
+              token: room.hostToken,
+              protocolVersion: PROTOCOL_VERSION,
+            }),
+          );
+        } finally {
+          slow.mockRestore();
+          clock.mockRestore();
+        }
+      },
+    );
+    expect(await pending.closedWith()).toBe(4408);
+  });
+
   test("被踢的成員：連線被關閉，舊 token 不能再用", async () => {
     const room = await createRoom();
     const member = await joinRoom(room.inviteCode);
@@ -387,6 +534,44 @@ describe("WebSocket", () => {
 });
 
 describe("限流與生命週期", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  test.each([
+    ["沒有 binding", "198.51.100.1", undefined],
+    [
+      "binding 拋錯",
+      "198.51.100.2",
+      {
+        limit: async () => {
+          throw new Error("rate limiter unavailable");
+        },
+      } as unknown as RateLimit,
+    ],
+  ])(
+    "%s：改用記憶體後備，同一 IP 第 11 次回 429",
+    async (_label, ip, binding) => {
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      const app = createApp(workersServices);
+      const statuses: number[] = [];
+      for (let i = 0; i < 11; i++) {
+        const res = await app.request(
+          `${BASE}/api/rooms/join`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "CF-Connecting-IP": ip,
+            },
+            body: JSON.stringify({ inviteCode: "ZZZZZZZZ", nickname: "x" }),
+          },
+          { ...env, JOIN_RATE_LIMITER: binding },
+        );
+        statuses.push(res.status);
+      }
+      expect(statuses).toEqual([...Array<number>(10).fill(404), 429]);
+    },
+  );
+
   test("同一 IP 加入超過每分鐘 10 次回 429", async () => {
     const statuses: number[] = [];
     for (let i = 0; i < 11; i++) {
@@ -432,24 +617,31 @@ describe("限流與生命週期", () => {
 });
 
 describe("關房清理與休眠", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
 
-  test("關房時清理失敗：記下關房中、用 alarm 重試；成功後清除轉發資源與 storage", async () => {
+  test("關房：邀請碼與每個轉發資源各自推進、各自保存進度；失敗的部分由 alarm 重試", async () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     const room = await createRoom();
     const host = await connect(room.roomId);
     host.auth(room.hostToken);
     await host.next("room:snapshot");
-
     const stub = env.ROOM.getByName(room.roomId);
-    let relayCloses = 0;
+    for (const id of ["one", "two"]) {
+      expect(
+        (await stub.registerRelayResource(relayResource(id, room.memberId))).ok,
+      ).toBe(true);
+    }
+    let sfuFailures = 1;
+    const closed = fakeSfu(
+      (session) => session === "session-two" && sfuFailures-- > 0,
+    );
     await runInDurableObject(stub, (instance) => {
-      const target = instance as unknown as {
-        room: { createdAt: number };
-        directory: () => unknown;
-        closeRelayResources: () => Promise<void>;
-      };
-      target.room.createdAt = 0;
+      const target = internals(instance);
+      target.env = { ...target.env, ...REALTIME };
+      target.room!.createdAt = 0;
       const real = target.directory.bind(instance);
       let failures = 1;
       target.directory = () =>
@@ -460,22 +652,22 @@ describe("關房清理與休眠", () => {
               },
             }
           : real();
-      target.closeRelayResources = async () => {
-        relayCloses += 1;
-      };
     });
 
     expect(await runDurableObjectAlarm(stub)).toBe(true);
     expect(await host.closedWith()).toBe(4001);
+    // 目錄失敗不影響轉發：one 已關掉並從 storage 移除，two 失敗留著
+    expect(closed).toEqual(["session-one", "session-two"]);
     const pending = await runInDurableObject(stub, async (_i, state) => ({
-      closing: await state.storage.get<{ attempts: number }>("closing"),
+      closing: await state.storage.get<{ inviteCodes: string[] }>("closing"),
+      relay: await state.storage.get<{ resources: Record<string, unknown> }>(
+        "relay",
+      ),
       room: await state.storage.get("state"),
-      alarm: await state.storage.getAlarm(),
     }));
-    expect(pending.closing?.attempts).toBe(1);
     expect(pending.room).toBeUndefined();
-    expect(pending.alarm).not.toBeNull();
-    expect(relayCloses).toBe(0);
+    expect(pending.closing?.inviteCodes).toEqual([room.inviteCode]);
+    expect(Object.keys(pending.relay?.resources ?? {})).toEqual(["two"]);
     // 關房中：舊碼雖然還在對照表，加入仍然失敗
     const join = await post("/api/rooms/join", {
       inviteCode: room.inviteCode,
@@ -483,18 +675,218 @@ describe("關房清理與休眠", () => {
     });
     expect(join.status).toBe(404);
 
-    expect(await runDurableObjectAlarm(stub)).toBe(true);
-    expect(relayCloses).toBe(1);
+    const retryAt = await alarmTime(stub);
+    expect(retryAt).not.toBeNull();
+    expect(await runAlarmAt(stub, retryAt!)).toBe(true);
+    expect(closed).toEqual(["session-one", "session-two", "session-two"]);
     const left = await runInDurableObject(stub, async (_i, state) => ({
       keys: [...(await state.storage.list()).keys()],
       alarm: await state.storage.getAlarm(),
     }));
     expect(left).toEqual({ keys: [], alarm: null });
-    const lookup = await runInDurableObject(
-      env.INVITE_DIRECTORY.getByName("global"),
-      async (_i, state) => state.storage.get(`code:${room.inviteCode}`),
+    expect(
+      await env.INVITE_DIRECTORY.getByName("global").lookup(room.inviteCode),
+    ).toBeNull();
+  });
+
+  test("清理最多嘗試 12 次（含第一次）；放棄後保留未完成的紀錄、不再排 alarm", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const room = await createRoom();
+    const stub = env.ROOM.getByName(room.roomId);
+    for (const id of ["ok", "stuck"]) {
+      await stub.registerRelayResource(relayResource(id, room.memberId));
+    }
+    const closed = fakeSfu((session) => session === "session-stuck");
+    let releases = 0;
+    await runInDurableObject(stub, (instance) => {
+      const target = internals(instance);
+      target.env = { ...target.env, ...REALTIME };
+      target.room!.createdAt = 0;
+      target.directory = () => ({
+        release: async () => {
+          releases += 1;
+          throw new Error("directory unavailable");
+        },
+      });
+    });
+    for (let attempt = 1; attempt <= 12; attempt++) {
+      const at = await alarmTime(stub);
+      expect(at, `第 ${attempt} 次之前要排 alarm`).not.toBeNull();
+      expect(await runAlarmAt(stub, at!)).toBe(true);
+    }
+    expect(releases).toBe(12);
+    expect(closed.filter((s) => s === "session-ok")).toHaveLength(1);
+    expect(closed.filter((s) => s === "session-stuck")).toHaveLength(12);
+    const kept = await runInDurableObject(stub, async (_i, state) => ({
+      closing: await state.storage.get<{ inviteCodes: string[] }>("closing"),
+      relay: await state.storage.get<{ resources: Record<string, unknown> }>(
+        "relay",
+      ),
+      retry: await state.storage.get("retry"),
+      alarm: await state.storage.getAlarm(),
+    }));
+    expect(kept.closing?.inviteCodes).toEqual([room.inviteCode]);
+    expect(Object.keys(kept.relay?.resources ?? {})).toEqual(["stuck"]);
+    expect(kept.retry).toEqual({ attempts: 12, at: null });
+    expect(kept.alarm).toBeNull();
+    expect(log.mock.calls.map(([line]) => String(line))).toContainEqual(
+      expect.stringContaining('"room.cleanup_gave_up"'),
     );
-    expect(lookup).toBeUndefined();
+  });
+
+  test("排隊中的到期關房：取得執行權後重算期限，房主在等待期間回來就不關房", async () => {
+    const room = await createRoom();
+    const host = await connect(room.roomId);
+    const stub = env.ROOM.getByName(room.roomId);
+    const result = await runInDurableObject(stub, async (instance, state) => {
+      const target = internals(instance);
+      const real = target.directory.bind(instance);
+      const started = deferred();
+      const resume = deferred();
+      target.directory = () => ({
+        replace: async (code, roomId, opId) => {
+          started.resolve();
+          await resume.promise;
+          return real().replace!(code, roomId, opId);
+        },
+        release: (code, roomId) => real().release!(code, roomId),
+      });
+      const rotation = instance.regenerateInviteCode(room.memberId);
+      await started.promise;
+      target.room!.idleSince = 0; // 閒置很久，已到期
+      const expiry = instance.alarm();
+      await instance.webSocketMessage(
+        state.getWebSockets()[0]!,
+        JSON.stringify({
+          type: "auth",
+          token: room.hostToken,
+          protocolVersion: PROTOCOL_VERSION,
+        }),
+      );
+      resume.resolve();
+      const rotated = await rotation;
+      await expiry;
+      return {
+        rotated: rotated.ok,
+        open: (await state.storage.get("state")) !== undefined,
+        alarm: await state.storage.getAlarm(),
+      };
+    });
+    expect(result.rotated).toBe(true);
+    expect(result.open).toBe(true);
+    expect(result.alarm).toBeGreaterThan(Date.now() + 23 * 60 * 60_000);
+    host.send({ type: "ping" });
+    expect(await host.next("pong")).toEqual({ type: "pong" });
+    host.close();
+  });
+
+  test("關房先提交 closing 標記才通知：提交失敗時連線不受影響，下次 alarm 再關", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const room = await createRoom();
+    const host = await connect(room.roomId);
+    host.auth(room.hostToken);
+    await host.next("room:snapshot");
+    const stub = env.ROOM.getByName(room.roomId);
+    const failed = await runInDurableObject(stub, async (instance, state) => {
+      internals(instance).room!.createdAt = 0;
+      const txn = vi
+        .spyOn(state.storage, "transaction")
+        .mockRejectedValueOnce(new Error("commit failed"));
+      try {
+        await expect(instance.alarm()).rejects.toThrow("commit failed");
+      } finally {
+        txn.mockRestore();
+      }
+      return {
+        open: (await state.storage.get("state")) !== undefined,
+        closing: await state.storage.get("closing"),
+      };
+    });
+    expect(failed).toEqual({ open: true, closing: undefined });
+    host.send({ type: "ping" });
+    expect(await host.next("pong")).toEqual({ type: "pong" });
+
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(await host.next("room:closed")).toMatchObject({ reason: "expired" });
+    expect(await host.closedWith()).toBe(4001);
+  });
+
+  test("換碼成功但回應遺失：下次重產查回上次的結果，不留孤兒", async () => {
+    const room = await createRoom();
+    const stub = env.ROOM.getByName(room.roomId);
+    const lost = await runInDurableObject(stub, async (instance) => {
+      const target = internals(instance);
+      const real = target.directory.bind(instance);
+      let committed = "";
+      target.directory = () => ({
+        replace: async (code, roomId, opId) => {
+          committed = await real().replace!(code, roomId, opId);
+          throw new Error("RPC 回應遺失");
+        },
+      });
+      await expect(
+        instance.regenerateInviteCode(room.memberId),
+      ).rejects.toThrow();
+      target.directory = real;
+      return committed;
+    });
+    const res = await post(
+      `/api/rooms/${room.roomId}/invite-code`,
+      undefined,
+      room.hostToken,
+    );
+    expect(res.status).toBe(200);
+    const { inviteCode } = (await res.json()) as { inviteCode: string };
+    const directory = env.INVITE_DIRECTORY.getByName("global");
+    expect(await directory.lookup(room.inviteCode)).toBeNull();
+    expect(await directory.lookup(lost)).toBeNull();
+    expect(await directory.lookup(inviteCode)).toBe(room.roomId);
+    expect((await joinRoom(inviteCode)).roomId).toBe(room.roomId);
+  });
+
+  test("換碼成功但回應遺失後關房：遺失的那個碼也會被釋放", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const room = await createRoom();
+    const stub = env.ROOM.getByName(room.roomId);
+    const lost = await runInDurableObject(stub, async (instance) => {
+      const target = internals(instance);
+      const real = target.directory.bind(instance);
+      let committed = "";
+      target.directory = () => ({
+        replace: async (code, roomId, opId) => {
+          committed = await real().replace!(code, roomId, opId);
+          throw new Error("RPC 回應遺失");
+        },
+      });
+      await expect(
+        instance.regenerateInviteCode(room.memberId),
+      ).rejects.toThrow();
+      target.directory = real;
+      target.room!.createdAt = 0;
+      return committed;
+    });
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    const directory = env.INVITE_DIRECTORY.getByName("global");
+    expect(await directory.lookup(lost)).toBeNull();
+    expect(await directory.lookup(room.inviteCode)).toBeNull();
+    expect(
+      await runInDurableObject(
+        stub,
+        async (_i, state) => (await state.storage.list()).size,
+      ),
+    ).toBe(0);
+  });
+
+  test("逾時未驗證的連線以 4408 關閉後，不會再為它排 alarm", async () => {
+    const room = await createRoom();
+    const stub = env.ROOM.getByName(room.roomId);
+    const idleAt = await alarmTime(stub);
+    const pending = await connect(room.roomId);
+    const authAt = await alarmTime(stub);
+    expect(authAt).toBeLessThan(idleAt!);
+    expect(await runAlarmAt(stub, authAt!)).toBe(true);
+    expect(await pending.closedWith()).toBe(4408);
+    expect(await alarmTime(stub)).toBe(idleAt);
   });
 
   test("休眠喚醒：新的實例從 storage 與連線附件還原房間與在線成員", async () => {
@@ -792,6 +1184,74 @@ describe("WHIP / WHEP", () => {
       }
     } finally {
       host.close();
+    }
+  });
+
+  test("WHIP 與關房同時發生：登記被拒且回滾失敗時，tracks 記成清理待辦，之後由 alarm 關掉", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const room = await createRoom();
+    const stub = env.ROOM.getByName(room.roomId);
+    await runInDurableObject(stub, (instance) => {
+      const target = internals(instance);
+      target.env = { ...target.env, ...credentials };
+    });
+    const entered = deferred();
+    const resume = deferred();
+    const closes: string[] = [];
+    let sfuDown = true;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input) => {
+        const path = new URL(
+          input instanceof Request ? input.url : String(input),
+        ).pathname;
+        if (path.endsWith("/sessions/new"))
+          return Response.json({ sessionId: "late" });
+        if (path.endsWith("/tracks/new")) {
+          entered.resolve();
+          await resume.promise;
+          return Response.json({
+            tracks: [{ mid: "0", trackName: "media-0" }],
+            sessionDescription: { type: "answer", sdp: subscribeOffer },
+          });
+        }
+        if (path.endsWith("/tracks/close")) {
+          closes.push(path);
+          return sfuDown
+            ? new Response(null, { status: 503 })
+            : Response.json({ tracks: [{ mid: "0" }] });
+        }
+        throw new Error(`未預期的 Realtime 請求 ${path}`);
+      }),
+    );
+    try {
+      const whip = request(
+        `/api/rooms/${room.roomId}/whip`,
+        room.hostToken,
+        publishOffer,
+      );
+      await entered.promise;
+      await runInDurableObject(stub, (instance) => {
+        internals(instance).room!.createdAt = 0;
+      });
+      expect(await runDurableObjectAlarm(stub)).toBe(true);
+      resume.resolve();
+      expect((await whip).status).toBe(404);
+      expect(closes).toEqual(["/v1/apps/test-app/sessions/late/tracks/close"]);
+
+      const retryAt = await alarmTime(stub);
+      expect(retryAt).not.toBeNull();
+      sfuDown = false;
+      expect(await runAlarmAt(stub, retryAt!)).toBe(true);
+      expect(closes).toHaveLength(2);
+      expect(closes[1]).toBe("/v1/apps/test-app/sessions/late/tracks/close");
+      const left = await runInDurableObject(stub, async (_i, state) => ({
+        keys: [...(await state.storage.list()).keys()],
+        alarm: await state.storage.getAlarm(),
+      }));
+      expect(left).toEqual({ keys: [], alarm: null });
+    } finally {
+      resume.resolve();
     }
   });
 

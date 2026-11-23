@@ -167,6 +167,25 @@ describe("房主重新驗證（重新整理、4000 取代、斷線重連）", ()
     );
   });
 
+  test("直播中：先對收看者送停播，再回房主 snapshot（protocol.md 的順序）", () => {
+    const outcome = onAuth(
+      roomWith({ stream: LIVE }),
+      { tokenHash: "h-host", protocolVersion: 1 },
+      1,
+      new Set(["host", "a"]),
+      T0 + 5,
+    );
+    if (!outcome.accepted) throw new Error("應該通過驗證");
+    const order = outcome.effects.flatMap((e) =>
+      e.kind === "send" && "memberId" in e.to
+        ? [`${e.to.memberId} ${e.message.type}`]
+        : [],
+    );
+    const stop = order.indexOf("a stream:status");
+    expect(stop).toBeGreaterThanOrEqual(0);
+    expect(stop).toBeLessThan(order.indexOf("host room:snapshot"));
+  });
+
   test("未開播：不送 stream:status", () => {
     const outcome = onAuth(
       roomWith(),

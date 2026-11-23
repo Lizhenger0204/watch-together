@@ -179,6 +179,8 @@ export function onAuth(
     memberId,
     state: next,
     effects: [
+      // 房主重新驗證：先讓收看者停掉舊的連線，再回房主 snapshot（protocol.md「房主重新連線」）。
+      ...(hostRestarted ? streamTo(next, online, memberId) : []),
       send(to(memberId), {
         type: "room:snapshot",
         room: toRoomInfo(next, member.role),
@@ -188,7 +190,6 @@ export function onAuth(
       }),
       ...ok(to(memberId), input.reqId),
       ...membersTo(next, online, memberId),
-      ...(hostRestarted ? streamTo(next, online, memberId) : []),
       ...(member.role === "member"
         ? peerRequests(next, online, [memberId])
         : []),
