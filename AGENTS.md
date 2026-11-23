@@ -35,7 +35,7 @@
 ### 協作
 - **兩個 agent 不要在同一個工作目錄同時動工**。各自用自己的 git worktree／分支（`claude/*`、`gpt/*`），見 git-workflow.md。
 - **開 worktree 前先 commit**。worktree 從 commit 建立，未 commit 的規範文件不會出現在裡面。
-- **不要在分支裡改 `tasks.md`**，也不要自行合併到 `main`。交接備註寫在 commit 訊息，由協調者合併與更新看板。
+- **只有「GPT 監工」對話能改 `main`**（合併、更新 `tasks.md`）。其他 agent 不要在分支裡改 `tasks.md`，也不要自行合併。交接備註寫在 commit 訊息。→ ownership.md「對話角色」
 - **同時跑兩個 `pnpm dev` 會搶 port**，用 `WEB_PORT`／`SIGNAL_PORT` 錯開。
 - **不要各自定義一份 type**。前後端共用的型別、訊息、zod schema 只能放 `packages/shared`。
 - **不要繞過 pnpm 的新版本冷卻期**（`minimumReleaseAge`）。被擋就改選較舊的版本，不要加 `minimumReleaseAgeExclude`。裝套件前也要確認它沒有被標成 deprecated。

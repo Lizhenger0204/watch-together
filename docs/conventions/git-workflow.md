@@ -47,7 +47,7 @@ git worktree add ../project-gpt    -b gpt/T-105-pages
 
 ## 合併
 
-- **合併到 `main` 由協調者（使用者或 Claude 主對話）執行**。agent 只在自己的分支 commit，不自行合併。
+- **合併到 `main` 由協調者（「GPT 監工」Claude 對話）執行**。agent 只在自己的分支 commit，不自行合併。
 - 交接備註寫在分支最後一個 commit 的訊息內文（格式見 tasks.md），不要在分支裡改 `tasks.md`。
 
 步驟：
