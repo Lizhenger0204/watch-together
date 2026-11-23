@@ -40,7 +40,7 @@
 | `REALTIME_APP_ID` / `REALTIME_APP_TOKEN` | Cloudflare Realtime SFU（轉發模式） |
 | `TURN_KEY_ID` / `TURN_KEY_TOKEN` | Cloudflare TURN 短效憑證 |
 
-沒有設定時：`/api/ice` 只回 STUN；WHIP / WHEP 回 `503 RELAY_UNAVAILABLE`，前端停用「轉發」選項卡並顯示原因。
+沒有設定時：`/api/rooms/:roomId/ice` 只回 STUN；WHIP / WHEP 回 `503 RELAY_UNAVAILABLE`，前端停用「轉發」選項卡並顯示原因。
 
 新增變數時同步更新本表與 `apps/signal/.dev.vars.example`。
 

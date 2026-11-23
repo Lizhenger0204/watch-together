@@ -7,6 +7,7 @@ import {
   pruneStaleMembers,
   toMembers,
   toRoomInfo,
+  type MemberRecord,
 } from "../src/room/room";
 import {
   generateInviteCode,
@@ -169,6 +170,35 @@ describe("findMemberByTokenHash", () => {
     expect(findMemberByTokenHash(room, "hash-host")?.memberId).toBe("host");
     expect(findMemberByTokenHash(room, "hash-hosT")).toBeUndefined();
     expect(findMemberByTokenHash(room, "hash")).toBeUndefined();
+  });
+
+  test("不論命中第幾位，都會比完全部成員（三位以上）", () => {
+    const base = room();
+    const visited: string[] = [];
+    const ids = ["host", "a", "b", "c"];
+    const hashOf = (id: string) => id.padEnd(43, "x");
+    const members = ids.map((memberId, i): MemberRecord => {
+      const record = {
+        ...base.members[0]!,
+        memberId,
+        role: i === 0 ? ("host" as const) : ("member" as const),
+      };
+      Object.defineProperty(record, "tokenHash", {
+        get: () => {
+          visited.push(memberId);
+          return hashOf(memberId);
+        },
+      });
+      return record;
+    });
+    const state = { ...base, members };
+    for (const target of ["host", "b", "nobody"]) {
+      visited.length = 0;
+      expect(findMemberByTokenHash(state, hashOf(target))?.memberId).toBe(
+        target === "nobody" ? undefined : target,
+      );
+      expect(visited).toEqual(ids);
+    }
   });
 });
 

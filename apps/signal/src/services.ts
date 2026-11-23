@@ -42,6 +42,8 @@ export interface RelayService {
     resourceId: string,
   ): Promise<RelayResource | null>;
   remove(roomId: string, resourceId: string): Promise<void>;
+  /** 登記被拒、回滾也失敗的資源：記成清理待辦，之後重試關閉。 */
+  retainForCleanup(roomId: string, resource: RelayResource): Promise<void>;
 }
 
 export type Services = {
