@@ -77,7 +77,7 @@ pnpm --filter @project/signal exec wrangler secret put TURN_KEY_ID --env product
 pnpm --filter @project/signal exec wrangler secret put TURN_KEY_TOKEN --env production
 ```
 
-缺少 TURN 設定時，ICE API 只會回傳 STUN 伺服器；若兩端無法直連，就可能看不到影片。依轉發介面規格，缺少 Realtime 設定時轉發會回 `503 RELAY_UNAVAILABLE`。包含 T-108 的版本才有 WHIP／WHEP 轉發端點。[Cloudflare TURN 說明](https://developers.cloudflare.com/realtime/turn/)
+缺少 TURN 設定時，ICE API 只會回傳 STUN 伺服器；若兩端無法直連，就可能看不到影片。缺少 Realtime 設定時，轉發模式無法使用（伺服器回 `503 RELAY_UNAVAILABLE`），直連模式不受影響。[Cloudflare TURN 說明](https://developers.cloudflare.com/realtime/turn/)
 
 ## 7. 綁定自己的網址並驗收
 
