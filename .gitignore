@@ -1,0 +1,20 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+
+# 舊架構遺留，保留以防誤 commit 影片
+data/
+
+# 測試產物
+playwright-report/
+test-results/
+
+.DS_Store
+
+# Cloudflare Workers
+.wrangler/
+.dev.vars
+!.dev.vars.example
