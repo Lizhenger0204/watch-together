@@ -9,7 +9,7 @@
 | --- | --- | --- |
 | 語言 | TypeScript（strict），Node.js 22 LTS | 前後端共用型別 |
 | 套件管理 | pnpm workspace | monorepo、`packages/shared` 共用 |
-| 前端 | Vite + React 18 | 生態成熟，兩個 agent 都熟 |
+| 前端 | Vite + React 19 | 生態成熟，兩個 agent 都熟（T-101 起用 19） |
 | 樣式 | Tailwind CSS | 不需要另寫 CSS 規範 |
 | 播放 | hls.js（Safari 用原生 HLS） | 統一播放路徑，見下方 |
 | 後端 HTTP | Fastify | 效能好、schema 友善 |
