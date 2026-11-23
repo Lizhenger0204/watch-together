@@ -1,8 +1,9 @@
+import type { RelayEnv } from "../../relay";
 import type { TurnEnv } from "../../ice";
 import type { InviteDirectoryDO } from "./invite-directory-do";
 import type { RoomDO } from "./room-do";
 
-export interface Env extends TurnEnv {
+export interface Env extends TurnEnv, RelayEnv {
   ROOM: DurableObjectNamespace<RoomDO>;
   INVITE_DIRECTORY: DurableObjectNamespace<InviteDirectoryDO>;
   /** 正式環境必須設定；本機沒有時不限流（見 room-and-invite.md）。 */

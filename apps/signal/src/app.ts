@@ -9,11 +9,12 @@ import { Hono, type Context, type MiddlewareHandler } from "hono";
 import type { z } from "zod";
 import { AppError, errorBody, errorStatus } from "./errors";
 import { createIceRoutes, type TurnEnv } from "./ice";
+import { createRelayRoutes, type RelayEnv } from "./relay";
 import { isRoomId } from "./room/crypto";
 import type { AuthedMember, Services } from "./services";
 
 export type AppEnv = {
-  Bindings: TurnEnv;
+  Bindings: TurnEnv & RelayEnv;
   Variables: { services: Services; member: AuthedMember };
 };
 
@@ -115,6 +116,11 @@ export function createApp(resolveServices: (c: Ctx) => Services) {
   app.route(
     "/api/rooms/:roomId/ice",
     createIceRoutes<AppEnv>({ requireMember }),
+  );
+
+  app.route(
+    "/api/rooms/:roomId",
+    createRelayRoutes({ requireHost, requireMember }),
   );
 
   app.notFound((c) => c.json(errorBody("BAD_REQUEST", "找不到這個 API"), 404));

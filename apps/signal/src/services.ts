@@ -4,6 +4,7 @@ import type {
   Role,
 } from "@project/shared";
 import type { Result } from "./errors";
+import type { RelayResource } from "./relay";
 
 // app.ts 透過這些介面使用房間功能，不直接碰 Durable Objects。
 // 之後搬到 Node 只要提供另一份實作。
@@ -33,7 +34,18 @@ export interface RateLimiter {
   allow(key: string): Promise<boolean>;
 }
 
+export interface RelayService {
+  getPublication(roomId: string): Promise<RelayResource | null>;
+  register(roomId: string, resource: RelayResource): Promise<Result<null>>;
+  getResource(
+    roomId: string,
+    resourceId: string,
+  ): Promise<RelayResource | null>;
+  remove(roomId: string, resourceId: string): Promise<void>;
+}
+
 export type Services = {
   rooms: RoomService;
+  relay: RelayService;
   joinLimiter: RateLimiter;
 };

@@ -33,6 +33,13 @@ export function workersServices(c: Context<AppEnv>): Services {
         room(roomId).regenerateInviteCode(hostMemberId),
       connect: (roomId, request) => room(roomId).fetch(request),
     },
+    relay: {
+      getPublication: (roomId) => room(roomId).getRelayPublication(),
+      register: (roomId, resource) =>
+        room(roomId).registerRelayResource(resource),
+      getResource: (roomId, id) => room(roomId).getRelayResource(id),
+      remove: (roomId, id) => room(roomId).removeRelayResource(id),
+    },
     joinLimiter: {
       async allow(key) {
         if (!env.JOIN_RATE_LIMITER) return true;

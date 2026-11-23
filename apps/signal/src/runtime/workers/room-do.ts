@@ -6,6 +6,8 @@ import {
 import { DurableObject } from "cloudflare:workers";
 import { readRoomConfig, type RoomConfig } from "../../config";
 import { errorBody, type Result } from "../../errors";
+import type { RelayResource } from "../../relay";
+import { createRealtime } from "../../relay/realtime";
 import { generateId, generateToken, hashToken } from "../../room/crypto";
 import {
   addMember,
@@ -29,6 +31,11 @@ import { INVITE_DIRECTORY_NAME, type Env } from "./env";
 type Attachment = { memberId: string | null; authDeadline: number };
 
 const STATE_KEY = "state";
+const RELAY_KEY = "relay";
+type RelayState = {
+  publicationId: string | null;
+  resources: Record<string, RelayResource>;
+};
 
 /**
  * 每個房間一個實例。使用 WebSocket Hibernation API：
@@ -47,6 +54,70 @@ export class RoomDO extends DurableObject<Env> {
   }
 
   // ── RPC（由 Worker 呼叫）──────────────────────────────────
+
+  async getRelayPublication(): Promise<RelayResource | null> {
+    const relay = await this.ctx.storage.get<RelayState>(RELAY_KEY);
+    if (!this.room?.stream.live || !relay?.publicationId) return null;
+    return relay.resources[relay.publicationId] ?? null;
+  }
+
+  async registerRelayResource(resource: RelayResource): Promise<Result<null>> {
+    return this.ctx.storage.transaction(async (txn) => {
+      const relay = (await txn.get<RelayState>(RELAY_KEY)) ?? {
+        publicationId: null,
+        resources: {},
+      };
+      if (!this.room) return { ok: false, code: "ROOM_NOT_FOUND" };
+      const owner = findMember(this.room, resource.ownerId);
+      if (
+        !owner ||
+        (resource.publicationId === null && owner.role !== "host")
+      ) {
+        return { ok: false, code: "FORBIDDEN" };
+      }
+      if (
+        resource.publicationId !== null &&
+        (!this.room.stream.live ||
+          relay.publicationId !== resource.publicationId)
+      ) {
+        return { ok: false, code: "STREAM_NOT_LIVE" };
+      }
+      relay.resources[resource.id] = resource;
+      if (resource.publicationId === null) relay.publicationId = resource.id;
+      await txn.put(RELAY_KEY, relay);
+      return { ok: true, value: null };
+    });
+  }
+
+  async getRelayResource(id: string): Promise<RelayResource | null> {
+    const relay = await this.ctx.storage.get<RelayState>(RELAY_KEY);
+    return relay && Object.hasOwn(relay.resources, id)
+      ? (relay.resources[id] ?? null)
+      : null;
+  }
+
+  async removeRelayResource(id: string): Promise<void> {
+    await this.ctx.storage.transaction(async (txn) => {
+      const relay = await txn.get<RelayState>(RELAY_KEY);
+      if (!relay || !Object.hasOwn(relay.resources, id)) return;
+      delete relay.resources[id];
+      if (relay.publicationId === id) relay.publicationId = null;
+      await txn.put(RELAY_KEY, relay);
+    });
+  }
+
+  async closeRelayResources(): Promise<void> {
+    const relay = await this.ctx.storage.get<RelayState>(RELAY_KEY);
+    if (!relay || !Object.keys(relay.resources).length) return;
+    const realtime = createRealtime(this.env);
+    for (const resource of Object.values(relay.resources)) {
+      await realtime.closeTracks(
+        resource.sessionId,
+        resource.tracks.map(({ mid }) => mid),
+      );
+      await this.removeRelayResource(resource.id);
+    }
+  }
 
   async init(input: {
     roomId: string;
