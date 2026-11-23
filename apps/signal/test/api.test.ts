@@ -172,6 +172,31 @@ async function connect(roomId: string) {
   };
 }
 
+/** 連到不能用的房間：記下 upgrade 狀態、關閉碼、原因與收到的訊息，用來比對各情況的回應是否一致。 */
+async function refusedConnect(roomId: string) {
+  const res = await SELF.fetch(`${BASE}/api/rooms/${roomId}/ws`, {
+    headers: { Upgrade: "websocket" },
+  });
+  const ws = res.webSocket;
+  if (!ws) return { status: res.status };
+  const messages: string[] = [];
+  const closed = new Promise<{ code: number; reason: string }>((resolve) =>
+    ws.addEventListener("close", (event) =>
+      resolve({ code: event.code, reason: event.reason }),
+    ),
+  );
+  ws.addEventListener("message", (event) => messages.push(String(event.data)));
+  ws.accept();
+  return { status: res.status, ...(await closed), messages };
+}
+
+const ROOM_CLOSED_RESPONSE = {
+  status: 101,
+  code: 4001,
+  reason: "room_closed",
+  messages: [],
+};
+
 describe("REST", () => {
   test("建房 → 加入；邀請碼不分大小寫、可帶連字號", async () => {
     const room = await createRoom();
@@ -283,15 +308,15 @@ describe("REST", () => {
     );
   });
 
-  test("WebSocket 端點：不是 upgrade 回 426，roomId 格式錯誤回 404", async () => {
+  test("WebSocket 端點：不是 upgrade 回 426，roomId 格式錯誤也以 4001 關閉", async () => {
     const room = await createRoom();
     expect(
       (await SELF.fetch(`${BASE}/api/rooms/${room.roomId}/ws`)).status,
     ).toBe(426);
-    const bad = await SELF.fetch(`${BASE}/api/rooms/not-a-uuid/ws`, {
-      headers: { Upgrade: "websocket" },
-    });
-    expect(bad.status).toBe(404);
+    expect((await SELF.fetch(`${BASE}/api/rooms/not-a-uuid/ws`)).status).toBe(
+      426,
+    );
+    expect(await refusedConnect("not-a-uuid")).toEqual(ROOM_CLOSED_RESPONSE);
   });
 });
 
@@ -944,6 +969,99 @@ describe("關房清理與休眠", () => {
     // 房主在線：下一次是建房滿 24 小時
     expect(alarm).toBeGreaterThan(Date.now() + 23 * 60 * 60_000);
     host.close();
+  });
+});
+
+describe("連到不存在或已關閉的房間", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  test("從未存在的房間：接受後以 4001 關閉，不留下任何 storage 或 alarm", async () => {
+    const roomId = crypto.randomUUID();
+    expect(await refusedConnect(roomId)).toEqual(ROOM_CLOSED_RESPONSE);
+    const left = await runInDurableObject(
+      env.ROOM.getByName(roomId),
+      async (_i, state) => ({
+        keys: [...(await state.storage.list()).keys()],
+        alarm: await state.storage.getAlarm(),
+        sockets: state.getWebSockets().length,
+      }),
+    );
+    expect(left).toEqual({ keys: [], alarm: null, sockets: 0 });
+    // 不是 upgrade 的請求維持原本的錯誤
+    expect((await SELF.fetch(`${BASE}/api/rooms/${roomId}/ws`)).status).toBe(
+      426,
+    );
+  });
+
+  test("到期關房且清理完成後重連：以 4001 關閉，與從未存在的房間回應相同", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const room = await createRoom();
+    const stub = env.ROOM.getByName(room.roomId);
+    await runInDurableObject(stub, (instance) => {
+      internals(instance).room!.createdAt = 0;
+    });
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(
+      await runInDurableObject(stub, async (_i, state) => state.storage.list()),
+    ).toHaveProperty("size", 0);
+
+    const closed = await refusedConnect(room.roomId);
+    expect(closed).toEqual(ROOM_CLOSED_RESPONSE);
+    expect(closed).toEqual(await refusedConnect(crypto.randomUUID()));
+  });
+
+  test("關房中（清理未完成）重連：以 4001 關閉，清理紀錄與重試 alarm 不受影響", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const room = await createRoom();
+    const stub = env.ROOM.getByName(room.roomId);
+    let directoryDown = true;
+    await runInDurableObject(stub, (instance) => {
+      const target = internals(instance);
+      target.room!.createdAt = 0;
+      const real = target.directory.bind(instance);
+      target.directory = () =>
+        directoryDown
+          ? {
+              release: async () => {
+                throw new Error("directory unavailable");
+              },
+            }
+          : real();
+    });
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+
+    const snapshot = () =>
+      runInDurableObject(stub, async (_i, state) => ({
+        entries: Object.fromEntries(await state.storage.list()),
+        alarm: await state.storage.getAlarm(),
+        sockets: state.getWebSockets().length,
+      }));
+    const before = await snapshot();
+    expect(before.entries.closing).toMatchObject({
+      inviteCodes: [room.inviteCode],
+    });
+    expect(before.entries.retry).toMatchObject({ attempts: 1 });
+    expect(before.alarm).not.toBeNull();
+
+    const closed = await refusedConnect(room.roomId);
+    expect(closed).toEqual(ROOM_CLOSED_RESPONSE);
+    expect(closed).toEqual(await refusedConnect(crypto.randomUUID()));
+    expect(await snapshot()).toEqual(before);
+
+    // 重試照常進行：目錄恢復後清乾淨
+    directoryDown = false;
+    expect(await runAlarmAt(stub, before.alarm!)).toBe(true);
+    const after = await runInDurableObject(stub, async (_i, state) => ({
+      keys: [...(await state.storage.list()).keys()],
+      alarm: await state.storage.getAlarm(),
+    }));
+    expect(after).toEqual({ keys: [], alarm: null });
+    expect(
+      await env.INVITE_DIRECTORY.getByName("global").lookup(room.inviteCode),
+    ).toBeNull();
   });
 });
 

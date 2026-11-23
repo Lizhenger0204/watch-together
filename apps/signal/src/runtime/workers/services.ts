@@ -2,7 +2,9 @@ import type { Context } from "hono";
 import type { AppEnv } from "../../app";
 import { JOIN_RATE_LIMIT, createMemoryRateLimiter } from "../../rate-limit";
 import type { Services } from "../../services";
+import { isRoomId } from "../../room/crypto";
 import { INVITE_DIRECTORY_NAME, type Env } from "./env";
+import { roomClosedSocket } from "./room-closed-socket";
 
 // 後備限流器跨請求共用（同一個 isolate 內），所以放在模組層級。
 const fallbackJoinLimiter = createMemoryRateLimiter(JOIN_RATE_LIMIT);
@@ -36,7 +38,9 @@ export function workersServices(c: Context<AppEnv>): Services {
       authenticate: (roomId, token) => room(roomId).authenticate(token),
       regenerateInviteCode: (roomId, hostMemberId) =>
         room(roomId).regenerateInviteCode(hostMemberId),
-      connect: (roomId, request) => room(roomId).fetch(request),
+      // 格式錯誤的 roomId 不建 DO，回應與不存在的房間相同。
+      connect: async (roomId, request) =>
+        isRoomId(roomId) ? room(roomId).fetch(request) : roomClosedSocket(),
     },
     relay: {
       getPublication: (roomId) => room(roomId).getRelayPublication(),

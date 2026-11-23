@@ -27,6 +27,7 @@ import {
   type Effect,
 } from "../../signaling/process";
 import { INVITE_DIRECTORY_NAME, type Env } from "./env";
+import { roomClosedSocket } from "./room-closed-socket";
 
 type Attachment = { memberId: string | null; authDeadline: number };
 
@@ -297,10 +298,15 @@ export class RoomDO extends DurableObject<Env> {
   // ── WebSocket ──────────────────────────────────────────────
 
   override async fetch(request: Request): Promise<Response> {
+    const upgrade =
+      request.headers.get("Upgrade")?.toLowerCase() === "websocket";
     if (!this.room) {
-      return Response.json(errorBody("ROOM_NOT_FOUND"), { status: 404 });
+      // 不存在、已關閉、關房中都一樣；不碰 storage 與 alarm。
+      return upgrade
+        ? roomClosedSocket()
+        : Response.json(errorBody("ROOM_NOT_FOUND"), { status: 404 });
     }
-    if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
+    if (!upgrade) {
       return Response.json(errorBody("BAD_REQUEST"), { status: 426 });
     }
     const { 0: client, 1: server } = new WebSocketPair();
