@@ -1,0 +1,9 @@
+docs/
+AGENTS.md
+CLAUDE.md
+pnpm-lock.yaml
+**/dist/
+**/coverage/
+**/.wrangler/
+**/playwright-report/
+**/test-results/

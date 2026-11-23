@@ -1,0 +1,21 @@
+name = "remote-sync-player-signal"
+main = "src/runtime/workers/index.ts"
+compatibility_date = "2026-08-15"
+
+[vars]
+PUBLIC_ORIGIN = "http://localhost:5173"
+ROOM_MAX_MEMBERS = 8
+ROOM_IDLE_TTL_MS = 1800000
+ROOM_MAX_AGE_MS = 86400000
+
+[[durable_objects.bindings]]
+name = "ROOM"
+class_name = "RoomDO"
+
+[[durable_objects.bindings]]
+name = "INVITE_DIRECTORY"
+class_name = "InviteDirectoryDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RoomDO", "InviteDirectoryDO"]
