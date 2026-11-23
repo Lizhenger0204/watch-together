@@ -1,0 +1,258 @@
+import {
+  PROTOCOL_VERSION,
+  WS_PING_INTERVAL_MS,
+  parseServerMessage,
+  type ClientMessage,
+  type ErrorCode,
+  type ServerMessage,
+} from "@project/shared";
+import { ApiError } from "./api";
+
+// 房間 WebSocket 客戶端：連線後送 auth、心跳、依關閉碼決定是否重連、reqId ↔ ack 對應。
+// 不依賴 React；WebSocket 與計時器可注入，方便測試。
+
+export type CloseReason =
+  | "replaced"
+  | "room_closed"
+  | "kicked"
+  | "unauthorized"
+  | "bad_request"
+  | "stopped";
+
+export type ConnectionState =
+  | { status: "connecting" }
+  | { status: "open" }
+  | { status: "reconnecting"; attempt: number }
+  | { status: "closed"; reason: CloseReason };
+
+/** protocol.md「關閉碼」：這些情況不重連。 */
+const FINAL_CLOSE: Record<number, CloseReason> = {
+  4000: "replaced",
+  4001: "room_closed",
+  4003: "kicked",
+  4400: "bad_request",
+  4401: "unauthorized",
+};
+
+export interface SocketLike {
+  readonly readyState: number;
+  onopen: ((event: unknown) => void) | null;
+  onmessage: ((event: { data: unknown }) => void) | null;
+  onclose: ((event: { code: number }) => void) | null;
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+}
+
+export type Timers = {
+  setTimeout: (fn: () => void, ms: number) => unknown;
+  clearTimeout: (id: unknown) => void;
+  setInterval: (fn: () => void, ms: number) => unknown;
+  clearInterval: (id: unknown) => void;
+};
+
+export type SignalClientOptions = {
+  url: string;
+  token: string;
+  createSocket?: (url: string) => SocketLike;
+  timers?: Timers;
+  random?: () => number;
+  requestTimeoutMs?: number;
+};
+
+const OPEN = 1;
+const MAX_BACKOFF_MS = 15_000;
+
+/** 送出時不需要帶 reqId，由 request() 自動加上。 */
+type Outgoing = Exclude<ClientMessage, { type: "auth" }>;
+type Requestable = Extract<Outgoing, { reqId?: string }>;
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
+  ? Omit<T, K>
+  : never;
+
+export class SignalClient {
+  private socket: SocketLike | null = null;
+  private state: ConnectionState = { status: "connecting" };
+  private attempt = 0;
+  private stopped = false;
+  private reconnectTimer: unknown = null;
+  private pingTimer: unknown = null;
+  private nextReqId = 1;
+  private readonly pending = new Map<
+    string,
+    { resolve: () => void; reject: (error: Error) => void; timer: unknown }
+  >();
+  private readonly messageHandlers = new Set<(m: ServerMessage) => void>();
+  private readonly stateHandlers = new Set<(s: ConnectionState) => void>();
+  private readonly createSocket: (url: string) => SocketLike;
+  private readonly timers: Timers;
+  private readonly random: () => number;
+  private readonly requestTimeoutMs: number;
+
+  constructor(private readonly options: SignalClientOptions) {
+    this.createSocket =
+      options.createSocket ?? ((url) => new WebSocket(url) as SocketLike);
+    this.timers = options.timers ?? {
+      setTimeout: (fn, ms) => window.setTimeout(fn, ms),
+      clearTimeout: (id) => window.clearTimeout(id as number),
+      setInterval: (fn, ms) => window.setInterval(fn, ms),
+      clearInterval: (id) => window.clearInterval(id as number),
+    };
+    this.random = options.random ?? Math.random;
+    this.requestTimeoutMs = options.requestTimeoutMs ?? 10_000;
+  }
+
+  get connection() {
+    return this.state;
+  }
+
+  onMessage(handler: (message: ServerMessage) => void) {
+    this.messageHandlers.add(handler);
+    return () => this.messageHandlers.delete(handler);
+  }
+
+  onState(handler: (state: ConnectionState) => void) {
+    this.stateHandlers.add(handler);
+    return () => this.stateHandlers.delete(handler);
+  }
+
+  start() {
+    this.stopped = false;
+    this.open();
+  }
+
+  stop() {
+    this.stopped = true;
+    this.timers.clearTimeout(this.reconnectTimer);
+    this.socket?.close(1000, "bye");
+    this.teardown();
+    this.setState({ status: "closed", reason: "stopped" });
+  }
+
+  /** 不需要回應的訊息（signal、member:status、ping）。未連線時丟棄。 */
+  send(message: Outgoing) {
+    if (this.socket?.readyState === OPEN && this.state.status === "open") {
+      this.socket.send(JSON.stringify(message));
+      return true;
+    }
+    return false;
+  }
+
+  /** 需要 ack 的請求。失敗時以 ApiError 拒絕。 */
+  request(message: DistributiveOmit<Requestable, "reqId">): Promise<void> {
+    const reqId = String(this.nextReqId++);
+    return new Promise((resolve, reject) => {
+      if (!this.send({ ...message, reqId } as Outgoing)) {
+        reject(new ApiError("INTERNAL"));
+        return;
+      }
+      const timer = this.timers.setTimeout(() => {
+        this.pending.delete(reqId);
+        reject(new ApiError("INTERNAL"));
+      }, this.requestTimeoutMs);
+      this.pending.set(reqId, { resolve, reject, timer });
+    });
+  }
+
+  private open() {
+    this.setState(
+      this.attempt === 0
+        ? { status: "connecting" }
+        : { status: "reconnecting", attempt: this.attempt },
+    );
+    const socket = this.createSocket(this.options.url);
+    this.socket = socket;
+
+    socket.onopen = () => {
+      socket.send(
+        JSON.stringify({
+          type: "auth",
+          token: this.options.token,
+          protocolVersion: PROTOCOL_VERSION,
+        }),
+      );
+    };
+    socket.onmessage = (event) => {
+      if (typeof event.data !== "string") return;
+      const parsed = parseServerMessage(event.data);
+      if (!parsed.ok) {
+        console.warn("收到無法解析的伺服器訊息", parsed.error);
+        return;
+      }
+      this.handle(parsed.message);
+    };
+    socket.onclose = (event) => {
+      if (this.socket !== socket) return;
+      this.teardown();
+      if (this.stopped) return;
+      const reason = FINAL_CLOSE[event.code];
+      if (reason) {
+        this.setState({ status: "closed", reason });
+        return;
+      }
+      this.scheduleReconnect();
+    };
+  }
+
+  private handle(message: ServerMessage) {
+    if (message.type === "room:snapshot") {
+      // 驗證成功才算連上；重連次數歸零。
+      this.attempt = 0;
+      this.setState({ status: "open" });
+      this.startPing();
+    }
+    if (message.type === "ack") {
+      const entry = this.pending.get(message.reqId);
+      if (entry) {
+        this.pending.delete(message.reqId);
+        this.timers.clearTimeout(entry.timer);
+        if (message.ok) entry.resolve();
+        else entry.reject(new ApiError(message.code));
+      }
+    }
+    this.messageHandlers.forEach((handler) => handler(message));
+  }
+
+  private scheduleReconnect() {
+    this.attempt += 1;
+    const base = Math.min(MAX_BACKOFF_MS, 1000 * 2 ** (this.attempt - 1));
+    const delay = base / 2 + (base / 2) * this.random();
+    this.setState({ status: "reconnecting", attempt: this.attempt });
+    this.reconnectTimer = this.timers.setTimeout(() => this.open(), delay);
+  }
+
+  private startPing() {
+    this.timers.clearInterval(this.pingTimer);
+    this.pingTimer = this.timers.setInterval(
+      () => this.send({ type: "ping" }),
+      WS_PING_INTERVAL_MS,
+    );
+  }
+
+  private teardown() {
+    this.timers.clearInterval(this.pingTimer);
+    this.pingTimer = null;
+    if (this.socket) {
+      this.socket.onopen = null;
+      this.socket.onmessage = null;
+      this.socket.onclose = null;
+      this.socket = null;
+    }
+    for (const [, entry] of this.pending) {
+      this.timers.clearTimeout(entry.timer);
+      entry.reject(new ApiError("INTERNAL"));
+    }
+    this.pending.clear();
+  }
+
+  private setState(state: ConnectionState) {
+    this.state = state;
+    this.stateHandlers.forEach((handler) => handler(state));
+  }
+}
+
+export function signalUrl(roomId: string) {
+  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${location.host}/api/rooms/${roomId}/ws`;
+}
+
+export type { ErrorCode };

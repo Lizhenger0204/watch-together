@@ -1,14 +1,86 @@
-import { z } from "zod";
+import {
+  createRoomResponseSchema,
+  errorResponseSchema,
+  healthResponseSchema,
+  iceResponseSchema,
+  joinRoomResponseSchema,
+  regenerateInviteCodeResponseSchema,
+  type ErrorCode,
+} from "@project/shared";
+import type { z } from "zod";
 
-const healthSchema = z.object({
-  ok: z.literal(true),
-  protocolVersion: z.number().int(),
-});
+/** 給使用者看的錯誤訊息。程式判斷請看 code。 */
+export const ERROR_MESSAGES: Record<ErrorCode, string> = {
+  BAD_REQUEST: "輸入的資料格式不對，請檢查後再試。",
+  UNAUTHORIZED: "身份已失效，請重新加入房間。",
+  FORBIDDEN: "只有房主可以這樣做。",
+  ROOM_NOT_FOUND: "找不到房間，邀請碼可能打錯或已失效。",
+  ROOM_FULL: "房間已滿。",
+  RATE_LIMITED: "嘗試太多次了，請等一分鐘再試。",
+  STREAM_NOT_LIVE: "房主還沒開始播放。",
+  RELAY_UNAVAILABLE: "轉發模式目前無法使用。",
+  INTERNAL: "伺服器出了點問題，請稍後再試。",
+};
 
-export async function getHealth(signal: AbortSignal) {
-  const response = await fetch("/api/health", { signal });
-  if (!response.ok) {
-    throw new Error("無法取得服務狀態");
+export class ApiError extends Error {
+  constructor(readonly code: ErrorCode) {
+    super(ERROR_MESSAGES[code]);
   }
-  return healthSchema.parse(await response.json());
+}
+
+async function request<T>(
+  path: string,
+  schema: z.ZodType<T>,
+  init: RequestInit & { token?: string } = {},
+): Promise<T> {
+  const { token, ...rest } = init;
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      ...rest,
+      headers: {
+        ...(rest.body ? { "Content-Type": "application/json" } : {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+  } catch (error) {
+    if (rest.signal?.aborted) throw error;
+    throw new ApiError("INTERNAL");
+  }
+  const body: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    const parsed = errorResponseSchema.safeParse(body);
+    throw new ApiError(parsed.success ? parsed.data.error.code : "INTERNAL");
+  }
+  return schema.parse(body);
+}
+
+export function getHealth(signal: AbortSignal) {
+  return request("/api/health", healthResponseSchema, { signal });
+}
+
+export function createRoom(nickname: string) {
+  return request("/api/rooms", createRoomResponseSchema, {
+    method: "POST",
+    body: JSON.stringify({ nickname }),
+  });
+}
+
+export function joinRoom(inviteCode: string, nickname: string) {
+  return request("/api/rooms/join", joinRoomResponseSchema, {
+    method: "POST",
+    body: JSON.stringify({ inviteCode, nickname }),
+  });
+}
+
+export function regenerateInviteCode(roomId: string, token: string) {
+  return request(
+    `/api/rooms/${roomId}/invite-code`,
+    regenerateInviteCodeResponseSchema,
+    { method: "POST", token },
+  );
+}
+
+export function getIceServers(roomId: string, token: string) {
+  return request(`/api/rooms/${roomId}/ice`, iceResponseSchema, { token });
 }
