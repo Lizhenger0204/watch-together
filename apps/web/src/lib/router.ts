@@ -8,11 +8,19 @@ export type Route =
   | { page: "room"; roomId: string }
   | { page: "not-found" };
 
+/** 截斷的百分比編碼會讓 decodeURIComponent 丟 URIError；原樣交給加入表單去提示格式錯誤。 */
+function safeDecode(segment: string) {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
 export function parseRoute(pathname: string): Route {
   if (pathname === "/" || pathname === "") return { page: "home" };
   const join = /^\/join\/([^/]+)\/?$/.exec(pathname);
-  if (join?.[1])
-    return { page: "join", inviteCode: decodeURIComponent(join[1]) };
+  if (join?.[1]) return { page: "join", inviteCode: safeDecode(join[1]) };
   const room = /^\/rooms\/([0-9a-f-]{36})\/?$/.exec(pathname);
   if (room?.[1]) return { page: "room", roomId: room[1] };
   return { page: "not-found" };
@@ -28,9 +36,15 @@ function subscribe(listener: () => void) {
   };
 }
 
-export function navigate(path: string, { replace = false } = {}) {
-  if (replace) history.replaceState(null, "", path);
-  else history.pushState(null, "", path);
+export type NavigationState = { notice?: string };
+
+export function navigate(
+  path: string,
+  { replace = false, notice }: { replace?: boolean; notice?: string } = {},
+) {
+  const state: NavigationState | null = notice ? { notice } : null;
+  if (replace) history.replaceState(state, "", path);
+  else history.pushState(state, "", path);
   listeners.forEach((listener) => listener());
 }
 
@@ -41,3 +55,10 @@ export function usePathname() {
 export const roomPath = (roomId: string) => `/rooms/${roomId}`;
 export const joinUrl = (inviteCode: string) =>
   `${location.origin}/join/${inviteCode}`;
+
+/** 上一頁透過 navigate({ notice }) 留下的提示（例如被踢出後回首頁）。 */
+export function readNotice(state: unknown): string | null {
+  if (typeof state !== "object" || state === null) return null;
+  const notice = (state as NavigationState).notice;
+  return typeof notice === "string" && notice ? notice : null;
+}

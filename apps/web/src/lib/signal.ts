@@ -57,7 +57,18 @@ export type SignalClientOptions = {
   timers?: Timers;
   random?: () => number;
   requestTimeoutMs?: number;
+  /**
+   * 用 REST 確認 token／房間還在。房間被刪掉後 WebSocket 握手直接失敗（瀏覽器只看到 1006），
+   * 以及驗證前就收到 4400 時，靠它分辨「網路問題」和「身份已不存在」。
+   */
+  verifyIdentity?: () => Promise<IdentityCheck>;
 };
+
+export type IdentityCheck =
+  "valid" | "room_closed" | "unauthorized" | "unknown";
+
+/** 連續重連失敗（期間沒收到 room:snapshot）幾次後查一次身份；之後每隔同樣次數再查。 */
+export const IDENTITY_CHECK_AFTER_ATTEMPTS = 5;
 
 const OPEN = 1;
 const MAX_BACKOFF_MS = 15_000;
@@ -77,6 +88,8 @@ export class SignalClient {
   private reconnectTimer: unknown = null;
   private pingTimer: unknown = null;
   private nextReqId = 1;
+  /** 每次收到 room:snapshot 加一；確認身份的結果回來時用來判斷是否已經過時。 */
+  private session = 0;
   private readonly pending = new Map<
     string,
     { resolve: () => void; reject: (error: Error) => void; timer: unknown }
@@ -161,6 +174,7 @@ export class SignalClient {
     );
     const socket = this.createSocket(this.options.url);
     this.socket = socket;
+    let authenticated = false;
 
     socket.onopen = () => {
       socket.send(
@@ -178,6 +192,7 @@ export class SignalClient {
         console.warn("收到無法解析的伺服器訊息", parsed.error);
         return;
       }
+      if (parsed.message.type === "room:snapshot") authenticated = true;
       this.handle(parsed.message);
     };
     socket.onclose = (event) => {
@@ -185,6 +200,11 @@ export class SignalClient {
       this.teardown();
       if (this.stopped) return;
       const reason = FINAL_CLOSE[event.code];
+      // 驗證前的 4400 可能是本機 token 損壞，重新整理也沒用；先確認身份。
+      if (reason === "bad_request" && !authenticated) {
+        this.closeAfterVerify("bad_request");
+        return;
+      }
       if (reason) {
         this.setState({ status: "closed", reason });
         return;
@@ -197,6 +217,7 @@ export class SignalClient {
     if (message.type === "room:snapshot") {
       // 驗證成功才算連上；重連次數歸零。
       this.attempt = 0;
+      this.session += 1;
       this.setState({ status: "open" });
       this.startPing();
     }
@@ -218,6 +239,34 @@ export class SignalClient {
     const delay = base / 2 + (base / 2) * this.random();
     this.setState({ status: "reconnecting", attempt: this.attempt });
     this.reconnectTimer = this.timers.setTimeout(() => this.open(), delay);
+    if (this.attempt % IDENTITY_CHECK_AFTER_ATTEMPTS === 0) {
+      this.closeAfterVerify(null);
+    }
+  }
+
+  /** 確認身份：已不存在就以對應原因結束；否則以 fallback 結束（null 代表繼續重連）。 */
+  private closeAfterVerify(fallback: CloseReason | null) {
+    const verify = this.options.verifyIdentity;
+    if (!verify) {
+      if (fallback) this.setState({ status: "closed", reason: fallback });
+      return;
+    }
+    const session = this.session;
+    void verify()
+      .catch((): IdentityCheck => "unknown")
+      .then((result) => {
+        if (this.stopped || this.session !== session) return;
+        if (this.state.status === "closed") return;
+        const reason =
+          result === "room_closed" || result === "unauthorized"
+            ? result
+            : fallback;
+        if (!reason) return;
+        this.timers.clearTimeout(this.reconnectTimer);
+        this.socket?.close(1000, "bye");
+        this.teardown();
+        this.setState({ status: "closed", reason });
+      });
   }
 
   private startPing() {

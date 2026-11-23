@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { parseRoute } from "./router";
+import { parseRoute, readNotice } from "./router";
 
 test.each([
   ["/", { page: "home" }],
@@ -10,6 +10,15 @@ test.each([
   ],
   ["/rooms/not-a-uuid", { page: "not-found" }],
   ["/whatever", { page: "not-found" }],
+  ["/join/abcd%20efgh", { page: "join", inviteCode: "abcd efgh" }],
+  // 截斷的百分比編碼不可丟 URIError，交給加入表單提示格式錯誤。
+  ["/join/ABCD%E", { page: "join", inviteCode: "ABCD%E" }],
 ])("%s", (path, route) => {
   expect(parseRoute(path)).toEqual(route);
+});
+
+test("readNotice 只接受字串提示", () => {
+  expect(readNotice({ notice: "房間已關閉" })).toBe("房間已關閉");
+  expect(readNotice(null)).toBeNull();
+  expect(readNotice({ notice: 1 })).toBeNull();
 });

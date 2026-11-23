@@ -1,17 +1,33 @@
-import type { Mode, Quality } from "@project/shared";
+import { tokenSchema } from "@project/shared";
 import { useEffect, useMemo, useReducer, useState } from "react";
 import { regenerateInviteCode } from "../../lib/api";
 import { SignalClient, signalUrl } from "../../lib/signal";
-import { roomToken } from "../../lib/storage";
-import { initialRoomView, roomReducer } from "./room-state";
+import { roomInviteCode, roomToken } from "../../lib/storage";
+import { checkIdentity } from "./identity";
+import { initialRoomView, roomReducer, type RoomUpdate } from "./room-state";
 
-/** 進入房間：用 localStorage 裡的 token 連 WebSocket，提供房間狀態與操作。 */
+/** 本機的 token 格式壞掉（例如被截短）：連了也只會被 4400 拒絕，當成沒有身份（由頁面清掉）。 */
+function loadToken(roomId: string) {
+  const token = roomToken.get(roomId);
+  if (token === null) return { token: null, corrupted: false };
+  if (tokenSchema.safeParse(token).success) return { token, corrupted: false };
+  return { token: null, corrupted: true };
+}
+
+/** 進入房間：用本機的 token 連 WebSocket，提供房間狀態與操作。 */
 export function useRoom(roomId: string) {
-  const [token] = useState(() => roomToken.get(roomId));
+  const [{ token, corrupted }] = useState(() => loadToken(roomId));
   const [view, dispatch] = useReducer(roomReducer, initialRoomView);
 
   const client = useMemo(
-    () => (token ? new SignalClient({ url: signalUrl(roomId), token }) : null),
+    () =>
+      token
+        ? new SignalClient({
+            url: signalUrl(roomId),
+            token,
+            verifyIdentity: () => checkIdentity(roomId, token),
+          })
+        : null,
     [roomId, token],
   );
 
@@ -20,41 +36,42 @@ export function useRoom(roomId: string) {
     const offMessage = client.onMessage((message) =>
       dispatch({ kind: "message", message }),
     );
-    const offState = client.onState((state) => {
-      dispatch({ kind: "connection", state });
-      // 被踢或 token 無效：token 已經沒用了，清掉。
-      if (
-        state.status === "closed" &&
-        (state.reason === "kicked" || state.reason === "unauthorized")
-      ) {
-        roomToken.clear(roomId);
-      }
-    });
+    const offState = client.onState((state) =>
+      dispatch({ kind: "connection", state }),
+    );
     client.start();
     return () => {
       offMessage();
       offState();
       client.stop();
     };
-  }, [client, roomId]);
+  }, [client]);
+
+  // 記住房主看到的邀請碼，房主開自己的邀請連結時才認得出是這一房。
+  const inviteCode = view.you?.role === "host" ? view.room?.inviteCode : null;
+  useEffect(() => {
+    if (inviteCode) roomInviteCode.set(roomId, inviteCode);
+  }, [roomId, inviteCode]);
 
   const actions = useMemo(
     () => ({
-      updateRoom: (patch: {
-        mode?: Mode;
-        quality?: Quality;
-        locked?: boolean;
-      }) => client?.request({ type: "room:update", ...patch }),
+      updateRoom: (patch: RoomUpdate) =>
+        client?.request({ type: "room:update", ...patch }),
       kick: (memberId: string) =>
         client?.request({ type: "room:kick", memberId }),
       setStream: (live: boolean, title: string | null) =>
         client?.request({ type: "stream:status", live, title }),
-      regenerateInviteCode: () =>
-        token ? regenerateInviteCode(roomId, token) : Promise.reject(),
+      async regenerateInviteCode() {
+        if (!token) throw new Error("no token");
+        const result = await regenerateInviteCode(roomId, token);
+        // WebSocket 斷線時收不到 room:updated，直接用 REST 回應更新。
+        dispatch({ kind: "invite-code", inviteCode: result.inviteCode });
+        return result;
+      },
       clearError: () => dispatch({ kind: "clear-error" }),
     }),
     [client, roomId, token],
   );
 
-  return { hasToken: token !== null, token, view, actions, client };
+  return { hasToken: token !== null, corrupted, view, actions, client };
 }

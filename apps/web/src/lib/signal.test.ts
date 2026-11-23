@@ -1,6 +1,12 @@
 import { describe, expect, test, vi } from "vitest";
 import { ApiError } from "./api";
-import { SignalClient, type SocketLike, type Timers } from "./signal";
+import {
+  IDENTITY_CHECK_AFTER_ATTEMPTS,
+  SignalClient,
+  type SignalClientOptions,
+  type SocketLike,
+  type Timers,
+} from "./signal";
 
 class FakeSocket implements SocketLike {
   readyState = 0;
@@ -73,7 +79,7 @@ const snapshot = {
   you: { memberId: "m", role: "host" },
 };
 
-function setup() {
+function setup(options: Partial<SignalClientOptions> = {}) {
   const sockets: FakeSocket[] = [];
   const { timers, advance } = fakeTimers();
   const client = new SignalClient({
@@ -81,6 +87,7 @@ function setup() {
     token: "secret-token",
     timers,
     random: () => 1,
+    ...options,
     createSocket: () => {
       const socket = new FakeSocket();
       sockets.push(socket);
@@ -197,5 +204,120 @@ describe("SignalClient", () => {
     advance(60_000);
     expect(sockets).toHaveLength(1);
     expect(states.at(-1)).toBe("closed:stopped");
+  });
+
+  test("ack 逆序回來時仍依 reqId 配對", async () => {
+    const { client, current, connect } = setup();
+    connect();
+    const first = client.request({ type: "room:update", locked: true });
+    const second = client.request({ type: "room:kick", memberId: "x" });
+    const [a, b] = current().sent.slice(1) as { reqId: string }[];
+    current().receive({
+      type: "ack",
+      reqId: b!.reqId,
+      ok: false,
+      code: "FORBIDDEN",
+    });
+    current().receive({ type: "ack", reqId: a!.reqId, ok: true });
+    await expect(first).resolves.toBeUndefined();
+    await expect(second).rejects.toEqual(new ApiError("FORBIDDEN"));
+  });
+
+  test("4408 之後重連並重新 auth", () => {
+    const { sockets, current, connect, advance, states } = setup();
+    connect();
+    current().drop(4408);
+    advance(1000);
+    expect(sockets).toHaveLength(2);
+    current().open();
+    expect(current().sent[0]).toMatchObject({ type: "auth" });
+    current().receive(snapshot);
+    expect(states.at(-1)).toBe("open");
+  });
+
+  test.each([
+    ["room_closed", "closed:room_closed"],
+    ["unauthorized", "closed:unauthorized"],
+  ] as const)(
+    "連續重連失敗 %i 次且一直沒收到 snapshot：用 REST 確認身份，%s 就停止重連",
+    async (result, state) => {
+      const verifyIdentity = vi.fn(async () => result);
+      const { sockets, current, advance, states } = setup({ verifyIdentity });
+      for (let i = 1; i < IDENTITY_CHECK_AFTER_ATTEMPTS; i++) {
+        current().drop(1006);
+        advance(15_000);
+      }
+      expect(verifyIdentity).not.toHaveBeenCalled();
+      current().drop(1006);
+      expect(verifyIdentity).toHaveBeenCalledTimes(1);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(states.at(-1)).toBe(state);
+      const count = sockets.length;
+      advance(60_000);
+      expect(sockets).toHaveLength(count);
+    },
+  );
+
+  test("確認身份仍有效（真的是網路問題）就繼續退避重連", async () => {
+    const verifyIdentity = vi.fn(async () => "valid" as const);
+    const { sockets, current, advance, states } = setup({ verifyIdentity });
+    for (let i = 0; i < IDENTITY_CHECK_AFTER_ATTEMPTS; i++) {
+      current().drop(1006);
+      advance(15_000);
+    }
+    await Promise.resolve();
+    expect(verifyIdentity).toHaveBeenCalledTimes(1);
+    const count = sockets.length;
+    current().drop(1006);
+    expect(states.at(-1)).toBe("reconnecting");
+    advance(15_000);
+    expect(sockets).toHaveLength(count + 1);
+  });
+
+  test("確認身份途中連上了：忽略結果", async () => {
+    let resolve: (v: "unauthorized") => void = () => {};
+    const verifyIdentity = vi.fn(
+      () => new Promise<"unauthorized">((r) => (resolve = r)),
+    );
+    const { current, advance, states } = setup({ verifyIdentity });
+    for (let i = 0; i < IDENTITY_CHECK_AFTER_ATTEMPTS; i++) {
+      current().drop(1006);
+      advance(15_000);
+    }
+    current().open();
+    current().receive(snapshot);
+    resolve("unauthorized");
+    await Promise.resolve();
+    expect(states.at(-1)).toBe("open");
+  });
+
+  test("驗證前就收到 4400：確認身份，token 已無效就當成 4401", async () => {
+    const verifyIdentity = vi.fn(async () => "unauthorized" as const);
+    const { current, states } = setup({ verifyIdentity });
+    current().open();
+    current().drop(4400);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(states.at(-1)).toBe("closed:unauthorized");
+  });
+
+  test("驗證前就收到 4400 但身份有效（協定版本不符）：維持要求重新整理", async () => {
+    const verifyIdentity = vi.fn(async () => "valid" as const);
+    const { current, states } = setup({ verifyIdentity });
+    current().open();
+    current().drop(4400);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(states.at(-1)).toBe("closed:bad_request");
+  });
+
+  test("驗證後才收到 4400：不查身份，直接要求重新整理", () => {
+    const verifyIdentity = vi.fn(async () => "unauthorized" as const);
+    const { current, connect, states } = setup({ verifyIdentity });
+    connect();
+    current().drop(4400);
+    expect(verifyIdentity).not.toHaveBeenCalled();
+    expect(states.at(-1)).toBe("closed:bad_request");
   });
 });
