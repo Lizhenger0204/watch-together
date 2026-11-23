@@ -45,7 +45,6 @@
 
 | 變數 | 預設 | 說明 |
 | --- | --- | --- |
-| `PUBLIC_ORIGIN` | 本機 `http://localhost:5173`；正式環境 `https://watch.example.com`（**部署前改成真網址**） | 正式網址。與 CORS 無關（同源部署不需要 CORS）。目前沒有程式讀取：邀請連結由前端以 `location.origin` 組成（`apps/web/src/lib/router.ts`），同源部署下就是正式網址 |
 | `ROOM_MAX_MEMBERS` | `8` | 含房主 |
 | `ROOM_IDLE_TTL_MS` | `1800000` | 無人後 30 分鐘關房 |
 | `ROOM_MAX_AGE_MS` | `86400000` | 24 小時 |
