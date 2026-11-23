@@ -108,9 +108,8 @@ export function createApp(resolveServices: (c: Ctx) => Services) {
     if (c.req.header("Upgrade")?.toLowerCase() !== "websocket") {
       return c.json(errorBody("BAD_REQUEST", "需要 WebSocket 連線"), 426);
     }
-    const roomId = c.req.param("roomId");
-    if (!isRoomId(roomId)) return fail(c, "ROOM_NOT_FOUND");
-    return c.var.services.rooms.connect(roomId, c.req.raw);
+    // roomId 格式錯誤也交給 connect：和不存在的房間一樣以 4001 關閉，前端才不會無限重連。
+    return c.var.services.rooms.connect(c.req.param("roomId"), c.req.raw);
   });
 
   app.route(

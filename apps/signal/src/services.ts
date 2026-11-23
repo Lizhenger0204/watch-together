@@ -26,7 +26,10 @@ export interface RoomService {
     roomId: string,
     hostMemberId: string,
   ): Promise<Result<{ inviteCode: string }>>;
-  /** WebSocket upgrade。 */
+  /**
+   * WebSocket upgrade。roomId 未檢查格式：格式錯誤、房間不存在、已關閉或關房中，
+   * 一律接受後以 4001（`room_closed`）關閉，回應完全相同。
+   */
   connect(roomId: string, request: Request): Promise<Response>;
 }
 
