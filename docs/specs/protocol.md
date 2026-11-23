@@ -6,6 +6,7 @@
 ## 通用
 
 - 時間：epoch 毫秒（number）。
+- `packages/shared` 另外提供：`normalizeInviteCode` / `formatInviteCode`（前後端共用的邀請碼正規化）、`QUALITY_PRESETS`（streaming.md §2 的畫質表）、`parseClientMessage` / `parseServerMessage`（解析 WebSocket 訊息）。前後端不可自己再寫一份。
 - REST 錯誤格式：`{ error: { code: ErrorCode, message: string } }`。`message` 給人看，程式判斷只看 `code`。
 - `ErrorCode`：`BAD_REQUEST`、`UNAUTHORIZED`、`FORBIDDEN`、`ROOM_NOT_FOUND`、`ROOM_FULL`、`RATE_LIMITED`、`STREAM_NOT_LIVE`、`RELAY_UNAVAILABLE`、`INTERNAL`。
 

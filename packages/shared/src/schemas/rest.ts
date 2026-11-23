@@ -1,0 +1,59 @@
+import { z } from "zod";
+import {
+  errorCodeSchema,
+  iceServerSchema,
+  idSchema,
+  inviteCodeSchema,
+  nicknameSchema,
+  tokenSchema,
+} from "./common";
+
+export const errorResponseSchema = z.object({
+  error: z.object({ code: errorCodeSchema, message: z.string() }),
+});
+export type ErrorResponse = z.infer<typeof errorResponseSchema>;
+
+export const healthResponseSchema = z.object({
+  ok: z.literal(true),
+  protocolVersion: z.number().int(),
+});
+export type HealthResponse = z.infer<typeof healthResponseSchema>;
+
+// POST /api/rooms
+export const createRoomRequestSchema = z.object({ nickname: nicknameSchema });
+export type CreateRoomRequest = z.infer<typeof createRoomRequestSchema>;
+export const createRoomResponseSchema = z.object({
+  roomId: idSchema,
+  inviteCode: inviteCodeSchema,
+  hostToken: tokenSchema,
+  memberId: idSchema,
+});
+export type CreateRoomResponse = z.infer<typeof createRoomResponseSchema>;
+
+// POST /api/rooms/join
+/** inviteCode 接受使用者原始輸入，伺服器用 normalizeInviteCode 正規化。 */
+export const joinRoomRequestSchema = z.object({
+  inviteCode: z.string().min(1).max(32),
+  nickname: nicknameSchema,
+});
+export type JoinRoomRequest = z.infer<typeof joinRoomRequestSchema>;
+export const joinRoomResponseSchema = z.object({
+  roomId: idSchema,
+  memberToken: tokenSchema,
+  memberId: idSchema,
+});
+export type JoinRoomResponse = z.infer<typeof joinRoomResponseSchema>;
+
+// POST /api/rooms/:roomId/invite-code
+export const regenerateInviteCodeResponseSchema = z.object({
+  inviteCode: inviteCodeSchema,
+});
+export type RegenerateInviteCodeResponse = z.infer<
+  typeof regenerateInviteCodeResponseSchema
+>;
+
+// GET /api/ice
+export const iceResponseSchema = z.object({
+  iceServers: z.array(iceServerSchema),
+});
+export type IceResponse = z.infer<typeof iceResponseSchema>;
