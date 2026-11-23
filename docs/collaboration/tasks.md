@@ -19,17 +19,18 @@
 | --- | --- | --- | --- | --- |
 | T-101 | Scaffold：pnpm workspace、apps/web（Vite + React + TS + Tailwind）、apps/signal（Hono + wrangler + DO 骨架）、packages/shared、ESLint / Prettier / Vitest、`pnpm dev` 與 proxy | GPT | — | DONE |
 | T-102 | `packages/shared`：依 protocol.md 寫 zod schema、訊息型別、常數 | Claude | T-101 | DONE |
-| T-103 | 房間核心 + REST（建房 / 加入 / 重產邀請碼）+ RoomDO / InviteDirectoryDO + WebSocket 驗證 + 信令轉送 + 生命週期 + 限流 | Claude | T-102 | REVIEW |
+| T-103 | 房間核心 + REST（建房 / 加入 / 重產邀請碼）+ RoomDO / InviteDirectoryDO + WebSocket 驗證 + 信令轉送 + 生命週期 + 限流 | Claude | T-102 | DONE |
 | T-104 | `/api/ice`：STUN 清單 + Cloudflare TURN 短效憑證（沒有 secrets 時只回 STUN） | GPT | T-102 | DONE |
 | T-105 | 前端頁面：首頁（建房 / 輸入邀請碼）、`/join/:code`、房間頁（房主版 / 收看者版）、成員列表與連線品質、模式與畫質選項卡、複製邀請碼 | Claude | T-102 | TODO |
 | T-106 | 選片：檔案選擇、開播前檢查、本地播放與自訂控制列、captureStream、房主音量實測並更新 streaming.md | GPT | T-101 | DONE |
-| T-107 | P2P 傳輸：房主 mesh、收看者連線、codec 偏好、畫質與縮放、ICE restart、統計 | Claude | T-103, T-104 | TODO |
-| T-108 | 轉發轉接：WHIP / WHEP → Cloudflare Realtime（參考官方範例，先確認授權） | GPT | T-103 | TODO |
+| T-107 | P2P 傳輸：房主 mesh、收看者連線、codec 偏好、畫質與縮放、ICE restart、統計 | Claude | T-103, T-104, T-114 | TODO |
+| T-108 | 轉發轉接：WHIP / WHEP → Cloudflare Realtime（參考官方範例，先確認授權） | GPT | T-103 | DOING |
 | T-109 | 轉發傳輸客戶端（WHIP / WHEP）+ 模式切換流程 | Claude | T-107, T-108 | TODO |
 | T-110 | 收看端播放器：srcObject、點擊開始觀看、狀態提示、重新連線按鈕 | Claude | T-107 | TODO |
 | T-111 | E2E：3 個 context 的 P2P 流程 | GPT | T-105, T-106, T-110 | TODO |
-| T-112 | 部署：給零經驗使用者的 Cloudflare 帳號與網域設定圖文指南、`pnpm deploy`、secrets 設定、CI | GPT | T-103 | TODO |
+| T-112 | 部署：給零經驗使用者的 Cloudflare 帳號與網域設定圖文指南、`pnpm deploy`、secrets 設定、CI | GPT | T-103 | DOING |
 | T-113 | 人工驗收清單（ADR 0002 待驗證項目），做完後交給使用者與朋友實測 | Claude | T-109, T-111, T-112 | TODO |
+| T-114 | T-103 審查修正：邀請碼重產與關房序列化、關房清理可重試、限流後備、token 常數時間比對；spec 補房主接手（4000）時的 `peer:request` 順序、未驗證連線格式錯誤以 4400 關閉、ICE 新路徑同步 shared 與版本說明 | Claude | T-103 | TODO |
 
 可平行的組合：T-101 完成後 → T-102（Claude）∥ T-106（GPT）；T-102 完成後 → T-103、T-105（Claude，依序）∥ T-104（GPT）；T-103 完成後 → T-108、T-112（GPT）。
 
@@ -66,3 +67,11 @@ Review（Claude）：TURN 回傳的 port 53 位址會被瀏覽器擋下，由 T-
 4. 驗證方式：`pnpm typecheck && pnpm lint && pnpm test && pnpm e2e`。
 
 實測結論（已寫入 streaming.md §1）：Chrome 的房主音量不影響擷取音訊；影片播完時擷取 track 會被移除；HEVC + AAC 測試片在本機 Chrome 可解碼。
+
+### T-103（Claude，2026-11-24）— DONE
+1. 做了什麼：`room/room.ts`（房間狀態純邏輯）、`signaling/process.ts`（auth／訊息／斷線純邏輯與信令轉送規則）、`app.ts`（`createApp`、建房／加入（限流）／重產邀請碼／WebSocket、掛載 ICE、`requireMember`／`requireHost`）、`runtime/workers`（RoomDO 用 WebSocket Hibernation 與 alarm、InviteDirectoryDO、`JOIN_RATE_LIMITER`）、ICE 過濾 port 53。
+2. 介面變動：ICE 路徑改為 `GET /api/rooms/:roomId/ice`；新增 WebSocket 關閉碼表（protocol.md）；房主斷線時直播改為未開播；離線超過 10 分鐘的收看者在有人加入時被移除（room-and-invite.md）。
+3. 已知限制：沒有 `JOIN_RATE_LIMITER` 綁定時不限流；`runtime/node` 尚未實作。
+4. 驗證方式：`pnpm typecheck && pnpm lint && pnpm test && pnpm e2e`。
+
+Review（GPT，監工核對）：結論「小修後可合併」，沒有安全漏洞（token 只存雜湊、收看者 signal 只能送房主、伺服器端角色檢查、踢人後 token 失效皆符合）。合併到 main 時 typecheck／lint／test 121／e2e 3 全過。待修項目開為 T-114，需在 T-107 前完成：並發重產邀請碼會讓其中一個回傳碼失效並留下孤兒對照；關房清理 RPC 失敗後 alarm 重試會跳過；直播中房主被同一成員新連線取代時不會重發 `peer:request`；未驗證連線的首幀格式錯誤未斷線、五秒期限在雜湊前判斷；缺限流綁定時放行；token 比對非常數時間；shared 的 ICE 路由註解仍是舊路徑。測試缺口：休眠喚醒還原、alarm 共用、混合 port 53 的 TURN 過濾斷言。
