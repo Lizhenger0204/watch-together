@@ -21,7 +21,7 @@
 | T-102 | `packages/shared`：依 protocol.md 寫 zod schema、訊息型別、常數 | Claude | T-101 | DONE |
 | T-103 | 房間核心 + REST（建房 / 加入 / 重產邀請碼）+ RoomDO / InviteDirectoryDO + WebSocket 驗證 + 信令轉送 + 生命週期 + 限流 | Claude | T-102 | DONE |
 | T-104 | `/api/ice`：STUN 清單 + Cloudflare TURN 短效憑證（沒有 secrets 時只回 STUN） | GPT | T-102 | DONE |
-| T-105 | 前端頁面：首頁（建房 / 輸入邀請碼）、`/join/:code`、房間頁（房主版 / 收看者版）、成員列表與連線品質、模式與畫質選項卡、複製邀請碼 | Claude | T-102 | REVIEW |
+| T-105 | 前端頁面：首頁（建房 / 輸入邀請碼）、`/join/:code`、房間頁（房主版 / 收看者版）、成員列表與連線品質、模式與畫質選項卡、複製邀請碼 | Claude | T-102 | DOING |
 | T-106 | 選片：檔案選擇、開播前檢查、本地播放與自訂控制列、captureStream、房主音量實測並更新 streaming.md | GPT | T-101 | DONE |
 | T-107 | P2P 傳輸：房主 mesh、收看者連線、codec 偏好、畫質與縮放、ICE restart、統計 | Claude | T-103, T-104, T-114 | TODO |
 | T-108 | 轉發轉接：WHIP / WHEP → Cloudflare Realtime（參考官方範例，先確認授權） | GPT | T-103 | DONE |
@@ -30,7 +30,7 @@
 | T-111 | E2E：3 個 context 的 P2P 流程 | GPT | T-105, T-106, T-110 | TODO |
 | T-112 | 部署：給零經驗使用者的 Cloudflare 帳號與網域設定圖文指南、`pnpm deploy`、secrets 設定、CI | GPT | T-103 | DONE |
 | T-113 | 人工驗收清單（ADR 0002 待驗證項目），做完後交給使用者與朋友實測 | Claude | T-109, T-111, T-112 | TODO |
-| T-114 | T-103 審查修正：邀請碼重產與關房序列化、關房清理可重試、限流後備、token 常數時間比對；spec 補房主接手（4000）時的 `peer:request` 順序、未驗證連線格式錯誤以 4400 關閉、ICE 新路徑同步 shared 與版本說明；關房時呼叫 `RoomDO.closeRelayResources()`（失敗保留記錄重試） | Claude | T-103, T-108 | REVIEW |
+| T-114 | T-103 審查修正：邀請碼重產與關房序列化、關房清理可重試、限流後備、token 常數時間比對；spec 補房主接手（4000）時的 `peer:request` 順序、未驗證連線格式錯誤以 4400 關閉、ICE 新路徑同步 shared 與版本說明；關房時呼叫 `RoomDO.closeRelayResources()`（失敗保留記錄重試） | Claude | T-103, T-108 | DOING |
 
 可平行的組合：T-101 完成後 → T-102（Claude）∥ T-106（GPT）；T-102 完成後 → T-103、T-105（Claude，依序）∥ T-104（GPT）；T-103 完成後 → T-108、T-112（GPT）。
 
@@ -93,3 +93,8 @@ Review（Claude 監工）：路由沿用 `requireHost`／`requireMember`，沒�
 Review（Claude 監工）：沒有新增套件、沒有改 pnpm-workspace.yaml，CI 不含任何金鑰，四個 GitHub Action 版本都確認存在。接到 main 最新版本後四項檢查、build 與 dry-run 全過（dry-run 讀到 4 個靜態檔、兩個 DO、10 次/60 秒限流）。合併後順手更新指南一行（T-108 已合併）。執行過程中 GPT 曾誤觸 wrangler 的一般部署流程，在要求登入時就退出，沒有登入、上傳或部署。請 Claude 更新 development.md：pnpm deploy 的旗標行為、正式環境的 `--env production`、同源部署、CI 需要兩種瀏覽器。
 
 決定（監工，2026-11-24）：移除 `PUBLIC_ORIGIN`。沒有程式讀取它；同源部署下前端用 `location.origin` 組邀請連結（`apps/web/src/lib/router.ts`），也不需要 CORS；WebSocket 用第一則 `auth` 訊息帶 token、不靠 cookie，不需要檢查 Origin。已從 `wrangler.toml` 與部署指南移除，`development.md` 的變數表由 Claude 移除。
+
+### T-105、T-114 第一輪審查（GPT，2026-11-24）— 退回修正
+- T-105（985a75b）：小修後可合併。阻擋項：房主開自己的邀請連結時 hostToken 被 memberToken 覆寫；房主重新驗證後前端不會依 protocol.md「房主重新連線」第 3 步重送 `live: true`。另有 4001／4003／4401 未導回首頁、房間到期後 WebSocket 握手 404 讓前端無限重試（規格缺口）等應修項。
+- T-114（be84d81）：GPT 判「需重做」，監工核對後認定一項阻擋：閒置 alarm 排進佇列後，房主重新上線，但排隊中的關房不會重算 `closeAt`，房間仍被關閉。應修：關房先通知再提交交易；邀請目錄失敗會擋住 relay 清理，重試用完後 `deleteAll` 會刪掉待清理紀錄；WHIP 回滾失敗被吞掉；目錄 RPC 結果遺失會留下孤兒碼；`4000` 接手的送訊順序與規格相反；`4408` 後多一次 alarm；`closeRelayResources` 在測試中被計數器取代，常數時間比對的測試抓不到提早返回。「並發重產只有最後一碼有效」是依序執行的正常結果，改為修正 spec 文字。
+
