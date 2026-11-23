@@ -52,7 +52,7 @@ export type RegenerateInviteCodeResponse = z.infer<
   typeof regenerateInviteCodeResponseSchema
 >;
 
-// GET /api/ice
+// GET /api/rooms/:roomId/ice
 export const iceResponseSchema = z.object({
   iceServers: z.array(iceServerSchema),
 });

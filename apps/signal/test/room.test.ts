@@ -3,11 +3,16 @@ import {
   addMember,
   closeAt,
   createRoomState,
+  findMemberByTokenHash,
   pruneStaleMembers,
   toMembers,
   toRoomInfo,
 } from "../src/room/room";
-import { generateInviteCode, isRoomId } from "../src/room/crypto";
+import {
+  generateInviteCode,
+  isRoomId,
+  timingSafeEqual,
+} from "../src/room/crypto";
 import { normalizeInviteCode } from "@project/shared";
 
 const config = {
@@ -153,7 +158,28 @@ describe("closeAt", () => {
   });
 });
 
+describe("findMemberByTokenHash", () => {
+  test("比對所有成員，找不到回 undefined", () => {
+    const room = createRoomState({
+      roomId: "r",
+      inviteCode: "ABCDEFGH",
+      host: { memberId: "host", nickname: "房主", tokenHash: "hash-host" },
+      now: 0,
+    });
+    expect(findMemberByTokenHash(room, "hash-host")?.memberId).toBe("host");
+    expect(findMemberByTokenHash(room, "hash-hosT")).toBeUndefined();
+    expect(findMemberByTokenHash(room, "hash")).toBeUndefined();
+  });
+});
+
 describe("crypto", () => {
+  test("timingSafeEqual", () => {
+    expect(timingSafeEqual("abc", "abc")).toBe(true);
+    expect(timingSafeEqual("abc", "abd")).toBe(false);
+    expect(timingSafeEqual("abc", "ab")).toBe(false);
+    expect(timingSafeEqual("", "")).toBe(true);
+  });
+
   test("產生的邀請碼都合法", () => {
     for (let i = 0; i < 200; i++) {
       const code = generateInviteCode();

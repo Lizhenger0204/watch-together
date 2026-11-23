@@ -48,3 +48,14 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export function isRoomId(value: string) {
   return UUID.test(value);
 }
+
+/**
+ * 常數時間比較兩個字串（用於 token 雜湊）。
+ * 長度不同直接回 false：雜湊長度固定，長度本身不是祕密。
+ */
+export function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}

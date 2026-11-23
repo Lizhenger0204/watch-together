@@ -69,7 +69,7 @@
 
 - `iceConnectionState` 變成 `disconnected` 超過 5 秒，或變成 `failed`：房主執行 ICE restart（`createOffer({ iceRestart: true })`），最多 3 次；仍失敗就關閉連線，回報 `member:status { state: 'failed' }`。
 - 收看者 WebSocket 重連後重新驗證，伺服器再發一次 `peer:request` 給房主，房主關閉舊連線、建立新連線。
-- 房主 WebSocket 重連後，關閉所有舊連線，對所有在線收看者重新建立。
+- 房主 WebSocket 重連（含重新整理、另一分頁取代）後，伺服器把直播改為未開播（protocol.md「房主重新連線」）。房主端關閉所有舊連線；若片源仍在，再送 `stream:status { live: true }`，依伺服器送來的 `peer:request` 對每位收看者重新建立。
 
 ## 4. 轉發模式（`features/transport/relay/` + `apps/signal/src/relay/`）
 

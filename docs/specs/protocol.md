@@ -26,11 +26,22 @@
 ## WebSocket
 
 - 路徑：`/api/rooms/:roomId/ws`。
-- 每則訊息為 JSON：`{ type: string, ...payload }`，用 `packages/shared` 的 discriminated union schema 解析，解析失敗就回 `error` 並忽略該訊息。
-- 第一則訊息必須是 `auth`，否則斷線（見 room-and-invite.md）。
+- 每則訊息為 JSON：`{ type: string, ...payload }`，用 `packages/shared` 的 discriminated union schema 解析。已驗證的連線解析失敗：回 `error` 並忽略該訊息；**未驗證的連線解析失敗：直接以 `4400` 關閉**。
+- 第一則訊息必須是 `auth`，否則以 `4400` 斷線（見 room-and-invite.md）。5 秒期限以伺服器算完 token 雜湊的時間判斷。
 - 需要回應的請求帶 `reqId`，伺服器回 `ack { reqId, ok: true } | { reqId, ok: false, code }`。
 - 心跳：客戶端每 20 秒送 `ping`，伺服器回 `pong`。
 - 同一成員只保留一條連線：新連線驗證成功後，舊連線以 `4000` 關閉。
+
+### 房主重新連線（重新整理、另一分頁取代 `4000`、斷線重連）
+
+房主每次驗證成功，都視為新的直播工作階段，伺服器依序：
+
+1. 若原本在直播，改為未開播，對其他在線成員送 `stream:status { live: false }`（收看者關閉舊的 P2P 連線或 WHEP）。
+2. 回房主 `room:snapshot`，其中 `stream.live` 為 `false`。
+3. 房主端若仍有可播放的片源，再送 `stream:status { live: true, title }`。
+4. 伺服器廣播 `stream:status`，P2P 模式下對每位在線收看者送一則 `peer:request` 給房主。
+
+房主端不能假設重連後還是開播狀態，也不需要自己記住要連哪些收看者；以伺服器送來的 `peer:request` 為準。
 
 ### 關閉碼
 
@@ -97,3 +108,9 @@ type MemberStatus = {
 ```
 
 `title` 只用檔名（去掉副檔名），不傳送檔案路徑。
+
+## 版本紀錄
+
+| `PROTOCOL_VERSION` | 內容 |
+| --- | --- |
+| 1 | 第一版（尚未正式發布）。發布前的修改不升版：ICE 路徑由 `/api/ice` 改為 `/api/rooms/:roomId/ice`（才能驗證是哪個房間的成員）、加入關閉碼表、房主重新連線的流程。 |
