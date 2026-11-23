@@ -2,8 +2,8 @@
 
 ## 分工原則
 
-- **Claude**：跨模組契約、有狀態與時序的邏輯（房間、信令、WebRTC 傳輸）、頁面 UI、規範文件、Code review。
-- **GPT（Codex）**：規格明確、以實作量為主的模組（工具鏈、部署、選片、轉發轉接、ICE）。
+- **Claude**：跨模組契約、有狀態與時序的邏輯（房間、信令、傳輸層共用架構與轉發客戶端）、頁面 UI、規範文件、Code review。
+- **GPT（Codex）**：規格明確、以實作量為主的模組（工具鏈、部署、選片、轉發轉接、ICE、P2P 傳輸）。
 - 依「目錄」切分，讓兩邊幾乎不會改到同一個檔案。
 
 ## 目錄負責表
@@ -18,7 +18,8 @@
 | Hono routes | `apps/signal/src/app.ts` | Claude | 新增 relay / ice route 可改，需 review |
 | 轉發轉接 | `apps/signal/src/relay/` | GPT | 唯讀 |
 | ICE / TURN | `apps/signal/src/ice/` | GPT | 唯讀 |
-| WebRTC 傳輸 | `apps/web/src/features/transport/` | Claude | 唯讀 |
+| 傳輸層介面與共用架構 | `apps/web/src/features/transport/`（`index.ts` 介面、`common/`）、`features/transport/relay/` | Claude | 唯讀；介面變動需雙方確認 |
+| P2P 傳輸 | `apps/web/src/features/transport/p2p/` | GPT | 唯讀 |
 | 選片與擷取 | `apps/web/src/features/source/` | GPT | 唯讀 |
 | 前端頁面與 UI | `apps/web/src/pages/`、`features/room/`、`features/player/`、`lib/`、共用 UI 元件 | Claude | 唯讀；`features/source/` 的 UI 元件由 GPT 做，Claude 負責擺進頁面 |
 | E2E | `e2e/` | GPT | Claude 可新增傳輸相關案例，需 review |
@@ -28,7 +29,7 @@
 ### 模組之間的介面（由 Claude 提出，變動需雙方確認）
 
 - `features/source` 匯出 `useLocalSource()`：選檔、檢查結果、`<video>` ref、`MediaStream`。
-- `features/transport` 匯出 `createHostTransport({ stream, signal, mode, quality })` 與 `createViewerTransport({ signal, mode })`；後者提供 `remoteStream` 與狀態事件。
+- `features/transport` 匯出 `createHostTransport({ stream, signal, mode, quality })` 與 `createViewerTransport({ signal, mode })`；後者提供 `remoteStream` 與狀態事件。確切的型別、狀態事件與模式切換流程由 T-115 定案並寫進 streaming.md；`p2p/`（GPT）與 `relay/`（Claude）都照這份介面實作，不可各自擴充。
 - `features/player` 只消費 `remoteStream` 與狀態，不直接碰 WebRTC。
 
 ## 對話角色
