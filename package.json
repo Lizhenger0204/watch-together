@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "node --env-file-if-exists=apps/web/.env scripts/dev.mjs",
     "build": "pnpm -r build",
+    "deploy": "pnpm --filter @project/web build && pnpm --filter @project/signal exec wrangler deploy --env production",
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint . && prettier --check .",
     "test": "vitest run --passWithNoTests && pnpm --filter @project/signal test",
