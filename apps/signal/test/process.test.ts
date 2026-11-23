@@ -127,6 +127,58 @@ describe("onAuth", () => {
   });
 });
 
+describe("房主重新驗證（重新整理、4000 取代、斷線重連）", () => {
+  test("直播中：改為未開播、通知收看者，不送 peer:request", () => {
+    const outcome = onAuth(
+      roomWith({ stream: LIVE }),
+      { tokenHash: "h-host", protocolVersion: 1 },
+      1,
+      new Set(["host", "a", "b"]),
+      T0 + 5,
+    );
+    if (!outcome.accepted) throw new Error("應該通過驗證");
+    expect(outcome.state.stream.live).toBe(false);
+    const snapshot = sentTo(outcome.effects, "host")[0];
+    expect(snapshot).toMatchObject({
+      type: "room:snapshot",
+      stream: { live: false },
+    });
+    expect(typesTo(outcome.effects, "host")).not.toContain("peer:request");
+    expect(sentTo(outcome.effects, "a")).toContainEqual({
+      type: "stream:status",
+      live: false,
+      title: null,
+      startedAt: null,
+    });
+
+    // 房主端再宣告開播 → 對所有在線收看者送 peer:request
+    const relive = onMessage(
+      outcome.state,
+      "host",
+      { type: "stream:status", live: true, title: "電影" },
+      new Set(["host", "a", "b"]),
+      T0 + 6,
+    );
+    expect(sentTo(relive.effects, "host")).toEqual(
+      expect.arrayContaining([
+        { type: "peer:request", memberId: "a" },
+        { type: "peer:request", memberId: "b" },
+      ]),
+    );
+  });
+
+  test("未開播：不送 stream:status", () => {
+    const outcome = onAuth(
+      roomWith(),
+      { tokenHash: "h-host", protocolVersion: 1 },
+      1,
+      new Set(["a"]),
+      T0 + 5,
+    );
+    expect(typesTo(outcome.effects, "a")).toEqual(["room:members"]);
+  });
+});
+
 describe("onMessage 權限", () => {
   const online = new Set(["host", "a", "b"]);
 

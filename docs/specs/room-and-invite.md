@@ -7,7 +7,7 @@
 | host（房主） | 建房者，持有 `hostToken` | 選片開播、切換模式、切換畫質、重新產生邀請碼、鎖房、踢人 |
 | member（收看者） | 用邀請碼加入，持有 `memberToken` | 觀看 |
 
-- 每房只有一位房主。房主斷線不轉移，房間繼續存在。**房主斷線時伺服器把直播狀態改為未開播**並通知收看者；房主重新連線後要再送 `stream:status { live: true }`。
+- 每房只有一位房主。房主斷線不轉移，房間繼續存在。**房主斷線或重新驗證（含另一分頁以 4000 取代）時，伺服器把直播狀態改為未開播**並通知收看者；房主重新連線後要再送 `stream:status { live: true }`。
 - 房間欄位 `mode`：`p2p`（預設）或 `relay`。
 
 ## 邀請碼
@@ -21,7 +21,7 @@
 
 ## Token
 
-- `hostToken`／`memberToken`：32 bytes 隨機，base64url。伺服器只存 SHA-256 雜湊。
+- `hostToken`／`memberToken`：32 bytes 隨機，base64url。伺服器只存 SHA-256 雜湊，比對時用常數時間比較、逐一比完所有成員。
 - 前端存在 `localStorage`（key：`room:<roomId>:token`），重新整理或重連時恢復身份。
 - 傳送方式：
   - REST、WHIP、WHEP：`Authorization: Bearer <token>`。
@@ -35,14 +35,18 @@
 | 建房 | 狀態 `open` |
 | 房主鎖房 | 狀態 `locked`，拒絕新加入，現有成員不受影響 |
 | 最後一人離開 | 啟動 30 分鐘計時，期間有人回來則取消 |
-| 計時到期或建房滿 24 小時 | 關閉房間、斷開所有連線、刪除邀請碼對照、釋放轉發模式的 Realtime session |
+| 計時到期或建房滿 24 小時 | 關閉房間、斷開所有連線、刪除邀請碼對照、關閉轉發模式的 Realtime tracks |
+
+關房分兩步：先在 storage 記下「關房中」並刪掉房間狀態（之後的加入、連線、WHIP／WHEP 一律視為房間不存在），再清理外部資源（邀請碼對照、轉發 tracks）。清理失敗時用 alarm 重試（30 秒起，每次加倍，最多 1 小時，共 12 次），全部成功才刪除 storage；重試用完就放棄並記錄 `room.cleanup_gave_up`。
+
+重新產生邀請碼與關房在 RoomDO 內依序執行，避免兩次重產交錯而讓其中一個回傳的碼失效、在對照表留下孤兒。
 
 數值放在 `apps/signal/src/config.ts`，可由 `wrangler.toml` 的 `[vars]` 覆寫。
 
 ## 限制與防暴力猜測
 
 - 每房最多 8 人（房主 + 7 位收看者，`ROOM_MAX_MEMBERS=8`），滿員回 `409 ROOM_FULL`。離線超過 10 分鐘的收看者在有人加入時會被移除以騰出名額（他們的 token 也隨之失效，要重新用邀請碼加入）。
-- `POST /api/rooms/join`：每 IP（`CF-Connecting-IP`）每分鐘 10 次，超過回 `429`。使用 Workers Rate Limiting binding（`wrangler.toml` 的 `JOIN_RATE_LIMITER`）；沒有綁定時（不應發生在正式環境）不限流。
+- `POST /api/rooms/join`：每 IP（`CF-Connecting-IP`）每分鐘 10 次，超過回 `429`。使用 Workers Rate Limiting binding（`wrangler.toml` 的 `JOIN_RATE_LIMITER`）。沒有綁定或綁定出錯時，改用記憶體後備限流（同樣每 IP 每分鐘 10 次，只在單一 isolate 內計數，並記錄 `ratelimit.fallback`）。
 - 邀請碼錯誤、房間已關閉、已鎖房：一律回 `404 ROOM_NOT_FOUND`，不洩漏房間是否存在。
 - 暱稱：1–24 字，trim 後不可為空。前端顯示時必須跳脫（React 預設會做，不可用 `dangerouslySetInnerHTML`）。
 

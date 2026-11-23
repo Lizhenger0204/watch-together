@@ -8,6 +8,7 @@ import {
   type StreamInfo,
 } from "@project/shared";
 import type { RoomConfig } from "../config";
+import { timingSafeEqual } from "./crypto";
 
 // 房間狀態的純邏輯。不依賴 Workers、Hono 或 Durable Objects。
 // 「誰在線上」不存在狀態裡，由 runtime 依實際連線提供（online 參數）。
@@ -73,8 +74,13 @@ export function findMember(state: RoomState, memberId: string) {
   return state.members.find((m) => m.memberId === memberId);
 }
 
+/** 逐一比較所有成員、不提早結束，讓回應時間與是否命中、命中第幾位無關。 */
 export function findMemberByTokenHash(state: RoomState, tokenHash: string) {
-  return state.members.find((m) => m.tokenHash === tokenHash);
+  let found: MemberRecord | undefined;
+  for (const member of state.members) {
+    if (timingSafeEqual(member.tokenHash, tokenHash)) found = member;
+  }
+  return found;
 }
 
 export function hostOf(state: RoomState) {

@@ -63,10 +63,10 @@ function roomUpdatedTo(state: RoomState, online: Online) {
   });
 }
 
-function streamTo(state: RoomState, online: Online) {
-  return [...online].map((id) =>
-    send(to(id), { type: "stream:status", ...state.stream }),
-  );
+function streamTo(state: RoomState, online: Online, except?: string) {
+  return [...online]
+    .filter((id) => id !== except)
+    .map((id) => send(to(id), { type: "stream:status", ...state.stream }));
 }
 
 /** P2P 模式、房主在線且正在直播時，請房主對這些收看者發起連線。 */
@@ -164,7 +164,15 @@ export function onAuth(
 
   const { memberId } = member;
   const online = new Set(onlineBefore).add(memberId);
-  const next = { ...touchMember(state, memberId, now), idleSince: null };
+  let next: RoomState = {
+    ...touchMember(state, memberId, now),
+    idleSince: null,
+  };
+  // 房主每次驗證成功都是新的直播工作階段（重新整理、換分頁取代 4000、斷線重連）：
+  // 一律改為未開播。房主端有片源時再送 stream:status { live: true }，
+  // 伺服器才對所有在線收看者送 peer:request（protocol.md「房主重新連線」）。
+  const hostRestarted = member.role === "host" && state.stream.live;
+  if (hostRestarted) next = { ...next, stream: OFFLINE_STREAM };
 
   return {
     accepted: true,
@@ -180,6 +188,7 @@ export function onAuth(
       }),
       ...ok(to(memberId), input.reqId),
       ...membersTo(next, online, memberId),
+      ...(hostRestarted ? streamTo(next, online, memberId) : []),
       ...(member.role === "member"
         ? peerRequests(next, online, [memberId])
         : []),

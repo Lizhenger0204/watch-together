@@ -14,6 +14,8 @@ import {
 } from "cloudflare:test";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { createApp } from "../src/app";
+import type { Env } from "../src/runtime/workers/env";
+import { RoomDO } from "../src/runtime/workers/room-do";
 import { workersServices } from "../src/runtime/workers/services";
 
 const BASE = "https://signal.test";
@@ -152,6 +154,48 @@ describe("REST", () => {
     expect((await joinRoom(inviteCode)).roomId).toBe(room.roomId);
   });
 
+  test("同時重新產生邀請碼：依序處理，只有最後的碼有效，對照表沒有孤兒", async () => {
+    const room = await createRoom();
+    const results = await Promise.all(
+      [1, 2, 3].map(() =>
+        post(
+          `/api/rooms/${room.roomId}/invite-code`,
+          undefined,
+          room.hostToken,
+        ).then(async (res) => {
+          expect(res.status).toBe(200);
+          return ((await res.json()) as { inviteCode: string }).inviteCode;
+        }),
+      ),
+    );
+    const current = await runInDurableObject(
+      env.ROOM.getByName(room.roomId),
+      (instance) =>
+        (instance as unknown as { room: { inviteCode: string } }).room
+          .inviteCode,
+    );
+    expect(results).toContain(current);
+    expect(new Set(results).size).toBe(3);
+
+    const entries = await runInDurableObject(
+      env.INVITE_DIRECTORY.getByName("global"),
+      async (_instance, state) => state.storage.list<string>(),
+    );
+    const codes = [...entries]
+      .filter(([, roomId]) => roomId === room.roomId)
+      .map(([key]) => key);
+    expect(codes).toEqual([`code:${current}`]);
+
+    for (const stale of [room.inviteCode, ...results]) {
+      if (stale === current) continue;
+      const res = await post("/api/rooms/join", {
+        inviteCode: stale,
+        nickname: "x",
+      });
+      expect(res.status).toBe(404);
+    }
+  });
+
   test("ICE：需要成員 token，回傳 STUN", async () => {
     const room = await createRoom();
     const url = `${BASE}/api/rooms/${room.roomId}/ice`;
@@ -267,6 +311,44 @@ describe("WebSocket", () => {
     expect(await ws.closedWith()).toBe(4400);
   });
 
+  test("未驗證的連線送出格式錯誤的訊息會被關閉（4400）", async () => {
+    const room = await createRoom();
+    const ws = await connect(room.roomId);
+    ws.send({ type: "nope" });
+    expect(await ws.closedWith()).toBe(4400);
+  });
+
+  test("直播中房主被新分頁取代（4000）：改為未開播，房主再開播後重送 peer:request", async () => {
+    const room = await createRoom();
+    const member = await joinRoom(room.inviteCode);
+    const first = await connect(room.roomId);
+    first.auth(room.hostToken);
+    await first.next("room:snapshot");
+    const viewer = await connect(room.roomId);
+    viewer.auth(member.memberToken);
+    await viewer.next("room:snapshot");
+    first.send({ type: "stream:status", live: true, title: "電影" });
+    expect(await first.next("peer:request")).toMatchObject({
+      memberId: member.memberId,
+    });
+    expect(await viewer.next("stream:status")).toMatchObject({ live: true });
+
+    const second = await connect(room.roomId);
+    second.auth(room.hostToken);
+    expect((await second.next("room:snapshot")).stream.live).toBe(false);
+    expect(await first.closedWith()).toBe(4000);
+    expect(await viewer.next("stream:status")).toMatchObject({ live: false });
+
+    second.send({ type: "stream:status", live: true, title: "電影" });
+    expect(await second.next("peer:request")).toEqual({
+      type: "peer:request",
+      memberId: member.memberId,
+    });
+    expect(await viewer.next("stream:status")).toMatchObject({ live: true });
+    second.close();
+    viewer.close();
+  });
+
   test("被踢的成員：連線被關閉，舊 token 不能再用", async () => {
     const room = await createRoom();
     const member = await joinRoom(room.inviteCode);
@@ -346,6 +428,130 @@ describe("限流與生命週期", () => {
       nickname: "x",
     });
     expect(res.status).toBe(404);
+  });
+});
+
+describe("關房清理與休眠", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  test("關房時清理失敗：記下關房中、用 alarm 重試；成功後清除轉發資源與 storage", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const room = await createRoom();
+    const host = await connect(room.roomId);
+    host.auth(room.hostToken);
+    await host.next("room:snapshot");
+
+    const stub = env.ROOM.getByName(room.roomId);
+    let relayCloses = 0;
+    await runInDurableObject(stub, (instance) => {
+      const target = instance as unknown as {
+        room: { createdAt: number };
+        directory: () => unknown;
+        closeRelayResources: () => Promise<void>;
+      };
+      target.room.createdAt = 0;
+      const real = target.directory.bind(instance);
+      let failures = 1;
+      target.directory = () =>
+        failures-- > 0
+          ? {
+              release: async () => {
+                throw new Error("directory unavailable");
+              },
+            }
+          : real();
+      target.closeRelayResources = async () => {
+        relayCloses += 1;
+      };
+    });
+
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(await host.closedWith()).toBe(4001);
+    const pending = await runInDurableObject(stub, async (_i, state) => ({
+      closing: await state.storage.get<{ attempts: number }>("closing"),
+      room: await state.storage.get("state"),
+      alarm: await state.storage.getAlarm(),
+    }));
+    expect(pending.closing?.attempts).toBe(1);
+    expect(pending.room).toBeUndefined();
+    expect(pending.alarm).not.toBeNull();
+    expect(relayCloses).toBe(0);
+    // 關房中：舊碼雖然還在對照表，加入仍然失敗
+    const join = await post("/api/rooms/join", {
+      inviteCode: room.inviteCode,
+      nickname: "x",
+    });
+    expect(join.status).toBe(404);
+
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(relayCloses).toBe(1);
+    const left = await runInDurableObject(stub, async (_i, state) => ({
+      keys: [...(await state.storage.list()).keys()],
+      alarm: await state.storage.getAlarm(),
+    }));
+    expect(left).toEqual({ keys: [], alarm: null });
+    const lookup = await runInDurableObject(
+      env.INVITE_DIRECTORY.getByName("global"),
+      async (_i, state) => state.storage.get(`code:${room.inviteCode}`),
+    );
+    expect(lookup).toBeUndefined();
+  });
+
+  test("休眠喚醒：新的實例從 storage 與連線附件還原房間與在線成員", async () => {
+    const room = await createRoom();
+    const host = await connect(room.roomId);
+    host.auth(room.hostToken);
+    await host.next("room:snapshot");
+
+    await runInDurableObject(
+      env.ROOM.getByName(room.roomId),
+      async (_instance, state) => {
+        const fresh = new RoomDO(state, env as unknown as Env);
+        const view = fresh as unknown as {
+          room: { roomId: string } | null;
+          online: () => Set<string>;
+        };
+        await vi.waitFor(() => expect(view.room).not.toBeNull());
+        expect(view.room?.roomId).toBe(room.roomId);
+        expect([...view.online()]).toEqual([room.memberId]);
+        expect(await fresh.authenticate(room.hostToken)).toMatchObject({
+          ok: true,
+          value: { memberId: room.memberId, role: "host" },
+        });
+      },
+    );
+    host.close();
+  });
+
+  test("同一個 alarm：關掉逾時未驗證的連線，房間不受影響並排回關房時間", async () => {
+    const room = await createRoom();
+    const host = await connect(room.roomId);
+    host.auth(room.hostToken);
+    await host.next("room:snapshot");
+    const idle = await connect(room.roomId);
+
+    const stub = env.ROOM.getByName(room.roomId);
+    await runInDurableObject(stub, (_instance, state) => {
+      for (const ws of state.getWebSockets()) {
+        const attachment = ws.deserializeAttachment() as {
+          memberId: string | null;
+        };
+        if (attachment.memberId === null) {
+          ws.serializeAttachment({ memberId: null, authDeadline: 1 });
+        }
+      }
+    });
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(await idle.closedWith()).toBe(4408);
+
+    host.send({ type: "ping" });
+    expect(await host.next("pong")).toEqual({ type: "pong" });
+    const alarm = await runInDurableObject(stub, (_i, state) =>
+      state.storage.getAlarm(),
+    );
+    // 房主在線：下一次是建房滿 24 小時
+    expect(alarm).toBeGreaterThan(Date.now() + 23 * 60 * 60_000);
+    host.close();
   });
 });
 

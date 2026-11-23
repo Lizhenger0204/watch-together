@@ -68,6 +68,38 @@ test("requests four-hour credentials and returns STUN plus TURN", async () => {
   );
 });
 
+test("drops port 53 TURN URLs but keeps the other URLs of the same server", async () => {
+  const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
+    Response.json({
+      iceServers: [
+        {
+          urls: [
+            "turn:turn.cloudflare.com:53?transport=udp",
+            "turn:turn.cloudflare.com:3478?transport=udp",
+            "turns:turn.cloudflare.com:5349?transport=tcp",
+            "turn:turn.cloudflare.com:53",
+          ],
+          username: "u",
+          credential: "c",
+        },
+        { urls: "turn:turn.cloudflare.com:53", username: "u", credential: "c" },
+      ],
+    }),
+  );
+
+  expect(await getIceServers({ env, fetch })).toEqual([
+    ...stunServers,
+    {
+      urls: [
+        "turn:turn.cloudflare.com:3478?transport=udp",
+        "turns:turn.cloudflare.com:5349?transport=tcp",
+      ],
+      username: "u",
+      credential: "c",
+    },
+  ]);
+});
+
 test.each([
   () => new Response(null, { status: 503 }),
   () => new Response("invalid JSON"),

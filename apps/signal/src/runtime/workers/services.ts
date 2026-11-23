@@ -1,7 +1,12 @@
 import type { Context } from "hono";
 import type { AppEnv } from "../../app";
+import { JOIN_RATE_LIMIT, createMemoryRateLimiter } from "../../rate-limit";
 import type { Services } from "../../services";
 import { INVITE_DIRECTORY_NAME, type Env } from "./env";
+
+// 後備限流器跨請求共用（同一個 isolate 內），所以放在模組層級。
+const fallbackJoinLimiter = createMemoryRateLimiter(JOIN_RATE_LIMIT);
+let warnedMissingLimiter = false;
 
 export function workersServices(c: Context<AppEnv>): Services {
   const env = c.env as unknown as Env;
@@ -42,8 +47,30 @@ export function workersServices(c: Context<AppEnv>): Services {
     },
     joinLimiter: {
       async allow(key) {
-        if (!env.JOIN_RATE_LIMITER) return true;
-        return (await env.JOIN_RATE_LIMITER.limit({ key })).success;
+        const binding = env.JOIN_RATE_LIMITER;
+        if (!binding) {
+          if (!warnedMissingLimiter) {
+            warnedMissingLimiter = true;
+            console.log(
+              JSON.stringify({
+                event: "ratelimit.fallback",
+                reason: "not_configured",
+              }),
+            );
+          }
+          return fallbackJoinLimiter.allow(key);
+        }
+        try {
+          return (await binding.limit({ key })).success;
+        } catch {
+          console.log(
+            JSON.stringify({
+              event: "ratelimit.fallback",
+              reason: "binding_error",
+            }),
+          );
+          return fallbackJoinLimiter.allow(key);
+        }
       },
     },
   };
