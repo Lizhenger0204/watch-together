@@ -1,7 +1,17 @@
 import { useEffect, useState } from "react";
+import { SourceDemo } from "./features/source/SourceDemo";
 import { getHealth } from "./lib/api";
 
 export function App() {
+  return new URLSearchParams(window.location.search).get("demo") ===
+    "source" ? (
+    <SourceDemo />
+  ) : (
+    <HealthPage />
+  );
+}
+
+function HealthPage() {
   const [status, setStatus] = useState("正在檢查服務狀態…");
 
   useEffect(() => {

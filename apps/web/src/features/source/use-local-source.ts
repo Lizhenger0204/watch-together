@@ -1,0 +1,110 @@
+import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { captureVideo, loadMetadata, probePlayback } from "./browser-source";
+import {
+  classifyCapturedTracks,
+  SourceCheckError,
+  type SourceCheckCode,
+} from "./source-check";
+
+type SourceCheck =
+  | { status: "idle" | "checking" }
+  | { status: "ready"; code: "OK" | "NO_AUDIO" }
+  | { status: "warning"; code: "NO_AUDIO" }
+  | { status: "error"; code: Exclude<SourceCheckCode, "NO_AUDIO"> };
+
+export function useLocalSource(
+  onStreamChange?: (stream: MediaStream | null) => void,
+) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const release = useRef<() => void>(undefined);
+  const pendingStream = useRef<MediaStream | null>(null);
+  const [check, setCheck] = useState<SourceCheck>({ status: "idle" });
+  const [stream, setStream] = useState<MediaStream | null>(null);
+  const [title, setTitle] = useState("");
+  const notifyStreamChange = useEffectEvent((stream: MediaStream | null) => {
+    onStreamChange?.(stream);
+  });
+
+  useEffect(() => () => release.current?.(), []);
+
+  useEffect(() => {
+    const notify = () => notifyStreamChange(stream);
+    stream?.addEventListener("addtrack", notify);
+    stream?.addEventListener("removetrack", notify);
+    notify();
+    return () => {
+      stream?.removeEventListener("addtrack", notify);
+      stream?.removeEventListener("removetrack", notify);
+    };
+  }, [stream]);
+
+  async function selectFile(file: File) {
+    const video = videoRef.current;
+    if (!video) return;
+
+    release.current?.();
+    pendingStream.current = null;
+    setStream(null);
+    setTitle(file.name.replace(/\.[^.]+$/, "") || file.name);
+    setCheck({ status: "checking" });
+
+    const controller = new AbortController();
+    const { signal } = controller;
+    const url = URL.createObjectURL(file);
+    let captured: MediaStream | undefined;
+
+    release.current = () => {
+      controller.abort();
+      captured?.getTracks().forEach((track) => track.stop());
+      video.pause();
+      video.muted = false;
+      video.loop = false;
+      video.removeAttribute("src");
+      video.load();
+      URL.revokeObjectURL(url);
+    };
+
+    try {
+      await loadMetadata(video, url, signal);
+      if (video.videoWidth <= 0 || video.videoHeight <= 0) {
+        throw new SourceCheckError("VIDEO_UNDECODABLE");
+      }
+      captured = captureVideo(video);
+      await probePlayback(video, signal);
+      if (signal.aborted) return;
+
+      const code = classifyCapturedTracks(
+        captured.getVideoTracks().length,
+        captured.getAudioTracks().length,
+      );
+      if (code === "VIDEO_UNDECODABLE") throw new SourceCheckError(code);
+      if (code === "NO_AUDIO") {
+        pendingStream.current = captured;
+        setCheck({ status: "warning", code });
+        return;
+      }
+
+      setStream(captured);
+      setCheck({ status: "ready", code });
+    } catch (error) {
+      if (signal.aborted) return;
+      release.current?.();
+      release.current = undefined;
+      const code =
+        error instanceof SourceCheckError ? error.code : "VIDEO_UNDECODABLE";
+      setCheck({
+        status: "error",
+        code,
+      });
+    }
+  }
+
+  function continueWithoutAudio() {
+    if (!pendingStream.current) return;
+    setStream(pendingStream.current);
+    pendingStream.current = null;
+    setCheck({ status: "ready", code: "NO_AUDIO" });
+  }
+
+  return { videoRef, title, stream, check, selectFile, continueWithoutAudio };
+}

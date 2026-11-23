@@ -10,7 +10,18 @@ const baseURL = `http://localhost:${env.WEB_PORT ?? 5173}`;
 export default defineConfig({
   testDir: ".",
   use: { baseURL },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    {
+      name: "chromium",
+      testIgnore: "source.spec.ts",
+      use: { ...devices["Desktop Chrome"] },
+    },
+    {
+      name: "chrome",
+      testMatch: "source.spec.ts",
+      use: { ...devices["Desktop Chrome"], channel: "chrome" },
+    },
+  ],
   webServer: {
     command: "pnpm dev",
     cwd: root,
