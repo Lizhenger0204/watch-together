@@ -28,7 +28,7 @@
 | T-109 | 轉發傳輸客戶端（WHIP / WHEP）+ 模式切換流程 | Claude | T-107, T-108 | TODO |
 | T-110 | 收看端播放器：srcObject、點擊開始觀看、狀態提示、重新連線按鈕 | Claude | T-107 | TODO |
 | T-111 | E2E：3 個 context 的 P2P 流程 | GPT | T-105, T-106, T-110 | TODO |
-| T-112 | 部署：給零經驗使用者的 Cloudflare 帳號與網域設定圖文指南、`pnpm deploy`、secrets 設定、CI | GPT | T-103 | DOING |
+| T-112 | 部署：給零經驗使用者的 Cloudflare 帳號與網域設定圖文指南、`pnpm deploy`、secrets 設定、CI | GPT | T-103 | DONE |
 | T-113 | 人工驗收清單（ADR 0002 待驗證項目），做完後交給使用者與朋友實測 | Claude | T-109, T-111, T-112 | TODO |
 | T-114 | T-103 審查修正：邀請碼重產與關房序列化、關房清理可重試、限流後備、token 常數時間比對；spec 補房主接手（4000）時的 `peer:request` 順序、未驗證連線格式錯誤以 4400 關閉、ICE 新路徑同步 shared 與版本說明；關房時呼叫 `RoomDO.closeRelayResources()`（失敗保留記錄重試） | Claude | T-103, T-108 | TODO |
 
@@ -83,3 +83,11 @@ Review（GPT，監工核對）：結論「小修後可合併」，沒有安全�
 4. 驗證方式：`pnpm typecheck && pnpm lint && pnpm test && pnpm e2e`（signal 64 個，上游一律用假 fetch）。
 
 Review（Claude 監工）：路由沿用 `requireHost`／`requireMember`，沒有新的 log，錯誤回應不含金鑰與上游內容，沒有新增套件，`relay/` 沒有使用 Workers 專屬 API，改動範圍符合 ownership.md。合併前四項檢查全過。留給 T-109 確認：(a) 是否要求 `mode === 'relay'`；(b) WHEP 單次 offer／answer 能否在真實 SFU 運作（列入 T-113 實測）；(c) 房主重新 WHIP 時，舊的發布資源留在 storage，直到關房或 DELETE 才清掉。
+
+### T-112（GPT，2026-11-24）— DONE
+1. 做了什麼：根目錄 `pnpm deploy`（先 build web，再 `wrangler deploy --env production`）；`wrangler.toml` 新增 `[env.production]`，用 Workers static assets 由同一個 Worker 提供前端（`run_worker_first = ["/api", "/api/*"]`、SPA fallback、`workers_dev = false`），並重新宣告 vars、兩個 Durable Object 與 `JOIN_RATE_LIMITER`；`.github/workflows/ci.yml`（typecheck、lint、test、Chromium + Chrome e2e，失敗時上傳 Playwright 報告）；給零經驗使用者的 `docs/guides/deploy.md`。
+2. 介面變動：無。正式 Worker 名稱為 `remote-sync-player-signal-production`。
+3. 已知限制：repo 沒有 GitHub remote，CI 尚未在 GitHub 實跑；`PUBLIC_ORIGIN` 預設為示範網址，部署前要改，目前 Worker 也還沒讀取這個值；指南的 Cloudflare 後台截圖是佔位符；`pnpm deploy --dry-run` 會被 pnpm 內建指令吃掉旗標，預演請直接呼叫 wrangler；正式網域與中國大陸連線待 T-113 實測。
+4. 驗證方式：`pnpm typecheck && pnpm lint && pnpm test && pnpm build && pnpm e2e`，以及 `pnpm --filter @project/web build && pnpm --filter @project/signal exec wrangler deploy --env production --dry-run`。
+
+Review（Claude 監工）：沒有新增套件、沒有改 pnpm-workspace.yaml，CI 不含任何金鑰，四個 GitHub Action 版本都確認存在。接到 main 最新版本後四項檢查、build 與 dry-run 全過（dry-run 讀到 4 個靜態檔、兩個 DO、10 次/60 秒限流）。合併後順手更新指南一行（T-108 已合併）。執行過程中 GPT 曾誤觸 wrangler 的一般部署流程，在要求登入時就退出，沒有登入、上傳或部署。請 Claude 更新 development.md：pnpm deploy 的旗標行為、正式環境的 `PUBLIC_ORIGIN` 與 `--env production`、同源部署、CI 需要兩種瀏覽器。
