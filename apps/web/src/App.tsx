@@ -1,39 +1,25 @@
-import { useEffect, useState } from "react";
 import { SourceDemo } from "./features/source/SourceDemo";
-import { getHealth } from "./lib/api";
+import { HomePage, JoinPage, NotFoundPage } from "./pages/HomePage";
+import { RoomPage } from "./pages/RoomPage";
+import { parseRoute, usePathname } from "./lib/router";
 
 export function App() {
-  return new URLSearchParams(window.location.search).get("demo") ===
-    "source" ? (
-    <SourceDemo />
-  ) : (
-    <HealthPage />
-  );
-}
+  const pathname = usePathname();
 
-function HealthPage() {
-  const [status, setStatus] = useState("正在檢查服務狀態…");
+  // T-106 的暫時展示入口，T-111 把 E2E 改到正式頁面後移除。
+  if (new URLSearchParams(window.location.search).get("demo") === "source") {
+    return <SourceDemo />;
+  }
 
-  useEffect(() => {
-    const controller = new AbortController();
-
-    void getHealth(controller.signal).then(
-      ({ protocolVersion }) =>
-        setStatus(`服務正常（協定版本 ${protocolVersion}）`),
-      () => {
-        if (!controller.signal.aborted) {
-          setStatus("無法取得服務狀態");
-        }
-      },
-    );
-
-    return () => controller.abort();
-  }, []);
-
-  return (
-    <main className="p-4">
-      <h1 className="text-xl font-bold">遠端同步播放器</h1>
-      <p role="status">{status}</p>
-    </main>
-  );
+  const route = parseRoute(pathname);
+  switch (route.page) {
+    case "home":
+      return <HomePage />;
+    case "join":
+      return <JoinPage inviteCode={route.inviteCode} />;
+    case "room":
+      return <RoomPage key={route.roomId} roomId={route.roomId} />;
+    default:
+      return <NotFoundPage />;
+  }
 }
