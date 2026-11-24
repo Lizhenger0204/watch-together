@@ -212,3 +212,54 @@ Review（GPT 第二輪，監工核對）：結論「小修後可合併」。第�
 其餘應修列為 T-119：停格偵測、分頁被 4000 取代後的清理、snapshot 前信令的暫存、停播後切模式的建立時點。
 
 合併：rebase 到 main（6009830）後四項檢查全過（Vitest 365 = web／shared 272 + signal 93，e2e 3），以 fast-forward 合併。
+
+### T-119（GPT，2026-11-24）— DONE
+1. 做了什麼：
+   - 播放器以實際呈現的影格、播放時間與接收碼率判斷停格與恢復，回報 `buffering` 並在恢復後清除。純音訊片源會先用隱藏的 `<audio>` 播放，影像第一格到了再交回 `<video>`。
+   - `ViewerSession` 訂閱 `SignalClient.onState`：收到 4000（取代）、關閉或重連時，立即釋放舊連線、遠端 track、取樣與回報計時器。
+   - 首份 snapshot 前到的信令，以 socket 為單位暫存，上限 128 則。
+   - 停播後切模式：在 `room:updated` 預先建立新傳輸，開播時再啟動。
+2. 介面變動：
+   - `ViewerSessionClient` 多用 `SignalClient` 原有的 `onState`。
+   - `ViewerSession` 新增 `getReceiveBitrate`；`setBuffering` 會核對 stream 是否為當代。
+   - `use-room.ts` 不用改，現有的 attach 已能處理 4000。
+3. 已知限制：
+   - 暫存滿 128 則後，只接受新的 offer。
+   - relay 的 WHEP 順序只用 fake 驗證，實際行為待 T-109。
+4. 驗證方式：
+   - 四項檢查（Vitest 379 = web／shared 286 + signal 93，e2e 3）。
+   - 6 個反向實驗，對應的測試都會失敗。
+   - 本機 Chrome 158：100% 封包遺失時 2.54 秒回報 `buffering`、恢復後回到 `playing`；收到 4000 後 6.2 秒內 PC、track 與計時器都是 0；切回 P2P 再開播時，房主收到 1 次 `peer:request`。
+
+審查與合併（監工，2026-11-24）：
+- 變更只在 `viewer-session.ts`（及測試）與 `features/player/`，共 5 個檔案，沒有碰 T-118 範圍。
+- 監工核對：`use-room` 每條 socket 都會建立新的 `SignalClient` 與 `ViewerSession`，所以手動重連時先 `destroy()` 再換 socket 是正確的。純音訊用的 `<audio>` 也是點擊後才 `play()`，不違反「點擊開始觀看」。
+- 監工重跑四項檢查全過，以 fast-forward 合併。
+
+### T-109（Claude，2026-11-24）— DONE（未接上 dispatcher）
+1. 做了什麼：`features/transport/relay/`。
+   - WHIP 房主：一條上傳連線，影音各預留一個 sendonly。201 而且已套用 answer 之後，`start()` 才 resolve。
+   - WHEP 收看者：recvonly，`remoteStream` 固定；ICE 連通後才算 playing；409 時回到 waiting，並回報 STREAM_NOT_LIVE。
+   - `http.ts`：POST／DELETE 用 Bearer；`Location` 只接受同源、本房間的路徑；DELETE 依 1／2／4 秒重試，403 與 404 視為已清理。
+   - `publish-queue.ts`：同一頁面、同一房間的 WHIP 依序進行。
+   - 單次 HTTP offer：最多等 2 秒 ICE 收集，再讀 `localDescription`。
+2. 介面變動：無，照 T-115 契約。relay 的 `removePeer` 是 no-op。
+3. 已知限制：
+   - T-108 (a)～(c) 的回答，以及伺服器端事項（成員移除時關閉 WHEP、p2p 模式拒絕 relay、新的 WHIP 取代舊發布），開為 T-120。
+   - 真實 SFU 上的協商留待 T-113。
+4. 驗證方式：四項檢查全過，5 個反向實驗；Chrome 產生的 WHIP／WHEP SDP 通過伺服器的 `readOffer`。
+
+審查（GPT ultra fast，61ae89a）判「需退回」：
+- 阻擋 2 項：WHIP 在套用 answer 期間停止會卡住下一次發布；WHEP 409 被房間層當成失敗。
+- 應修 4 項：缺少 offer 時 `start()` 誤報成功、DELETE 沒有逾時、同源的絕對 `Location` 被拒、錯誤事件重複發出。
+- 已確認的正常行為：缺軌時保留影音兩段、4K 縮放、H.264／Opus 偏好、token 只放在 header、DELETE 的時序、伺服器 `readOffer` 相容。
+
+監工處理：使用者指定「T-109 → tidy」依序合併。`transport/index.ts` 的 dispatcher 還沒接到 `relay/`，所以這些問題目前碰不到使用者。決定先合併，全部遺留問題開為 T-122，修完後才接上 dispatcher。另外，伺服器端「上游需要額外協商而關閉 track 時回 503」那條清理路徑，併入 T-120。
+
+### tidy（Claude，2026-11-24）— 合併
+- 把 p2p 與 relay 共用的 `isIceConnected`、`loadIceServers` 和測試替身收進 `common/`。純搬移，行為不變。
+- 已完成任務的交接備註搬到本封存檔；ADR 0001 縮短；AGENTS.md 新增兩條守則。
+- 加入 `.githooks/pre-commit`：單一檔案超過約 20 KB 就拒絕提交。`prepare` 會設定 `core.hooksPath`。
+- 新增 e2e `layout.spec.ts`：390px 寬時長片名不得把版面撐寬。
+
+使用者指定先合 T-109、再合 tidy。tidy 疊在 T-109 上，監工一起 rebase 到 main（5763f6a）。`tasks.md` 自動合併沒有衝突：tidy 封存的舊段落，加上 main 之後新增的段落。四項檢查全過（Vitest 418 = web／shared 325 + signal 93，e2e 4），以 fast-forward 合併。合併後已執行 `pnpm install`。
