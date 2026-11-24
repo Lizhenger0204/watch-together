@@ -181,8 +181,10 @@
 - `<video autoplay playsinline>`，`srcObject = remoteStream`。
 - **`remoteStream` 是固定的 `MediaStream`**：每個 viewer transport 建立時就 new 一個，
   T-110 只要綁一次 `srcObject`。傳輸在 `ontrack` 用 **`event.track`** 加進 remoteStream
-  （不要依賴 `event.streams`，Chrome 上 sendonly transceiver 的 `event.streams` 是空的）；
-  停止或重連時移除舊 track。
+  （不要依賴 `event.streams`，Chrome 上 sendonly transceiver 的 `event.streams` 是空的）。
+  只有在停播、`stop()`／`destroy()`，或以新連線取代舊連線時才移除舊 track。
+  **同一條連線做 ICE restart 時保留 track**：Chrome 在 restart 後不會再發 `ontrack`，
+  原 receiver track 仍是 live；若此時清空，連線回到 `connected` 後播放器也沒有 track。
 - 瀏覽器的自動播放政策會擋有聲音的自動播放：進房顯示「點擊開始觀看」覆蓋層，點擊後才 `play()`。`play()` 被拒時恢復覆蓋層。
 - 狀態提示：等待房主開播、連線中、播放中、緩衝中、連線失敗（提供「重新連線」按鈕）。
 - 收看者沒有播放控制列，只有音量與全螢幕。

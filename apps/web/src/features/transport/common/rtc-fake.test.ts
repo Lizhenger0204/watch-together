@@ -103,6 +103,47 @@ describe("FakeRtcPeerConnection", () => {
     expect(await negotiate()).toEqual(restart);
   });
 
+  it("resets per-generation remote candidates when the remote ICE credentials change", async () => {
+    const host = new FakeRtcPeerConnection({});
+    const viewer = new FakeRtcPeerConnection({});
+    host.addTransceiver("video");
+    async function offerToViewer(options?: RTCOfferOptions) {
+      const offer = await host.createOffer(options);
+      await host.setLocalDescription(offer);
+      await viewer.setRemoteDescription(offer);
+      await viewer.setLocalDescription(await viewer.createAnswer());
+    }
+
+    await offerToViewer();
+    await viewer.addIceCandidate({ candidate: "candidate:a", sdpMid: "0" });
+    await viewer.addIceCandidate(null);
+    expect(viewer.endOfCandidates).toBe(true);
+
+    // 一般重新協商沿用同一組憑證：當次狀態保留。
+    await offerToViewer();
+    expect(viewer.iceCandidates).toHaveLength(1);
+    expect(viewer.endOfCandidates).toBe(true);
+
+    // ICE restart 換證：上一輪的 candidate 與結束標記不可算到新一輪。
+    await offerToViewer({ iceRestart: true });
+    expect(viewer.iceCandidates).toEqual([]);
+    expect(viewer.endOfCandidates).toBe(false);
+
+    await viewer.addIceCandidate({ candidate: "candidate:b", sdpMid: "0" });
+    expect(viewer.iceCandidates).toEqual([
+      { candidate: "candidate:b", sdpMid: "0" },
+    ]);
+    expect(viewer.endOfCandidates).toBe(false);
+    await viewer.addIceCandidate(null);
+    expect(viewer.endOfCandidates).toBe(true);
+    expect(viewer.iceCandidateHistory).toEqual([
+      { candidate: "candidate:a", sdpMid: "0" },
+      null,
+      { candidate: "candidate:b", sdpMid: "0" },
+      null,
+    ]);
+  });
+
   it("writes candidates only for the applied ICE generation across a restart", async () => {
     const pc = new FakeRtcPeerConnection({});
     pc.addTransceiver("audio");

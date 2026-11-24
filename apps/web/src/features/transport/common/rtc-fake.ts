@@ -142,8 +142,12 @@ export class FakeRtcPeerConnection
   private negotiatedRemoteIce?: IceCredentials;
   private readonly lifetime = new AbortController();
   remoteDescription: RtcSessionDescription | null = null;
+  /** 當次遠端 ICE 憑證（ufrag／pwd）收到的 candidate；遠端換證（ICE restart）時重設。 */
   iceCandidates: RtcIceCandidate[] = [];
+  /** 當次遠端 ICE 憑證是否已收到 `null` 結束標記；遠端換證時重設。 */
   endOfCandidates = false;
+  /** 歷次 `addIceCandidate` 的完整紀錄（含 `null`），不隨換證重設。 */
+  iceCandidateHistory: (RtcIceCandidate | null)[] = [];
   offerOptions: RTCOfferOptions[] = [];
 
   /** 測試可覆寫 `getStats()` 的回傳內容（Map 形狀）。 */
@@ -242,6 +246,17 @@ export class FakeRtcPeerConnection
     } else if (this.signalingState !== "have-local-offer") {
       throw new DOMException("尚未設定本機 offer", "InvalidStateError");
     }
+    const before = readIceCredentials(this.remoteDescription?.sdp);
+    const after = readIceCredentials(description.sdp);
+    if (
+      before &&
+      after &&
+      (before.ufrag !== after.ufrag || before.pwd !== after.pwd)
+    ) {
+      // 遠端換證代表新一輪 ICE 收集：當次的 candidate 與結束標記從頭算。
+      this.iceCandidates = [];
+      this.endOfCandidates = false;
+    }
     this.remoteDescription = { ...description };
     this.lastCreated = undefined;
     this.setSignalingState(
@@ -257,6 +272,7 @@ export class FakeRtcPeerConnection
         "InvalidStateError",
       );
     }
+    this.iceCandidateHistory.push(candidate);
     if (candidate === null) {
       this.endOfCandidates = true;
     } else {
