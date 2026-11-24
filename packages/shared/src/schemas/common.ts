@@ -78,11 +78,13 @@ export type IceCandidate = z.infer<typeof iceCandidateSchema>;
 export const signalDataSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.enum(["offer", "answer"]),
+    negotiationId: idSchema,
     sdp: z.string().min(1).max(SDP_MAX_LENGTH),
   }),
   z.object({
     type: z.literal("ice"),
-    /** null 代表 end-of-candidates。 */
+    negotiationId: idSchema,
+    /** null 代表這份 offer 的 end-of-candidates。 */
     candidate: iceCandidateSchema.nullable(),
   }),
 ]);

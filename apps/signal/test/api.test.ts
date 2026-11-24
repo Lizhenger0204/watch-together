@@ -360,25 +360,32 @@ describe("WebSocket", () => {
       memberId: member.memberId,
     });
 
-    // 信令雙向轉送
+    // 缺少協商識別時回 BAD_REQUEST，同一條連線仍可傳送下一份合法 offer。
     host.send({
       type: "signal",
       to: member.memberId,
-      data: { type: "offer", sdp: "v=0 offer" },
+      data: { type: "offer", sdp: "v=0 legacy" },
     });
-    expect(await viewer.next("signal")).toEqual({
+    expect(await host.next("error")).toMatchObject({ code: "BAD_REQUEST" });
+
+    const offer = { type: "offer", negotiationId: "offer-1", sdp: "v=0 offer" };
+    host.send({ type: "signal", to: member.memberId, data: offer });
+    const receivedOffer = await viewer.next("signal");
+    expect(receivedOffer).toEqual({
       type: "signal",
       from: room.memberId,
-      data: { type: "offer", sdp: "v=0 offer" },
+      data: offer,
     });
-    viewer.send({
-      type: "signal",
-      to: room.memberId,
-      data: { type: "answer", sdp: "v=0 answer" },
-    });
-    expect((await host.next("signal")).data).toEqual({
+    const answer = {
       type: "answer",
+      negotiationId: receivedOffer.data.negotiationId,
       sdp: "v=0 answer",
+    };
+    viewer.send({ type: "signal", to: room.memberId, data: answer });
+    expect(await host.next("signal")).toEqual({
+      type: "signal",
+      from: member.memberId,
+      data: answer,
     });
 
     // 收看者狀態只轉給房主

@@ -22,20 +22,6 @@ describe("parseClientMessage：合法訊息", () => {
     { type: "room:kick", reqId: "2", memberId: "m1" },
     { type: "stream:status", live: true, title: "電影" },
     { type: "stream:status", live: false, title: null },
-    { type: "signal", to: "host", data: { type: "offer", sdp: "v=0" } },
-    {
-      type: "signal",
-      to: "m1",
-      data: {
-        type: "ice",
-        candidate: {
-          candidate: "candidate:1 1 udp 1 1.2.3.4 5 typ host",
-          sdpMid: "0",
-          sdpMLineIndex: 0,
-        },
-      },
-    },
-    { type: "signal", to: "m1", data: { type: "ice", candidate: null } },
     {
       type: "member:status",
       state: "playing",
@@ -62,7 +48,11 @@ describe("parseClientMessage：不合法訊息", () => {
       JSON.stringify({
         type: "signal",
         to: "m1",
-        data: { type: "offer", sdp: "x".repeat(SDP_MAX_LENGTH + 1) },
+        data: {
+          type: "offer",
+          negotiationId: "offer-1",
+          sdp: "x".repeat(SDP_MAX_LENGTH + 1),
+        },
       }),
     ],
     [
@@ -105,7 +95,6 @@ describe("parseServerMessage", () => {
     { type: "room:closed", reason: "kicked" },
     { type: "stream:status", live: true, title: "電影", startedAt: 2 },
     { type: "peer:request", memberId: "m2" },
-    { type: "signal", from: "m1", data: { type: "answer", sdp: "v=0" } },
     { type: "member:status", memberId: "m2", status: { state: "buffering" } },
     { type: "ack", reqId: "1", ok: true },
     { type: "ack", reqId: "1", ok: false, code: "FORBIDDEN" },
@@ -123,6 +112,41 @@ describe("parseServerMessage", () => {
     expect(
       server({ type: "room:updated", room: { ...room, inviteCode: "abc" } }).ok,
     ).toBe(false);
+  });
+});
+
+describe.each([
+  ["offer", { type: "offer", sdp: "v=0" }],
+  ["answer", { type: "answer", sdp: "v=0" }],
+  [
+    "ICE candidate",
+    {
+      type: "ice",
+      candidate: {
+        candidate: "candidate:1 1 udp 1 1.2.3.4 5 typ host",
+        sdpMid: "0",
+        sdpMLineIndex: 0,
+      },
+    },
+  ],
+  ["ICE 結束標記", { type: "ice", candidate: null }],
+] as const)("signal %s", (_name, payload) => {
+  test("雙向解析都保留 64 字元的協商識別", () => {
+    const data = { ...payload, negotiationId: "n".repeat(64) };
+    const outgoing = { type: "signal", to: "m1", data };
+    const incoming = { type: "signal", from: "m2", data };
+    expect(client(outgoing)).toEqual({ ok: true, message: outgoing });
+    expect(server(incoming)).toEqual({ ok: true, message: incoming });
+  });
+
+  test.each([
+    ["缺少協商識別", undefined],
+    ["協商識別為空字串", ""],
+    ["協商識別超過 64 字元", "n".repeat(65)],
+  ])("%s 時雙向都拒絕", (_reason, negotiationId) => {
+    const data = { ...payload, negotiationId };
+    expect(client({ type: "signal", to: "m1", data }).ok).toBe(false);
+    expect(server({ type: "signal", from: "m2", data }).ok).toBe(false);
   });
 });
 

@@ -37,7 +37,7 @@
 
 房主每次驗證成功，都視為新的直播工作階段，伺服器依序：
 
-1. 若原本在直播，改為未開播，對其他在線成員送 `stream:status { live: false }`（收看者關閉舊的 P2P 連線或 WHEP）。
+1. 若原本在直播，改為未開播，對其他在線成員送 `stream:status { live: false, title: null, startedAt: null }`（收看者關閉舊的 P2P 連線或 WHEP）。
 2. 回房主 `room:snapshot`，其中 `stream.live` 為 `false`。
 3. 房主端若仍有可播放的片源，再送 `stream:status { live: true, title }`。
 4. 伺服器廣播 `stream:status`，P2P 模式下對每位在線收看者送一則 `peer:request` 給房主。
@@ -98,8 +98,8 @@ type RoomInfo = {
 type Member = { memberId: string; nickname: string; role: 'host' | 'member'; online: boolean };
 type StreamInfo = { live: boolean; title: string | null; startedAt: number | null };
 type SignalData =
-  | { type: 'offer' | 'answer'; sdp: string }
-  | { type: 'ice'; candidate: RTCIceCandidateInit | null }; // null 代表 end-of-candidates
+  | { type: 'offer' | 'answer'; negotiationId: string; sdp: string }
+  | { type: 'ice'; negotiationId: string; candidate: RTCIceCandidateInit | null };
 type MemberStatus = {
   state: 'waiting' | 'connecting' | 'playing' | 'buffering' | 'failed';
   bitrateKbps?: number;
@@ -110,8 +110,12 @@ type MemberStatus = {
 
 `title` 只用檔名（去掉副檔名），不傳送檔案路徑。
 
+每則 P2P `signal.data` 都必須帶 `negotiationId`（shared 的 `idSchema`，1–64 字元）。房主為每份 offer 呼叫一次 `crypto.randomUUID()`，包括首次協商與每次 ICE restart。這樣停播重開、重建 transport 或換分頁後，也能為同一收看者配發新識別。收看者的 answer 與雙方的 ICE 都原樣帶上所屬 offer 的識別，包含 `candidate: null` 結束標記。
+
+接收端按 `from` 與當前 offer 的識別比對，靜默丟棄不符的 answer 或 ICE，再對相符的訊息操作 WebRTC（見 streaming.md §3）。伺服器以 shared schema 驗證識別，依既有的成員轉送規則原樣傳遞 `data`，不儲存或比對協商狀態。
+
 ## 版本紀錄
 
 | `PROTOCOL_VERSION` | 內容 |
 | --- | --- |
-| 1 | 第一版（尚未正式發布）。發布前的修改不升版：ICE 路徑由 `/api/ice` 改為 `/api/rooms/:roomId/ice`（才能驗證是哪個房間的成員）、加入關閉碼表、房主重新連線的流程、連到不存在或已關閉的房間改為接受後以 `4001` 關閉（原本回 HTTP 404）。 |
+| 1 | 第一版（尚未正式發布）。發布前的修改不升版：ICE 路徑由 `/api/ice` 改為 `/api/rooms/:roomId/ice`（才能驗證是哪個房間的成員）、加入關閉碼表、房主重新連線的流程、連到不存在或已關閉的房間改為接受後以 `4001` 關閉（原本回 HTTP 404）、P2P 信令必填 `data.negotiationId`。 |

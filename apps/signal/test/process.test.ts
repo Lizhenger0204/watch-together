@@ -231,7 +231,11 @@ describe("onMessage 權限", () => {
 
 describe("signal 轉送", () => {
   const online = new Set(["host", "a", "b"]);
-  const offer = { type: "offer", sdp: "v=0" } as const;
+  const offer = {
+    type: "offer",
+    negotiationId: "offer-2",
+    sdp: "v=0",
+  } as const;
 
   test("房主 → 收看者", () => {
     const outcome = onMessage(
@@ -246,17 +250,31 @@ describe("signal 轉送", () => {
     ]);
   });
 
-  test("收看者 → 房主", () => {
-    const outcome = onMessage(
+  test("新 offer 之後，仍將收看者遲到及當次的回覆各帶原識別轉給房主", () => {
+    const { state } = onMessage(
       roomWith(),
-      "a",
-      { type: "signal", to: "host", data: offer },
+      "host",
+      { type: "signal", to: "a", data: offer },
       online,
       T0,
     );
-    expect(sentTo(outcome.effects, "host")).toEqual([
-      { type: "signal", from: "a", data: offer },
-    ]);
+    const replies = [
+      { type: "answer", negotiationId: "offer-1", sdp: "v=0 old" },
+      { type: "ice", negotiationId: "offer-1", candidate: null },
+      { type: "answer", negotiationId: offer.negotiationId, sdp: "v=0 new" },
+    ] as const;
+    for (const data of replies) {
+      const outcome = onMessage(
+        state,
+        "a",
+        { type: "signal", to: "host", data },
+        online,
+        T0,
+      );
+      expect(sentTo(outcome.effects, "host")).toEqual([
+        { type: "signal", from: "a", data },
+      ]);
+    }
   });
 
   test("收看者 → 其他收看者：被擋下", () => {
