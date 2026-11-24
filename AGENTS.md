@@ -17,7 +17,6 @@
 | --- | --- |
 | 了解整體架構、目錄、資料流 | [docs/architecture.md](docs/architecture.md) |
 | 為什麼是這個架構（目前有效的決定） | [docs/decisions/0002-browser-live-streaming.md](docs/decisions/0002-browser-live-streaming.md) |
-| 最初的技術選型（部分已被取代） | [docs/decisions/0001-tech-stack.md](docs/decisions/0001-tech-stack.md) |
 | 房間、邀請碼、角色、生命週期 | [docs/specs/room-and-invite.md](docs/specs/room-and-invite.md) |
 | 選片、編碼畫質、P2P、轉發、ICE、模式切換 | [docs/specs/streaming.md](docs/specs/streaming.md) |
 | REST 與 WebSocket 訊息格式 | [docs/specs/protocol.md](docs/specs/protocol.md) |
