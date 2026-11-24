@@ -23,7 +23,7 @@
 | T-104 | `/api/ice`：STUN 清單 + Cloudflare TURN 短效憑證（沒有 secrets 時只回 STUN） | GPT | T-102 | DONE |
 | T-105 | 前端頁面：首頁（建房 / 輸入邀請碼）、`/join/:code`、房間頁（房主版 / 收看者版）、成員列表與連線品質、模式與畫質選項卡、複製邀請碼 | Claude | T-102 | DOING |
 | T-106 | 選片：檔案選擇、開播前檢查、本地播放與自訂控制列、captureStream、房主音量實測並更新 streaming.md | GPT | T-101 | DONE |
-| T-107 | P2P 傳輸（`features/transport/p2p/`，照 T-115 的介面）：房主 mesh、收看者連線、codec 偏好、畫質與縮放、ICE restart、統計 | GPT | T-103, T-104, T-114, T-115 | TODO |
+| T-107 | P2P 傳輸（`features/transport/p2p/`，照 T-115 的介面）：房主 mesh、收看者連線、codec 偏好、畫質與縮放、ICE restart、統計 | GPT | T-103, T-104, T-114, T-115 | DOING |
 | T-108 | 轉發轉接：WHIP / WHEP → Cloudflare Realtime（參考官方範例，先確認授權） | GPT | T-103 | DONE |
 | T-109 | 轉發傳輸客戶端（`features/transport/relay/`，WHIP / WHEP，照 T-115 的介面），並回答 T-108 留下的 (a)～(c) | Claude | T-108, T-114, T-115 | TODO |
 | T-110 | 收看端播放器：原生 `<video srcObject>`（沿用 T-106 的元件）、點擊開始觀看、狀態提示、重新連線按鈕 | Claude | T-105, T-115 | TODO |
@@ -31,7 +31,7 @@
 | T-112 | 部署：給零經驗使用者的 Cloudflare 帳號與網域設定圖文指南、`pnpm deploy`、secrets 設定、CI | GPT | T-103 | DONE |
 | T-113 | 人工驗收清單（ADR 0002 待驗證項目），做完後交給使用者與朋友實測 | Claude | T-109, T-111, T-112 | TODO |
 | T-114 | T-103 審查修正：邀請碼重產與關房序列化、關房清理可重試、限流後備、token 常數時間比對；spec 補房主接手（4000）時的 `peer:request` 順序、未驗證連線格式錯誤以 4400 關閉、ICE 新路徑同步 shared 與版本說明；關房時呼叫 `RoomDO.closeRelayResources()`（失敗保留記錄重試） | Claude | T-103, T-108 | DONE |
-| T-115 | 傳輸層共用架構：`createHostTransport` / `createViewerTransport` 介面、`features/transport/common/`（編碼與畫質、ICE 設定取得、狀態事件、統計共用部分）、模式切換流程，寫進 streaming.md；給 T-107（GPT）與 T-109 共用 | Claude | T-102 | DOING |
+| T-115 | 傳輸層共用架構：`createHostTransport` / `createViewerTransport` 介面、`features/transport/common/`（編碼與畫質、ICE 設定取得、狀態事件、統計共用部分）、模式切換流程，寫進 streaming.md；給 T-107（GPT）與 T-109 共用 | Claude | T-102 | DONE |
 | T-116 | T-114 第二輪審查的後續修正：邀請目錄換碼改為單一交易（不留孤兒對照）；relay 清理待辦、重試狀態與 alarm 一起提交；SFU 回 `410 session_error` 時視為已結束、不重試；可考慮 WebSocket upgrade 每 IP 限流；protocol.md 4408 改為「5 秒內未完成驗證」；room-and-invite.md「前端以最後收到的回應為準」改為前端序列化重產或以 snapshot 校正 | Claude | T-114 | TODO |
 
 可平行的組合：T-101 完成後 → T-102（Claude）∥ T-106（GPT）；T-102 完成後 → T-103、T-105（Claude，依序）∥ T-104（GPT）；T-103 完成後 → T-108、T-112（GPT）。T-115（Claude）可與 T-105／T-114 的審查同時進行；T-114 與 T-115 都合併後 → T-107（GPT）∥ T-109、T-110（Claude）。
@@ -149,3 +149,26 @@ Review（GPT 第二輪，監工核對）：結論「小修後可合併」。第�
 - WHIP 首次發布缺軌時要保留哪些 media sections。
 - relay 的 `removePeer` 由誰負責。
 - DELETE 回應遺失、重試拿到 403 時，怎麼確認已經清理完成。
+
+### T-115（Claude 實作，第二至四輪由 GPT 修正，2026-11-24）— DONE
+1. 做了什麼：
+   - 完成傳輸層契約 `features/transport/index.ts`，提供 `createHostTransport` 與 `createViewerTransport`，以及 `common/` 底下的 emitter、encoding、errors、ice、ice-gathering、rtc（真正的 adapter，記下 kind，正規化 candidate 與 SDP）、rtc-fake（貼近 Chrome）、stats。
+   - streaming.md 寫明 P2P 協商順序、每個成員各自的 ICE 佇列、協商識別比對、ICE restart 與期限、模式切換「先停再開」、房主與收看者的重連、晚加入、track 所有權、影音各預留一個 transceiver、WHIP 開停序列化、單次 HTTP offer 的 ICE 收集，以及統計缺值的規則。
+2. 介面變動：
+   - shared 的 `signal.data` 新增必填的 `negotiationId`（1–64 字元，offer、answer、ice 都要帶，含 `null` 結束標記）。protocol.md 已同步更新，協定版本維持 1。
+   - `HostTransport` 新增 `removePeer`；`start()`、`setQuality()` 改為回傳 Promise；`sendSignal` 改為回傳 boolean。
+   - `TransportErrorCode` 新增 `STREAM_NOT_LIVE` 與 `RELAY_UNAVAILABLE`。
+   - RTC adapter 新增 `localDescription` 與 `waitForIceGatheringComplete`。
+3. 已知限制：
+   - 依 mode 分派 p2p／relay 的 dispatcher，等 T-107、T-109 合併後由 Claude 補上。
+   - 「使用者選擇前就停用轉發」需要伺服器提供能力旗標，另開任務。
+   - T-109 必做：WHIP 首次發布缺軌時要保留哪些 media section、relay 的 `removePeer` 由誰負責、DELETE 回應遺失且重試拿到 403 時怎麼確認已清理。
+   - T-107 驗收：同一條 WebSocket 上的舊 answer 延遲交付、ICE restart 3 次上限、換代中的非同步回呼、首份 offer 逾時後重新連線的完整流程。
+4. 驗證方式：`pnpm typecheck && pnpm lint && pnpm test && pnpm e2e`（Vitest 229 = web／shared 136 + signal 93，e2e 3）。第四次 GPT 審查用 Chrome 158 搭配實際的 process.ts，重播「舊 answer 晚到」的情境，確認舊 answer 對 RTC 的呼叫為 0 次，新連線能完成協商。
+
+合併（監工，2026-11-24）：從 `claude/T-115-transport-arch`（7eb27c4）合入以下修正：
+- `gpt/T-115-fix-contract`、`gpt/T-115-fix-common`（第二輪修正）
+- `gpt/T-115-fix-r3-negotiation`、`gpt/T-115-fix-r3-fake`（第三輪修正）
+- 監工第四輪的小修：同一條連線 ICE restart 時保留 `remoteStream` 的 track；fake 在遠端換證時重設當次的 ICE 狀態
+
+全部 rebase 到 main 後 fast-forward 合併（main = 065b280）。解鎖 T-107（GPT，派工中）與 T-109（Claude）。T-110 仍要等 T-105。
