@@ -2,7 +2,7 @@
 import type { TransportRtcOptions } from "../index";
 import {
   browserPeerConnectionFactory,
-  fetchIceServers,
+  loadIceServers,
   StatsSampler,
   TransportError,
   type RtcPeerConnection,
@@ -23,18 +23,7 @@ export async function openPeerConnection(
   options: ConnectionOptions,
   signal: AbortSignal,
 ): Promise<RtcPeerConnection | null> {
-  let iceServers: RTCIceServer[];
-  try {
-    iceServers = await (options.fetchIceServers
-      ? options.fetchIceServers()
-      : fetchIceServers(options.roomId, options.token, { signal }));
-  } catch (error) {
-    throw error instanceof TransportError
-      ? error
-      : new TransportError("ICE_UNAVAILABLE", "無法取得 ICE 設定", {
-          cause: error,
-        });
-  }
+  const iceServers = await loadIceServers(options, signal);
   if (signal.aborted) return null;
   return (options.createPeerConnection ?? browserPeerConnectionFactory)({
     iceServers,
@@ -82,13 +71,6 @@ export function sampleStats(
       });
   }, STATS_INTERVAL_MS);
   signal.addEventListener("abort", () => clearInterval(timer), { once: true });
-}
-
-export function isIceConnected(pc: RtcPeerConnection) {
-  return (
-    pc.iceConnectionState === "connected" ||
-    pc.iceConnectionState === "completed"
-  );
 }
 
 export function closePeerConnection(pc: RtcPeerConnection | undefined) {

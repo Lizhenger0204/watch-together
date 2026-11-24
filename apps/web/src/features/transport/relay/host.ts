@@ -15,6 +15,7 @@ import {
   applyVideoEncoding,
   browserCodecCapabilities,
   Emitter,
+  isIceConnected,
   setVideoContentHint,
   TransportError,
   type RtcPeerConnection,
@@ -24,7 +25,6 @@ import {
 import {
   closePeerConnection,
   gatheredOffer,
-  isIceConnected,
   openPeerConnection,
   relayError,
   sampleStats,

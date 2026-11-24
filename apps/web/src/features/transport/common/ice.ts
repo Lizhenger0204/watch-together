@@ -51,3 +51,21 @@ export async function fetchIceServers(
   // shared 的 IceServer 與 DOM 的 RTCIceServer 欄位相同（urls/username/credential）。
   return result.data.iceServers as RTCIceServer[];
 }
+
+/** 傳輸層建連線前取 ICE：有注入的 `fetchIceServers` 就用它（測試），否則打 API。 */
+export async function loadIceServers(
+  options: {
+    fetchIceServers?: () => Promise<RTCIceServer[]>;
+    roomId: string;
+    token: string;
+  },
+  signal: AbortSignal,
+): Promise<RTCIceServer[]> {
+  try {
+    return await (options.fetchIceServers
+      ? options.fetchIceServers()
+      : fetchIceServers(options.roomId, options.token, { signal }));
+  } catch {
+    throw new TransportError("ICE_UNAVAILABLE", "無法取得 ICE 設定");
+  }
+}

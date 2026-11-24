@@ -10,6 +10,7 @@
 import type { CreateViewerTransport, ViewerTransportState } from "../index";
 import {
   Emitter,
+  isIceConnected,
   TransportError,
   type RtcPeerConnection,
   type TransportStats,
@@ -17,7 +18,6 @@ import {
 import {
   closePeerConnection,
   gatheredOffer,
-  isIceConnected,
   openPeerConnection,
   relayError,
   sampleStats,
