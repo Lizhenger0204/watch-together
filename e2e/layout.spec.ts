@@ -9,7 +9,7 @@ const LONG_NAME =
 const PHONE = { width: 390, height: 844 };
 
 const pageWidth = (page: Page) =>
-  page.evaluate(() => document.documentElement.scrollWidth);
+  page.locator("html").evaluate((html) => html.scrollWidth);
 
 test("長片名開播後，房主頁與收看頁在 390px 都不會被撐寬", async ({
   browser,
