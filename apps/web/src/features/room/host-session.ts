@@ -389,6 +389,14 @@ export class HostSession extends HostSessionBase {
         return;
       }
       if (gen !== this.generation) return;
+      // 等停播確認期間，房主可能撤回開播、換成待確認的片源，或模式被改：重新判斷再開播。
+      if (!this.intent || !this.sourceReady() || transport.mode !== this.mode) {
+        this.op = null;
+        this.dropTransport();
+        this.reconcile();
+        this.publish();
+        return;
+      }
     }
 
     const title = streamTitle(this.source.title);
@@ -470,6 +478,14 @@ export class HostSession extends HostSessionBase {
     } catch (error) {
       if (gen !== this.generation) return;
       this.op = null;
+      if (!this.intent) {
+        // 切換途中房主已經按停止：不等重送的停播確認，立刻停掉本機出流。
+        // 伺服器停播仍待確認（serverLive 還是 true），stopLive 會在沒有傳輸時照樣重送 live:false。
+        this.transport?.stop();
+        this.dropTransport();
+        void this.stopLive();
+        return;
+      }
       if (!disconnected(error)) {
         this.error = `切換失敗，仍維持原本的傳送方式：${readable(error)}`;
       }

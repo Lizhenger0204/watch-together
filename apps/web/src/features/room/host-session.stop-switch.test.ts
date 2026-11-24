@@ -60,6 +60,22 @@ describe("停播", () => {
     await t.client.ack("stream:status live 電影");
     expect(t.session.getView().phase).toBe("live");
   });
+
+  test("重開前等停播確認時又按停止：確認後不送 live:true", async () => {
+    const t = setup();
+    await t.goLive();
+    t.session.setIntent(false);
+    await t.client.ack("stream:status off", new ApiError("INTERNAL"));
+    t.session.setIntent(true);
+    t.transports[1]!.gate.resolve();
+    await flush();
+    expect(t.log.slice(-2)).toEqual(["start", "stream:status off"]);
+    t.session.setIntent(false);
+    await t.client.ack("stream:status off");
+    expect(t.log).not.toContain("stream:status live 電影");
+    expect(t.log.at(-1)).toBe("destroy");
+    expect(t.session.getView()).toMatchObject({ intent: false, phase: "idle" });
+  });
 });
 
 describe("直播中切模式", () => {
@@ -133,9 +149,17 @@ describe("直播中切模式", () => {
     t.session.setMode("relay");
     t.session.setIntent(false);
     await t.client.ack("stream:status off", new ApiError("INTERNAL"));
-    // 切換失敗後重讀意圖，再次送停播。
-    expect(t.log.filter((l) => l === "stream:status off")).toHaveLength(2);
+    // 重送的停播還沒確認，本機出流就要先停掉（房主已明確停止）。
+    expect(t.log).toEqual([
+      "stream:status off",
+      "stop",
+      "destroy",
+      "stream:status off",
+    ]);
     expect(t.session.getView().phase).toBe("stopping");
+    await t.client.ack("stream:status off");
+    expect(t.log.filter((l) => l === "destroy")).toHaveLength(1);
+    expect(t.session.getView()).toMatchObject({ intent: false, phase: "idle" });
   });
 
   test("切換中再按切換：忽略", async () => {
