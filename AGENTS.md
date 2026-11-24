@@ -41,6 +41,8 @@
 - **只有「GPT 監工」對話能改 `main`**（合併、更新 `tasks.md`）。其他 agent 不要在分支裡改 `tasks.md`，也不要自行合併。交接備註寫在 commit 訊息。→ ownership.md「對話角色」
 - **同時跑兩個 `pnpm dev` 會搶 port**，用 `WEB_PORT`／`SIGNAL_PORT` 錯開。
 - **不要各自定義一份 type**。前後端共用的型別、訊息、zod schema 只能放 `packages/shared`。
+- **寫新函式、新規則前，先搜專案裡有沒有現成的**（`packages/shared`、`features/transport/common/` 等）。
+- **提交被 pre-commit 鉤子拒絕（單檔超過約 20 KB）**：照報錯按功能拆檔再提交，不要把檔案加進 `.githooks/size-allowlist`。
 - **不要繞過 pnpm 的新版本冷卻期**（`minimumReleaseAge`）。被擋就改選較舊的版本，不要加 `minimumReleaseAgeExclude`。裝套件前也要確認它沒有被標成 deprecated。
 - **Codex 讀 `AGENTS.md`，Claude Code 讀 `CLAUDE.md`**。規範改在 `docs/`，不要只改其中一個入口檔。
 - 發現 spec 有漏洞或矛盾：**先停下來回報**（由 Claude 改 spec、協調者記到 tasks.md），不要自己腦補一個實作。

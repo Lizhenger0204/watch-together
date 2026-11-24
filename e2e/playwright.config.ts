@@ -13,12 +13,12 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      testIgnore: "source.spec.ts",
+      testIgnore: /(source|layout)\.spec\.ts$/,
       use: { ...devices["Desktop Chrome"] },
     },
     {
       name: "chrome",
-      testMatch: "source.spec.ts",
+      testMatch: /(source|layout)\.spec\.ts$/,
       use: { ...devices["Desktop Chrome"], channel: "chrome" },
     },
   ],
