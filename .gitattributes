@@ -1,0 +1,4 @@
+# Windows 的 core.autocrlf=true 會把檔案轉成 CRLF，讓 prettier --check 失敗。
+# 一律以 LF 存放與檢出。
+* text=auto eol=lf
+*.mp4 binary
