@@ -317,7 +317,7 @@ class TransportError extends Error { code; message; memberId?; cause? }
 | --- | --- | --- |
 | `features/transport/p2p/index.ts` | `createP2PHostTransport: CreateHostTransport`、`createP2PViewerTransport: CreateViewerTransport` | GPT |
 | `features/transport/relay/index.ts` | `createRelayHostTransport: CreateHostTransport`、`createRelayViewerTransport: CreateViewerTransport` | Claude |
-| `features/transport/index.ts` | 型別與介面（本檔）；dispatcher `createHostTransport`／`createViewerTransport`（依 `mode` 選 p2p/ 或 relay/）等 T-107、T-109 合併後由 Claude 補上 | Claude |
+| `features/transport/index.ts` | 型別與介面（本檔）；dispatcher `createHostTransport`／`createViewerTransport`（依 `mode` 選 p2p/ 或 relay/）。T-109 交付前，`relay` 模式同步丟出 `RELAY_UNAVAILABLE` | Claude |
 
 ### `RTCPeerConnection` 介面與 fake
 

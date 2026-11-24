@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Layout } from "../components/Layout";
 import { Button, Card, Notice } from "../components/ui";
+import { ViewerPlayer } from "../features/player";
 import { HostSourcePlayer, useLocalSource } from "../features/source";
 import {
   InviteCodeCard,
@@ -211,30 +212,23 @@ function HostView({ room, roomId }: { room: Room; roomId: string }) {
 }
 
 function ViewerView({ room }: { room: Room }) {
-  const { view } = room;
+  const { view, viewer } = room;
   const host = view.members.find((m) => m.role === "host");
   return (
     <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
       <section className="grid grid-cols-[minmax(0,1fr)] content-start gap-3">
-        <div
-          className="grid aspect-video grid-cols-[minmax(0,1fr)] place-items-center rounded-2xl bg-black text-center"
-          data-testid="viewer-stage"
-        >
-          {view.stream.live ? (
-            <p className="px-4 wrap-anywhere text-zinc-300">
-              {host?.nickname ?? "房主"} 正在播放「{view.stream.title}」
-              <span className="mt-1 block text-sm text-zinc-500">
-                畫面連線功能開發中
-              </span>
-            </p>
-          ) : (
-            <p className="px-4 text-zinc-400">
-              {host?.online
-                ? `等待 ${host.nickname} 開始播放…`
-                : "房主目前離線，等待房主回來…"}
-            </p>
-          )}
-        </div>
+        {view.stream.live && view.stream.title && (
+          <h2 className="font-medium wrap-anywhere text-white">
+            {view.stream.title}
+          </h2>
+        )}
+        {viewer && (
+          <ViewerPlayer
+            viewer={viewer}
+            hostName={host?.nickname ?? null}
+            hostOnline={host?.online ?? false}
+          />
+        )}
       </section>
       <aside className="grid content-start gap-4">
         <MemberList
