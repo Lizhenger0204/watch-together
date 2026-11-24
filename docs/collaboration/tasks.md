@@ -30,8 +30,9 @@
 | T-111 | E2E：3 個 context 的 P2P 流程 | GPT | T-105, T-106, T-107, T-110 | TODO |
 | T-112 | 部署：給零經驗使用者的 Cloudflare 帳號與網域設定圖文指南、`pnpm deploy`、secrets 設定、CI | GPT | T-103 | DONE |
 | T-113 | 人工驗收清單（ADR 0002 待驗證項目），做完後交給使用者與朋友實測 | Claude | T-109, T-111, T-112 | TODO |
-| T-114 | T-103 審查修正：邀請碼重產與關房序列化、關房清理可重試、限流後備、token 常數時間比對；spec 補房主接手（4000）時的 `peer:request` 順序、未驗證連線格式錯誤以 4400 關閉、ICE 新路徑同步 shared 與版本說明；關房時呼叫 `RoomDO.closeRelayResources()`（失敗保留記錄重試） | Claude | T-103, T-108 | REVIEW |
+| T-114 | T-103 審查修正：邀請碼重產與關房序列化、關房清理可重試、限流後備、token 常數時間比對；spec 補房主接手（4000）時的 `peer:request` 順序、未驗證連線格式錯誤以 4400 關閉、ICE 新路徑同步 shared 與版本說明；關房時呼叫 `RoomDO.closeRelayResources()`（失敗保留記錄重試） | Claude | T-103, T-108 | DONE |
 | T-115 | 傳輸層共用架構：`createHostTransport` / `createViewerTransport` 介面、`features/transport/common/`（編碼與畫質、ICE 設定取得、狀態事件、統計共用部分）、模式切換流程，寫進 streaming.md；給 T-107（GPT）與 T-109 共用 | Claude | T-102 | DOING |
+| T-116 | T-114 第二輪審查的後續修正：邀請目錄換碼改為單一交易（不留孤兒對照）；relay 清理待辦、重試狀態與 alarm 一起提交；SFU 回 `410 session_error` 時視為已結束、不重試；可考慮 WebSocket upgrade 每 IP 限流；protocol.md 4408 改為「5 秒內未完成驗證」；room-and-invite.md「前端以最後收到的回應為準」改為前端序列化重產或以 snapshot 校正 | Claude | T-114 | TODO |
 
 可平行的組合：T-101 完成後 → T-102（Claude）∥ T-106（GPT）；T-102 完成後 → T-103、T-105（Claude，依序）∥ T-104（GPT）；T-103 完成後 → T-108、T-112（GPT）。T-115（Claude）可與 T-105／T-114 的審查同時進行；T-114 與 T-115 都合併後 → T-107（GPT）∥ T-109、T-110（Claude）。
 
@@ -100,4 +101,12 @@ Review（Claude 監工）：沒有新增套件、沒有改 pnpm-workspace.yaml�
 ### T-105、T-114 第一輪審查（GPT，2026-11-24）— 退回修正
 - T-105（985a75b）：小修後可合併。阻擋項：房主開自己的邀請連結時 hostToken 被 memberToken 覆寫；房主重新驗證後前端不會依 protocol.md「房主重新連線」第 3 步重送 `live: true`。另有 4001／4003／4401 未導回首頁、房間到期後 WebSocket 握手 404 讓前端無限重試（規格缺口）等應修項。
 - T-114（be84d81）：GPT 判「需重做」，監工核對後認定一項阻擋：閒置 alarm 排進佇列後，房主重新上線，但排隊中的關房不會重算 `closeAt`，房間仍被關閉。應修：關房先通知再提交交易；邀請目錄失敗會擋住 relay 清理，重試用完後 `deleteAll` 會刪掉待清理紀錄；WHIP 回滾失敗被吞掉；目錄 RPC 結果遺失會留下孤兒碼；`4000` 接手的送訊順序與規格相反；`4408` 後多一次 alarm；`closeRelayResources` 在測試中被計數器取代，常數時間比對的測試抓不到提早返回。「並發重產只有最後一碼有效」是依序執行的正常結果，改為修正 spec 文字。
+
+### T-114（Claude，2026-11-24）— DONE
+1. 做了什麼：重產邀請碼與關房在 RoomDO 內依序執行；關房先提交 closing 標記再通知，邀請碼與各 relay 資源各自清理、各自保存進度，alarm 重試（含首次共 12 次，放棄後保留未完成紀錄）；排隊中的關房取得執行權後重算 `closeAt`；換碼操作以 `opId` 查回結果；限流後備（`rate-limit.ts`）；token 常數時間比對；房主重新連線（含 `4000` 接手）的送訊順序；未驗證連線格式錯誤以 `4400` 關閉、五秒期限在雜湊後判定；房間不存在／已關閉／關房中／roomId 格式錯誤時 WebSocket 接受後以 `4001` 關閉。
+2. 介面變動：protocol.md 新增「房主重新連線」「版本紀錄」（v1 未發布前不升版）、4001 涵蓋「連線時房間已不存在」；room-and-invite.md 補關房重試與限流後備。T-108 的公開方法 `RoomDO.closeRelayResources()` 改為私有的 `closeRelayTracks()`，由關房流程內部呼叫（repo 內無其他呼叫者，監工確認接受）。
+3. 已知限制：見 T-116。
+4. 驗證方式：`pnpm typecheck && pnpm lint && pnpm test && pnpm e2e`（合併時根目錄 60 + signal 93、e2e 3 全過）。
+
+Review（GPT 第二輪，監工核對）：結論「小修後可合併」。第一輪的阻擋項（房主回來後排隊中的關房仍執行）已修，四個反向實驗都會讓對應測試失敗。GPT 另列兩項阻擋：目錄換碼寫到一半失敗留下孤兒對照、relay 待辦的 alarm 沒排上。兩者都要先發生 storage 寫入失敗才會出現，孤兒碼不能拿來進房，SFU 也會自行回收 session，監工降為應修，與「SFU 回 410 仍重試 12 次」一起開為 T-116。
 
