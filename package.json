@@ -7,6 +7,7 @@
     "node": ">=22 <23"
   },
   "scripts": {
+    "prepare": "git config core.hooksPath .githooks || true",
     "dev": "node --env-file-if-exists=apps/web/.env scripts/dev.mjs",
     "build": "pnpm -r build",
     "deploy": "pnpm --filter @project/web build && pnpm --filter @project/signal exec wrangler deploy --env production",
