@@ -23,7 +23,7 @@
 | T-104 | `/api/ice`：STUN 清單 + Cloudflare TURN 短效憑證（沒有 secrets 時只回 STUN） | GPT | T-102 | DONE |
 | T-105 | 前端頁面：首頁（建房 / 輸入邀請碼）、`/join/:code`、房間頁（房主版 / 收看者版）、成員列表與連線品質、模式與畫質選項卡、複製邀請碼 | Claude | T-102 | DOING |
 | T-106 | 選片：檔案選擇、開播前檢查、本地播放與自訂控制列、captureStream、房主音量實測並更新 streaming.md | GPT | T-101 | DONE |
-| T-107 | P2P 傳輸（`features/transport/p2p/`，照 T-115 的介面）：房主 mesh、收看者連線、codec 偏好、畫質與縮放、ICE restart、統計 | GPT | T-103, T-104, T-114, T-115 | DOING |
+| T-107 | P2P 傳輸（`features/transport/p2p/`，照 T-115 的介面）：房主 mesh、收看者連線、codec 偏好、畫質與縮放、ICE restart、統計 | GPT | T-103, T-104, T-114, T-115 | DONE |
 | T-108 | 轉發轉接：WHIP / WHEP → Cloudflare Realtime（參考官方範例，先確認授權） | GPT | T-103 | DONE |
 | T-109 | 轉發傳輸客戶端（`features/transport/relay/`，WHIP / WHEP，照 T-115 的介面），並回答 T-108 留下的 (a)～(c) | Claude | T-108, T-114, T-115 | TODO |
 | T-110 | 收看端播放器：原生 `<video srcObject>`（沿用 T-106 的元件）、點擊開始觀看、狀態提示、重新連線按鈕 | Claude | T-105, T-115 | TODO |
@@ -172,3 +172,36 @@ Review（GPT 第二輪，監工核對）：結論「小修後可合併」。第�
 - 監工第四輪的小修：同一條連線 ICE restart 時保留 `remoteStream` 的 track；fake 在遠端換證時重設當次的 ICE 狀態
 
 全部 rebase 到 main 後 fast-forward 合併（main = 065b280）。解鎖 T-107（GPT，派工中）與 T-109（Claude）。T-110 仍要等 T-105。
+
+### T-107（GPT，2026-11-24）— DONE
+1. 做了什麼：
+   - `features/transport/p2p/` 匯出 `createP2PHostTransport` 與 `createP2PViewerTransport`。
+   - 房主：
+     - 每位成員各建一條連線，影音各預留一個 sendonly transceiver。
+     - 編碼：H.264 優先，音訊用 Opus，縮放依片源高度計算。
+     - 每份 offer 配發新的 UUID 作為 `negotiationId`，比對不符就丟棄。
+     - ICE 依成員、依協商代次各自排隊。
+     - 逾時與重試：answer 等 15 秒；斷線 5 秒寬限；同一次斷線最多 restart 3 次，恢復連通後計數歸零。
+     - `removePeer` 冪等。
+     - 畫質更新逐人回報失敗。
+   - 收看者：
+     - 使用固定的 `remoteStream`，track 用 `event.track` 加入。
+     - 同一條連線 ICE restart 時保留 track，以 SDP `o=` 的 session id 判斷是不是同一條連線。
+   - 統計每 2 秒取樣一次，換代時重設取樣基準。
+2. 介面變動：無，照 T-115 契約實作。
+3. 已知限制：
+   - 以下由房間層處理：首份 offer 的 20 秒期限、重新驗證、60 Mbps 總頻寬提示。
+   - 同一條連線的兩次 ICE 收集重疊時，無法歸屬的、沒有 ufrag 的事件會略過。
+   - 實測只做到本機兩端；跨網路 TURN、跨裝置與多人負載留待 T-113 或實機驗收。
+4. 驗證方式：
+   - `pnpm typecheck && pnpm lint && pnpm test && pnpm e2e`：Vitest 255（含 P2P 26），e2e 3。
+   - 4 個反向實驗（拿掉協商識別比對、丟棄提早到的 ICE、restart 時清空 track、允許第 4 次 restart），每個都讓對應的測試失敗。
+   - 本機 Chrome 158 兩端實測：舊 answer、舊 ICE 對 RTC 的呼叫為 0 次；新協商收到 74 個 H.264 影格與 Opus 音訊；restart 後會換證，並保留 receiver。
+
+審查與合併（監工，2026-11-24）：
+- 變更只在 `p2p/` 的 9 個檔案，沒有新增套件，也沒有 log 或 token 外洩。
+- 監工逐段核對 host、host-peer、negotiation、viewer 與規格（§3、§9 狀態表），沒有發現阻擋項。
+- 監工重跑四項檢查全部通過，以 fast-forward 合併。
+- GPT 回報給 Claude 的兩個小項目，可併入 T-116 或 dispatcher 任務：
+  - `common/encoding.ts:57` 的 `preferredVideoCodecs` 註解寫「移除其他 video codec」，實際程式會保留其他 codec，排在 H.264、VP8 之後，請修正註解。
+  - `rtc-fake` 產生的 SDP 沒有 `o=` 行，P2P 測試要自己寫含 `o=` 的 SDP，fake 可以補上。
