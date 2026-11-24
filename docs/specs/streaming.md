@@ -67,26 +67,38 @@
 
 1. 房主的 `start()` 裝好 `onPeerRequest`、`onSignal` 並記住目前各 kind 的 track（可為 null）與畫質即 resolve。此時即使房內沒有收看者，也可以宣布開播。
 2. 開播時，伺服器對每位在線收看者送 `peer:request { memberId }` 給房主。直播中有收看者驗證成功時，伺服器也會為這位成員送出請求。
-3. 房主收到請求才為該成員建連。**首次 offer 前，video、audio 各保留一個 sendonly transceiver**。每個 kind 用 `addTransceiver(track ?? kind, { direction: 'sendonly' })` 建立。缺軌時 `sender.track` 為 null，之後以同一個 sender 的 `replaceTrack` 補上。例如無聲片換有聲片時，沿用原本協商好的 audio transceiver。
-4. 在兩個 transceiver 設定 codec 偏好。以最新 tracks、畫質及片源高度套用編碼參數（§2），再 `createOffer()` → `setLocalDescription(offer)` → 送 `signal { to: memberId, data: { type: 'offer', sdp } }`。
-5. 收看者 `setRemoteDescription(offer)` → `createAnswer()` → **`setLocalDescription(answer)` 後**送 `signal { to: hostId, data: { type: 'answer', sdp } }`。房主套用這份 answer。
-6. 雙方以 `signal { to, data: { type: 'ice', candidate } }` 交換 trickle ICE。連通後收看者的房間層依 `onState` 回報 `member:status { state: 'playing' }`（§8）。
+3. 房主收到請求後，先登記該成員這次的 `negotiationId` 再建連。**首次 offer 前，video、audio 各保留一個 sendonly transceiver**。每個 kind 用 `addTransceiver(track ?? kind, { direction: 'sendonly' })` 建立。缺軌時 `sender.track` 為 null，之後以同一個 sender 的 `replaceTrack` 補上。例如無聲片換有聲片時，沿用原本協商好的 audio transceiver。
+4. 房主在兩個 transceiver 設定 codec 偏好，套用最新 tracks、畫質與縮放（§2），再 `createOffer()` → `setLocalDescription(offer)` → 送 `signal { to: memberId, data: { type: 'offer', negotiationId, sdp } }`。
+5. 收看者記下房主及 offer 的 `negotiationId`，依序 `setRemoteDescription(offer)` → `createAnswer()` → `setLocalDescription(answer)`，再回 `signal { to: hostId, data: { type: 'answer', negotiationId, sdp } }`。房主依下列規則比對後才套用 answer。
+6. 雙方用 `signal { to, data: { type: 'ice', negotiationId, candidate } }` 交換 trickle ICE，包括 `candidate: null`。連通後收看者的房間層依 `onState` 回報 `member:status { state: 'playing' }`（§8）。
 
-### 協商代次與 ICE
+### 協商識別與 ICE
 
-- 傳輸層在本機為每位對端成員記錄協商代次。房主再次收到同一 `memberId` 的 `peer:request` 時，先作廢舊代次並關閉舊 peer connection，再建立新連線。ICE restart（收看端收到對應的新 offer）也開始新代次，沿用該連線與 transceiver。
-- 換代時清掉舊代次的 ICE 佇列、answer／重試計時與統計取樣器（含上次取樣）。在途的取 ICE、SDP、track、統計與事件回呼都要核對成員及代次，再操作連線、送信令或回報狀態。舊代次晚到的結果失效。
-- **candidate 可能比 SDP 先到**。依來源成員與協商代次緩衝，等**這一代**的 `setRemoteDescription` 成功後，再依接收順序 `addIceCandidate`。restart 時連線上可能仍有上一代的 remote description。
-- candidate 的 `usernameFragment`（ufrag）要與對應遠端 SDP 的 `a=ice-ufrag` 相符。先於新 SDP 抵達的可以依 ufrag 分開暫存，已作廢的 ufrag 直接丟棄。非空 candidate 若缺 ufrag，只在可確定成員與代次時套用。Chrome 實測把別條連線的 candidate 加進來也可能成功，`addIceCandidate` 的成功或失敗無法用來辨認歸屬。
-- **裸 `candidate: null`** 表示該成員**收到時的當前代次**已結束收集，與該代次的 candidate 一起排隊、套用或作廢。
+1. 房主在處理 `peer:request` 或開始 ICE restart 時，立即以 `crypto.randomUUID()` 為這份 offer 配發新識別，按收看者的 `memberId` 保存。隨機值讓停播重開或換分頁後的新 offer 也能獨立配發識別，無須跨 transport 保存計數器。同一成員再觸發 `peer:request` 時關閉舊連線再建新的。ICE restart 則沿用該連線與 transceiver。
+2. 雙方回傳本機 ICE 時，帶上產生該 candidate 的本機 SDP 所對應的 offer 識別。房主先在同一條 WebSocket 送出 offer，再依序送出為它收集的 ICE，讓收看者先知道新識別。若 restart 前後的本機事件重疊，以 candidate 的 `usernameFragment` 對應本機 SDP 的 `a=ice-ufrag`。缺 ufrag 的事件（含 `null`）只有在能確定屬於哪次收集時才送出。
+3. 收看者收到房主的 offer 時，在第一個 `await` 前登記 `(from, negotiationId)`。answer 和本機 candidate 都原樣帶回該 offer 的識別。收到房主的 ICE 時先核對這一對值。沒有當次 offer 或值不符就靜默丟棄。
+4. 房主收到 answer 或 ICE 時，先用 `from` 找到該收看者，再逐字比對其目前的 `negotiationId`。查無連線或識別不符時靜默丟棄，保留當次計時與佇列。只對仍在等待的相符 answer 呼叫一次 `setRemoteDescription(answer)`，只讓相符 ICE 進入下一步。
+5. **ICE 可能早於 answer，或在套用 offer 期間到達。** 雙方依 `(from, negotiationId)` 暫存相符的 ICE，直到當次 `setRemoteDescription` 成功，再依到達順序呼叫 `addIceCandidate`。restart 時連線上可能還留著舊 SDP。candidate 若有 ufrag，要再核對當次遠端 SDP 對應媒體的 `a=ice-ufrag`，不符就丟棄。`candidate: null` 也依訊息上的識別排隊，只結束該次 ICE 收集。
+
+換代、移除成員、停播或銷毀 transport 時，作廢舊識別，清除其 ICE 佇列、answer／重試計時與統計取樣器。在途的取 ICE、SDP、track、統計與事件回呼，在操作 RTC、送信令或回報狀態前，都要再核對所屬連線及識別。
+
+**驗收（收看者沿用同一條 WebSocket）**
+
+房主送出 offer A，延後交付 answer A。停播再開播後，房主對同一成員送出 offer B，接著才交付 answer A 與 A 的 `candidate: null`。新連線應維持 `have-local-offer`，兩則舊訊息都不觸發 RTC 呼叫，也不取消 B 的 answer 計時。交付 answer B 後，只套用 B 一次，連線進入 `stable`。
 
 ### 失敗與重連
 
 - `iceConnectionState` 持續 `disconnected` 超過 5 秒，或進入 `failed` 時，房主以 `createOffer({ iceRestart: true })` 重啟 ICE。**同一次斷線最多 3 次 restart**，依序嘗試。計數跨這次斷線的協商代次保留，回到 `connected`（或直接到 `completed`）才歸零。重建的全新連線從零開始。
-- **每位成員同時只等一份 answer**。首次從收到 `peer:request` 起算 15 秒，每次 restart 從送出該次 offer 起算 15 秒。任一 answer 逾時即結束這條連線，避免把遲到的 answer 當成下一次的回覆。
+- **每位成員同時只等一份 answer**。首次從收到 `peer:request` 起算 15 秒，每次 restart 從送出該次 offer 起算 15 秒。期限內未收到相符的 answer 就結束這條連線。
 - answer 逾時或 3 次 restart 後仍無法恢復時，房主只在本機透過 `onPeerState` 發出 `{ memberId, state: 'failed' }`，透過 `onError` 回報帶 `memberId` 的 `PEER_FAILED`，並呼叫 `removePeer(memberId)`。
 - 房主踢人、或從 `room:members` 看到成員消失／`online: false` 時，房間層也呼叫冪等的 `removePeer(memberId)`，關閉連線並作廢該成員的協商代次。
 - `member:status` 一律由**收看者的房間層**回報該收看者自己的狀態。伺服器會以 `FORBIDDEN` 拒絕房主送出的 `member:status`。
+
+**收看者等待第一份 offer（P2P）**
+
+- 房間層以本次 `room:snapshot` 的 `stream.live` 為 true 或開播廣播 `stream:status { live: true, title, startedAt }` 確認直播。確認直播且 `await viewer.start()` 已完成信令訂閱後，才開始等待首份 offer 的計時，建議 20 秒。更新片名等重複開播廣播不重設計時。
+- 收到當次房主的第一份 offer 就取消計時。若訂閱就緒前已緩衝該 offer，直接交付，不啟動計時。停播、切換模式、換 WebSocket、`stop()` 或 `destroy()` 都取消舊計時。
+- 逾時仍無 offer 時，房間層銷毀該次傳輸，將收看狀態設為 `failed`，以 `PEER_FAILED` 顯示「重新連線」。按下後依下列流程取得新的 `peer:request`。
 
 **收看者手動重連（P2P）**
 
@@ -103,7 +115,7 @@
 3. **片源**：T-106 負責擷取與停止 capture track。換片與重播更新各 kind 的 sender，晚加入的成員也要取得最新 tracks、畫質與縮放（§1、§9）。
 4. **音訊不要開 `echoCancellation`／`noiseSuppression`／`autoGainControl`**：那是給麥克風用的，會修壞電影音效。captureStream 的軌道預設就是關的；`applyAudioEncoding()` 只設 maxBitrate，不要再動這三個。
 5. **每次建連線前取 ICE**：`common/ice.ts` 的 `fetchIceServers(roomId, token)`（或注入的 `options.fetchIceServers`）。TURN 憑證短效，不要快取。
-6. **信令格式**：`RtcPeerConnection` adapter（`common/rtc.ts`）將 candidate 正規化成 `{ candidate: string, ... }`（非空）或結束標記 `null`，offer／answer 的 `sdp` 保證為非空 string，可直接供 `SignalData` 使用。
+6. **信令格式**：`RtcPeerConnection` adapter（`common/rtc.ts`）將 candidate 正規化成 `{ candidate: string, ... }`（非空）或結束標記 `null`，offer／answer 的 `sdp` 保證為非空 string。P2P 傳輸組成 `SignalData` 時加上所屬 offer 的 `negotiationId`。
 7. **統計**：每 2 秒透過 `onStats` 回報，資料來源與缺值規則見 §8。
 8. **單元測試用 fake**：`RTCPeerConnection` 一律透過 `common/rtc.ts` 介面，測試用 `common/rtc-fake.ts` 的 `createFakePeerConnectionFactory()` 注入，不依賴真實瀏覽器（testing.md）。
 
@@ -290,6 +302,7 @@ class TransportError extends Error { code; message; memberId?; cause? }
 | `failed` | 連線失敗、無法自動恢復 | 房間層手動重連，P2P 依 §3 重建並在新 WebSocket 驗證，relay 在直播時重新拉取 WHEP |
 
 - `playing` 表示連線已通。**播放器（T-110）**偵測 `<video>` 播放停滯後回報 `buffering`，由收看者的房間層併入每 5 秒送出的 `member:status`。
+- P2P 等待第一份 offer 的 `failed` 由房間層依 §3 計時並回報給 UI 與 `member:status`。房間層可同時觀察直播狀態、信令訂閱與已緩衝的 offer。
 
 ### 生命週期與誰協調
 

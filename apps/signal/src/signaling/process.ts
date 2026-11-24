@@ -169,7 +169,7 @@ export function onAuth(
     idleSince: null,
   };
   // 房主每次驗證成功都是新的直播工作階段（重新整理、換分頁取代 4000、斷線重連）：
-  // 一律改為未開播。房主端有片源時再送 stream:status { live: true }，
+  // 一律改為未開播。房主端有片源時再送 stream:status { live: true, title }，
   // 伺服器才對所有在線收看者送 peer:request（protocol.md「房主重新連線」）。
   const hostRestarted = member.role === "host" && state.stream.live;
   if (hostRestarted) next = { ...next, stream: OFFLINE_STREAM };

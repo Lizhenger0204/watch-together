@@ -26,8 +26,10 @@ export * from "./common";
  * - `sendSignal`：送出 WebRTC 信令。房主送給某位收看者；收看者送給房主
  *   （protocol.md：收看者的 signal 伺服器只會轉給房主）。回傳是否成功送出
  *   （WebSocket 未連線等情況回 `false`，adapter 要把它轉成 `SIGNAL_ERROR`）。
- * - `onSignal`：收到信令（`from` = 來源 memberId；收看者收到時是房主，
- *   房主收到時是某位收看者）。
+ * - 每份 offer（含 ICE restart）用新的 `crypto.randomUUID()` 作為 negotiationId。
+ *   answer 與雙方 ICE（含 null）都帶回所屬 offer 的識別。
+ * - `onSignal`：房主按 from 找到收看者，收看者按房主的 offer 登記當次識別。
+ *   先比對 from、negotiationId，再套用 answer 或 ICE。不符就靜默丟棄。
  * - `onPeerRequest`：P2P 房主收到建連請求。同一成員再次被請求時，作廢舊協商
  *   代次（含在途建連、ICE 佇列、重試計時與統計）並關閉舊連線。
  */
@@ -42,7 +44,7 @@ export interface TransportSignal {
 /** 房主傳輸的整體狀態。 */
 export type HostTransportState = "idle" | "live" | "error";
 
-/** 收看者傳輸的狀態；沿用 protocol.md 的 MemberState。 */
+/** 沿用 MemberState。P2P 等首份 offer 逾時時，房間層以 PEER_FAILED 回報 failed。 */
 export type ViewerTransportState = MemberState;
 
 /**
@@ -126,6 +128,8 @@ export interface ViewerTransport {
    * - p2p：onSignal 就緒。房間層在 auth 前備妥接收器，待此處就緒再交付暫存信令。
    * 晚加入時依 snapshot 的 stream.live 決定是否立即 start()。手動重連 P2P 時，
    * 房間層先 destroy 舊傳輸，於新 WebSocket 重新驗證以觸發 peer:request（§3）。
+   * 房間層在確認直播且訂閱就緒後才計時等待首份 offer（建議 20 秒）。已緩衝的
+   * offer 也算收到。收到 offer、停播、切模式、stop 或 destroy 時取消計時。
    */
   start(): Promise<void>;
   /** 停止接收但保留物件（可再 start()）；會移除 remoteStream 舊 track。 */
