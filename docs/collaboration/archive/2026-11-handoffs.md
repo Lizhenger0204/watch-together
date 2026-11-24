@@ -321,3 +321,30 @@ Review（GPT 第二輪，監工核對）：結論「小修後可合併」。第�
 - 超過 20 KB 的檔案（`room-do.ts`、`api.test.ts`、`streaming.md`）原本就在 allowlist；`api.test.ts` 有一部分測試拆到新檔，所以變小了。
 - 監工重跑四項檢查全部通過，以 fast-forward 合併。
 
+### T-123（GPT，2026-11-25）— DONE
+1. 做了什麼：
+   - 新增 `scripts/signal-dev.mjs`：用 Node 讀 `SIGNAL_PORT`（預設 8787，必須是 1～65535 的整數，不合法時報錯並以 1 結束），直接用 Node 執行 wrangler 套件宣告的 CLI，不經過 cmd.exe。
+   - 收到 SIGINT／SIGTERM 時：macOS 轉送訊號；Windows 用 `taskkill /T /F` 結束 wrangler 和 workerd 整棵程序樹。
+   - `apps/signal` 的 dev 改成呼叫這個腳本。
+   - 根目錄的 test 加上 `node --test scripts/signal-dev.test.mjs`。
+   - development.md 同步更新。
+2. 介面變動：無，`WEB_PORT`／`SIGNAL_PORT` 的用法不變。
+3. 已知限制：Windows 尚未實機驗證。驗證步驟見下方「Windows 驗證步驟」。
+4. 驗證方式：
+   - macOS 實測兩種情況：預設 5173／8787，以及指定 5403／9017。兩者 `/api/health` 都正常；Ctrl+C 後 20 個追蹤到的程序全部結束，port 都已釋放。
+   - 四項檢查全部通過（啟動器 2 項、Vitest 467、e2e 4）。
+
+審查與合併（監工，2026-11-25）：
+- 只改 5 個檔案，沒有新增套件。
+- 監工核對腳本，並實測 `SIGNAL_PORT=abc`：顯示錯誤訊息，結束碼為 1。
+- 重跑四項檢查，全部通過，以 fast-forward 合併。
+
+Windows 驗證步驟（PowerShell，在專案根目錄執行）：
+1. 準備：`pnpm install --frozen-lockfile`。
+2. 預設 port：
+   - 執行 `Remove-Item Env:WEB_PORT, Env:SIGNAL_PORT -ErrorAction SilentlyContinue; pnpm dev`。
+   - 另開一個視窗，執行 `curl.exe -fsS http://localhost:5173/api/health` 和 `curl.exe -fsS http://127.0.0.1:8787/api/health`。
+   - 回到第一個視窗按 Ctrl+C。
+3. 指定 port：執行 `$env:WEB_PORT='5403'; $env:SIGNAL_PORT='9017'; pnpm dev`，用 5403／9017 重複上面的 curl 檢查，再按 Ctrl+C。
+4. 收尾檢查：執行 `Get-NetTCPConnection -State Listen -LocalPort 5173,8787,5403,9017 -ErrorAction SilentlyContinue`，應該沒有輸出。接著執行 `pnpm test`、`pnpm e2e`。
+
