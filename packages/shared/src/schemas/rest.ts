@@ -31,13 +31,18 @@ export const createRoomResponseSchema = z.object({
 });
 export type CreateRoomResponse = z.infer<typeof createRoomResponseSchema>;
 
+const roomUuidSchema = z.uuid().transform((id) => id.toLowerCase());
+
 // POST /api/rooms/join
 /** inviteCode 接受使用者原始輸入，伺服器用 normalizeInviteCode 正規化。 */
 export const joinRoomRequestSchema = z.object({
   inviteCode: z.string().min(1).max(32),
   nickname: nicknameSchema,
-  existingRoomId: z.uuid().optional(),
-  excludeRoomIds: z.array(z.uuid()).max(JOIN_MAX_EXCLUDED_ROOMS).optional(),
+  existingRoomId: roomUuidSchema.optional(),
+  excludeRoomIds: z
+    .array(roomUuidSchema)
+    .max(JOIN_MAX_EXCLUDED_ROOMS)
+    .optional(),
 });
 export type JoinRoomRequest = z.infer<typeof joinRoomRequestSchema>;
 export const joinRoomResponseSchema = z.object({

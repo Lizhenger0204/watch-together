@@ -91,3 +91,24 @@ test("滿房時排除名單命中與未命中的狀態和本文相同", async ()
   expect(responses[0]?.status).toBe(409);
   expect(JSON.parse(responses[0]!.body)).toEqual(errorBody("ROOM_FULL"));
 });
+
+test("大寫房號同樣排除新席位，也能沿用原身份", async () => {
+  const { roomId, memberId, hostToken, inviteCode } = await room();
+  const upper = roomId.toUpperCase();
+  const input = { inviteCode, nickname: "朋友" };
+  const excluded = await post(
+    joinPath,
+    JSON.stringify({ ...input, excludeRoomIds: [upper] }),
+  );
+  expect(excluded.status).toBe(404);
+  expect(await excluded.json()).toEqual(errorBody("ROOM_NOT_FOUND"));
+  const reused = await post(
+    joinPath,
+    JSON.stringify({ ...input, existingRoomId: upper }),
+    {
+      Authorization: `Bearer ${hostToken}`,
+    },
+  );
+  expect(reused.status).toBe(200);
+  expect(await reused.json()).toEqual({ roomId, memberId, reused: true });
+});

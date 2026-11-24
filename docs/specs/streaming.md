@@ -130,6 +130,8 @@
   舊 POST 明確未建立資源，或舊發布的 DELETE 成功後，才可送下一次 WHIP POST。刪除失敗要保留待清理資源，後續建立須等待清理完成。
 - `destroy()` 之後停止 UI 事件，晚到的成功回應仍要完成資源清理（WHEP 亦同）。上述序列由同一客戶端維持。跨分頁接手等情境若需要伺服器辨識發布世代，另開任務。
 - apps/signal 負責呼叫 Cloudflare Realtime API 建立 session、發布或拉取 track，並把房主發布的 track 名稱存在 RoomDO。實作參考 Cloudflare 官方 `realtime-examples/whip-whep-server`，先確認其授權條款。
+- P2P 模式下 WHIP、WHEP 都回 `409 STREAM_NOT_LIVE`。轉發切回 P2P 時，伺服器撤下當前發布並清理全部發布與訂閱，以免舊連線繼續傳輸。
+- 新 WHIP 成功登記時，伺服器取代舊發布，關閉舊發布與連到它的 WHEP tracks。上游要求額外協商時回 `503 RELAY_UNAVAILABLE`，並關閉已知已建立的 tracks。這些清理失敗時也由房間的清理待辦重試。
 - 房主未開播時，收看者的 WHEP 請求回 `409 STREAM_NOT_LIVE`，收看者等待開播廣播 `stream:status { live: true, title, startedAt }` 再請求。
 - WHIP / WHEP 請求一律帶 `Authorization: Bearer <token>`，並驗證角色（WHIP 只限房主）。
 - 在 Realtime 開好 session 後，若 RoomDO 拒絕登記（例如房間剛好關閉），伺服器立刻關掉這些 tracks。關不掉時，交給 RoomDO 記成清理待辦，由 alarm 重試關閉（重試規則同 room-and-invite.md 的關房清理），不能丟著不管。

@@ -18,12 +18,16 @@
 | POST | `/api/rooms/join` | 新加入免認證；沿用身份帶 Bearer | `{ inviteCode, nickname, existingRoomId?, excludeRoomIds? }` | 新加入 `200 { roomId, memberToken, memberId }`；沿用 `200 { roomId, memberId, reused: true }` |
 | POST | `/api/rooms/:roomId/invite-code` | host | — | `200 { inviteCode }`（重新產生） |
 | GET | `/api/rooms/:roomId/ice` | 任一成員 | — | `200 { iceServers: RTCIceServer[] }` |
-| POST | `/api/rooms/:roomId/whip` | host | SDP offer（`application/sdp`） | `201` SDP answer + `Location` |
-| POST | `/api/rooms/:roomId/whep` | member | SDP offer | `201` SDP answer + `Location`；未開播 `409 STREAM_NOT_LIVE` |
+| POST | `/api/rooms/:roomId/whip` | host | SDP offer（`application/sdp`） | `201` SDP answer + `Location`；P2P 模式回 `409 STREAM_NOT_LIVE` |
+| POST | `/api/rooms/:roomId/whep` | member | SDP offer | `201` SDP answer + `Location`；P2P 模式、未開播或無有效發布回 `409 STREAM_NOT_LIVE` |
 | DELETE | `<Location>` | 同建立者 | — | `200` |
 | GET | `/api/health` | 無 | — | `200 { ok: true, protocolVersion }` |
 
+WHIP 只需房間已切到 relay 即可發布。WHIP 的 409 訊息為「請先切換到轉發模式再發布」，WHEP 的 409 訊息為「目前沒有可收看的轉發直播」。兩者皆用通用 REST 錯誤格式。踢人或淘汰成員後，舊憑證再送 WHEP 回 `401 UNAUTHORIZED`。
+
 加入與沿用共用每 IP 每分鐘 10 次的限流。呼叫端可用 `excludeRoomIds` 列出已持有憑證的房間，禁止為這些房間配置新席位。帶 `existingRoomId` 時必須用 `Authorization: Bearer <token>`，且只嘗試沿用：邀請目錄與房間當下的碼皆符合、房號相同且憑證仍屬於成員，才回傳原 memberId 與 `reused: true`。客戶端保留原憑證與角色，沿用回應不含 token。鎖房與滿房不影響沿用。錯碼、錯房、沿用時的失效憑證及鎖房一律回相同的 `404 ROOM_NOT_FOUND`。只提供 header 或只提供房號也一律拒絕。新加入時，房間開放但已滿，一律回相同的 `409 ROOM_FULL` 本文。有空位才檢查排除名單，命中回 `404 ROOM_NOT_FOUND`。客戶端收到 404 或 409 都可嘗試沿用。
+
+加入請求中的 `existingRoomId` 與 `excludeRoomIds` 接受大小寫 UUID，shared schema 驗證後一律轉成小寫再比對。
 
 每次加入最多可列 16 個 `excludeRoomIds`。16 個 UUID 的緊湊 JSON 陣列為 625 位元組，足以在單次請求保護多房身份。整份加入請求的 UTF-8 本文上限為 2,048 位元組，保留暱稱、邀請碼、其他欄位與排版空間。恰好達到任一上限可接受。房號過多或實際本文超限都回 `400 BAD_REQUEST` 及通用錯誤本文。伺服器在解析 JSON 前計算串流位元組，超限即停止讀取。
 

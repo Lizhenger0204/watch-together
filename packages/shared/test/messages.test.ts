@@ -172,6 +172,13 @@ describe("REST 與常數", () => {
     };
     expect(joinRoomRequestSchema.parse(input)).toEqual(input);
     expect(
+      joinRoomRequestSchema.parse({
+        ...input,
+        existingRoomId: roomId.toUpperCase(),
+        excludeRoomIds: [roomId.toUpperCase()],
+      }),
+    ).toEqual(input);
+    expect(
       joinRoomRequestSchema.safeParse({ ...input, existingRoomId: "bad" })
         .success,
     ).toBe(false);
