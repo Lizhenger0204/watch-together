@@ -2,6 +2,7 @@ import {
   PROTOCOL_VERSION,
   parseClientMessage,
   type Role,
+  type ReuseRoomResponse,
 } from "@project/shared";
 import { DurableObject } from "cloudflare:workers";
 import { readRoomConfig, type RoomConfig } from "../../config";
@@ -207,6 +208,22 @@ export class RoomDO extends DurableObject<Env> {
     });
     await this.save();
     return { hostToken, memberId };
+  }
+
+  async reuseMember(
+    inviteCode: string,
+    token: string,
+  ): Promise<Result<ReuseRoomResponse>> {
+    const hash = await hashToken(token);
+    const room = this.room;
+    if (!room || room.inviteCode !== inviteCode)
+      return { ok: false, code: "ROOM_NOT_FOUND" };
+    const member = findMemberByTokenHash(room, hash);
+    if (!member) return { ok: false, code: "ROOM_NOT_FOUND" };
+    return {
+      ok: true,
+      value: { roomId: room.roomId, memberId: member.memberId, reused: true },
+    };
   }
 
   async join(input: {

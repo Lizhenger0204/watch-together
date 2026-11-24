@@ -4,18 +4,34 @@ import {
   joinRoomRequestSchema,
   normalizeInviteCode,
   type ErrorCode,
+  type ReuseRoomResponse,
 } from "@project/shared";
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import type { z } from "zod";
-import { AppError, errorBody, errorStatus } from "./errors";
+import { AppError, errorBody, errorStatus, type Result } from "./errors";
 import { createIceRoutes, type TurnEnv } from "./ice";
 import { createRelayRoutes, type RelayEnv } from "./relay";
 import { isRoomId } from "./room/crypto";
 import type { AuthedMember, Services } from "./services";
 
+export interface AppServices extends Services {
+  rooms: Omit<Services["rooms"], "joinRoom"> & {
+    joinRoom(
+      inviteCode: string,
+      nickname: string,
+      excludeRoomIds?: string[],
+    ): ReturnType<Services["rooms"]["joinRoom"]>;
+    reuseRoom(
+      inviteCode: string,
+      roomId: string,
+      token: string,
+    ): Promise<Result<ReuseRoomResponse>>;
+  };
+}
+
 export type AppEnv = {
   Bindings: TurnEnv & RelayEnv;
-  Variables: { services: Services; member: AuthedMember };
+  Variables: { services: AppServices; member: AuthedMember };
 };
 
 type Ctx = Context<AppEnv>;
@@ -63,7 +79,7 @@ export const requireHost: MiddlewareHandler<AppEnv> = async (c, next) =>
   });
 
 /** `resolveServices` 由 runtime 提供（Workers 或之後的 Node）。 */
-export function createApp(resolveServices: (c: Ctx) => Services) {
+export function createApp(resolveServices: (c: Ctx) => AppServices) {
   const app = new Hono<AppEnv>();
 
   app.use("/api/*", async (c, next) => {
@@ -87,11 +103,16 @@ export function createApp(resolveServices: (c: Ctx) => Services) {
     }
     const body = await parseBody(c, joinRoomRequestSchema);
     const inviteCode = normalizeInviteCode(body.inviteCode);
-    if (!inviteCode) return fail(c, "ROOM_NOT_FOUND");
-    const result = await c.var.services.rooms.joinRoom(
-      inviteCode,
-      body.nickname,
-    );
+    const token = bearerToken(c);
+    const hasAuthorization = c.req.header("Authorization") !== undefined;
+    if (!inviteCode || (body.existingRoomId ? !token : hasAuthorization)) {
+      return fail(c, "ROOM_NOT_FOUND");
+    }
+    const { rooms } = c.var.services;
+    const result =
+      body.existingRoomId && token
+        ? await rooms.reuseRoom(inviteCode, body.existingRoomId, token)
+        : await rooms.joinRoom(inviteCode, body.nickname, body.excludeRoomIds);
     return result.ok ? c.json(result.value) : fail(c, result.code);
   });
 

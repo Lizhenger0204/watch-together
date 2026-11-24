@@ -4,6 +4,8 @@ import {
   iceResponseSchema,
   joinRoomResponseSchema,
   parseServerMessage,
+  regenerateInviteCodeResponseSchema,
+  reuseRoomResponseSchema,
   type ServerMessage,
 } from "@project/shared";
 import {
@@ -292,6 +294,96 @@ describe("REST", () => {
       });
       expect(res.status).toBe(404);
     }
+  });
+
+  test("容量七席：換碼後先沿用原成員，鎖房與滿房仍可沿用，第七位新人可加入", async () => {
+    const room = await createRoom();
+    const member = await joinRoom(room.inviteCode);
+    for (let i = 0; i < 5; i++) await joinRoom(room.inviteCode);
+    const rotated = await post(
+      `/api/rooms/${room.roomId}/invite-code`,
+      undefined,
+      room.hostToken,
+    );
+    const { inviteCode } = regenerateInviteCodeResponseSchema.parse(
+      await rotated.json(),
+    );
+    const host = await connect(room.roomId);
+    host.auth(room.hostToken);
+    await host.next("room:snapshot");
+    const body = {
+      existingRoomId: room.roomId,
+      inviteCode,
+      nickname: "改名無效",
+    };
+    async function expectReuse() {
+      const response = await post("/api/rooms/join", body, member.memberToken);
+      expect(response.status).toBe(200);
+      const original = reuseRoomResponseSchema.parse(await response.json());
+      expect(original.memberId).toBe(member.memberId);
+      expect(original.roomId).toBe(member.roomId);
+      expect(original.reused).toBe(true);
+    }
+    const lock = async (locked: boolean) => {
+      host.send({ type: "room:update", locked, reqId: "lock" });
+      expect(await host.next("ack")).toMatchObject({ ok: true });
+    };
+    try {
+      await expectReuse();
+      await lock(true);
+      await expectReuse();
+      await lock(false);
+      await joinRoom(inviteCode, "第七位");
+      expect(
+        (await post("/api/rooms/join", { inviteCode, nickname: "第八位" }))
+          .status,
+      ).toBe(409);
+      await expectReuse();
+      const priorHost = await post("/api/rooms/join", body, room.hostToken);
+      expect(await priorHost.json()).toEqual({
+        roomId: room.roomId,
+        memberId: room.memberId,
+        reused: true,
+      });
+    } finally {
+      host.close();
+    }
+  });
+
+  test("被踢、錯房、舊碼、缺憑證及禁止增配都回相同 404，不新增席位", async () => {
+    const room = await createRoom();
+    const member = await joinRoom(room.inviteCode);
+    const host = await connect(room.roomId);
+    host.auth(room.hostToken);
+    await host.next("room:snapshot");
+    host.send({ type: "room:kick", memberId: member.memberId, reqId: "kick" });
+    expect(await host.next("ack")).toMatchObject({ ok: true });
+    const plain = { inviteCode: room.inviteCode, nickname: "朋友" };
+    const scoped = { ...plain, existingRoomId: room.roomId };
+    const baseline = await post("/api/rooms/join", {
+      ...plain,
+      inviteCode: "invalid",
+    });
+    const error = await baseline.json();
+    for (const [body, token] of [
+      [scoped, member.memberToken],
+      [scoped, undefined],
+      [plain, room.hostToken],
+      [{ ...scoped, existingRoomId: crypto.randomUUID() }, room.hostToken],
+      [{ ...scoped, inviteCode: "invalid" }, room.hostToken],
+      [{ ...plain, excludeRoomIds: [room.roomId] }, undefined],
+    ] as const) {
+      const result = await post("/api/rooms/join", body, token);
+      expect(result.status).toBe(404);
+      expect(await result.json()).toEqual(error);
+    }
+    expect(
+      await runInDurableObject(
+        env.ROOM.getByName(room.roomId),
+        (instance) => internals(instance).room!.members.length,
+      ),
+    ).toBe(1);
+    host.close();
   });
 
   test("ICE：需要成員 token，回傳 STUN", async () => {
@@ -603,6 +695,36 @@ describe("限流與生命週期", () => {
       expect(statuses).toEqual([...Array<number>(10).fill(404), 429]);
     },
   );
+
+  test("匿名加入與沿用身份共用同一 IP 的限額", async () => {
+    const room = await createRoom();
+    const app = createApp(workersServices);
+    for (let i = 0; i < 11; i++) {
+      const scoped = i % 2 === 0;
+      const res = await app.request(
+        `${BASE}/api/rooms/join`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "CF-Connecting-IP": "198.51.100.86",
+            ...(scoped ? { Authorization: `Bearer ${room.hostToken}` } : {}),
+          },
+          body: JSON.stringify(
+            scoped
+              ? {
+                  existingRoomId: room.roomId,
+                  inviteCode: room.inviteCode,
+                  nickname: "房主",
+                }
+              : { inviteCode: "invalid", nickname: "朋友" },
+          ),
+        },
+        { ...env, JOIN_RATE_LIMITER: undefined },
+      );
+      expect(res.status).toBe(i === 10 ? 429 : scoped ? 200 : 404);
+    }
+  });
 
   test("同一 IP 加入超過每分鐘 10 次回 429", async () => {
     const statuses: number[] = [];

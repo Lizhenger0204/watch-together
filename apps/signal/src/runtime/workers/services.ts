@@ -1,7 +1,6 @@
 import type { Context } from "hono";
-import type { AppEnv } from "../../app";
+import type { AppEnv, AppServices } from "../../app";
 import { JOIN_RATE_LIMIT, createMemoryRateLimiter } from "../../rate-limit";
-import type { Services } from "../../services";
 import { isRoomId } from "../../room/crypto";
 import { INVITE_DIRECTORY_NAME, type Env } from "./env";
 import { roomClosedSocket } from "./room-closed-socket";
@@ -10,7 +9,7 @@ import { roomClosedSocket } from "./room-closed-socket";
 const fallbackJoinLimiter = createMemoryRateLimiter(JOIN_RATE_LIMIT);
 let warnedMissingLimiter = false;
 
-export function workersServices(c: Context<AppEnv>): Services {
+export function workersServices(c: Context<AppEnv>): AppServices {
   const env = c.env as unknown as Env;
   const directory = () => env.INVITE_DIRECTORY.getByName(INVITE_DIRECTORY_NAME);
   const room = (roomId: string) => env.ROOM.getByName(roomId);
@@ -27,9 +26,17 @@ export function workersServices(c: Context<AppEnv>): Services {
         });
         return { roomId, inviteCode, hostToken, memberId };
       },
-      async joinRoom(inviteCode, nickname) {
+      async reuseRoom(inviteCode, roomId, token) {
+        if ((await directory().lookup(inviteCode)) !== roomId) {
+          return { ok: false, code: "ROOM_NOT_FOUND" };
+        }
+        return room(roomId).reuseMember(inviteCode, token);
+      },
+      async joinRoom(inviteCode, nickname, excludeRoomIds) {
         const roomId = await directory().lookup(inviteCode);
-        if (!roomId) return { ok: false, code: "ROOM_NOT_FOUND" };
+        if (!roomId || excludeRoomIds?.includes(roomId)) {
+          return { ok: false, code: "ROOM_NOT_FOUND" };
+        }
         const result = await room(roomId).join({ inviteCode, nickname });
         return result.ok
           ? { ok: true, value: { roomId, ...result.value } }
