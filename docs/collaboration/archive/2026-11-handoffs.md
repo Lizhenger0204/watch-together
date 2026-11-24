@@ -298,3 +298,26 @@ Review（GPT 第二輪，監工核對）：結論「小修後可合併」。第�
 - UUID 大小寫 → T-120
 
 合併：四項檢查全過（Vitest 455 = web／shared 347 + signal 108，e2e 4），fast-forward 合併。
+
+### T-120（GPT，2026-11-24）— DONE
+1. 做了什麼：
+   - 房主踢人、收看者最後一條連線關閉、新人加入時淘汰離線成員：都會清理該成員的全部 WHEP；只有離線時保留席位供重連。房間變更、清理待辦、重試狀態與 alarm 在同一筆交易提交（`runtime/workers/room-relay.ts`）。
+   - p2p 模式下，WHIP／WHEP 在呼叫 SFU 之前就回 `409 STREAM_NOT_LIVE`；切回 p2p 時撤下所有發布與訂閱。
+   - 新的 WHIP 登記與撤下舊發布在同一筆交易完成，並關閉舊發布與訂閱它的 WHEP。
+   - 上游要求額外協商、關閉 track 也失敗時，已知的 session 與 tracks 會排進清理待辦。
+   - `existingRoomId`／`excludeRoomIds` 驗證後統一轉成小寫。
+   - 成員有 `relayGeneration`，被移除後才到的登記會被拒絕。
+2. 介面變動：協定版本維持 1。被踢或被淘汰後，新的 WHEP 回 401；登記時才發現已被移除則回 403，並回滾 tracks；建立連線期間切離 relay 或建立者離線，回 409。
+3. 已知限制：SFU 暫時關不掉 tracks 時，既有媒體可能持續到重試成功；真實 SFU 留待 T-113。前端的 409 提示區分交給 T-122。
+4. 驗證方式：四項檢查（Vitest 467 = web／shared 347 + signal 120，e2e 4）；5 個反向實驗都讓對應的測試失敗。
+
+審查與合併（監工，2026-11-24）：
+- 變更 17 個檔案，都在授權範圍內，`apps/web` 沒有變更。
+- 監工逐段核對 `room-relay.ts`：
+  - 成員被移除時只撤下他的 WHEP（有 `publicationId` 的資源）。
+  - 新的 WHIP 撤下舊發布與綁定的訂閱。
+  - 用 `relayGeneration` 擋掉過期的登記。
+- 唯一新增的 log 只記事件名稱，不含憑證。
+- 超過 20 KB 的檔案（`room-do.ts`、`api.test.ts`、`streaming.md`）原本就在 allowlist；`api.test.ts` 有一部分測試拆到新檔，所以變小了。
+- 監工重跑四項檢查全部通過，以 fast-forward 合併。
+
