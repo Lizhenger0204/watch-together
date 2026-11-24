@@ -89,7 +89,22 @@ export class RoomDO extends DurableObject<Env> {
     void ctx.blockConcurrencyWhile(async () => {
       this.room = (await ctx.storage.get<RoomState>(STATE_KEY)) ?? null;
       this.closing = (await ctx.storage.get<Closing>(CLOSING_KEY)) ?? null;
-      this.retry = (await ctx.storage.get<Retry>(RETRY_KEY)) ?? null;
+      this.retry = await ctx.storage.transaction(async (txn) => {
+        const saved = await txn.get<Retry>(RETRY_KEY);
+        if (saved?.at === null) return saved;
+        if (!saved && !this.closing) {
+          const relay = await txn.get<RelayState>(RELAY_KEY);
+          if (!Object.keys(relay?.orphans ?? {}).length) return null;
+        }
+        // 舊版可能已寫入待辦才中斷；喚醒時補排，保留已累積的嘗試次數。
+        const retry = saved ?? {
+          attempts: 0,
+          at: Date.now() + CLEANUP_RETRY_BASE_MS,
+        };
+        if (!saved) await txn.put(RETRY_KEY, retry);
+        await this.writeAlarm(txn, retry);
+        return retry;
+      });
     });
   }
 
@@ -433,9 +448,12 @@ export class RoomDO extends DurableObject<Env> {
    */
   override async alarm() {
     const now = Date.now();
-    // 房間已關閉時，alarm 只會是為了清理而排的，響了就做。
-    if (this.retry?.at != null && (now >= this.retry.at || !this.room)) {
-      await this.exclusive(() => this.runCleanup());
+    if (this.retry?.at != null && now >= this.retry.at) {
+      await this.exclusive(async () => {
+        // 同一個舊 alarm 可能被重送，或在排隊時已有另一輪更新了期限。
+        if (this.retry?.at != null && Date.now() >= this.retry.at)
+          await this.runCleanup();
+      });
     }
     if (this.room && now >= closeAt(this.room, this.config)) {
       await this.closeRoom("expired");
@@ -467,7 +485,7 @@ export class RoomDO extends DurableObject<Env> {
         inviteCodes: [room.inviteCode],
         rotation: (await this.ctx.storage.get<Rotation>(ROTATION_KEY)) ?? null,
       };
-      const retry: Retry = { attempts: 0, at: Date.now() };
+      const retry = { attempts: 0, at: Date.now() };
       // 先提交「已關房」再通知與斷線：提交失敗時房間維持原狀，下次 alarm 再關。
       // 之後清理外部資源失敗、甚至 DO 重啟，alarm 都能接著重試。
       await this.ctx.storage.transaction(async (txn) => {
@@ -475,7 +493,7 @@ export class RoomDO extends DurableObject<Env> {
         await txn.delete(ROTATION_KEY);
         await txn.put(CLOSING_KEY, closing);
         await txn.put(RETRY_KEY, retry);
-        await txn.setAlarm(retry.at!);
+        await txn.setAlarm(retry.at);
       });
       const online = this.online();
       this.room = null;

@@ -659,13 +659,18 @@ describe("關房清理與休眠", () => {
     const directory = env.INVITE_DIRECTORY.getByName("global");
     await runInDurableObject(directory, async (instance, state) => {
       const before = await state.storage.list();
+      const direct = vi
+        .spyOn(state.storage, "delete")
+        .mockRejectedValueOnce(new Error("目錄提交失敗"));
       const transaction = state.storage.transaction.bind(state.storage);
       const fault = vi
         .spyOn(state.storage, "transaction")
         .mockImplementationOnce((work) =>
           transaction(async (txn) => {
-            await work(txn);
-            throw new Error("目錄提交失敗");
+            vi.spyOn(txn, "delete").mockRejectedValueOnce(
+              new Error("目錄提交失敗"),
+            );
+            return work(txn);
           }),
         );
       try {
@@ -674,7 +679,9 @@ describe("關房清理與休眠", () => {
         ).rejects.toThrow("目錄提交失敗");
       } finally {
         fault.mockRestore();
+        direct.mockRestore();
       }
+      expect((await state.storage.list()).size).toBe(before.size);
       expect(await state.storage.list()).toEqual(before);
       const code = await instance.replace(
         room.inviteCode,
@@ -689,12 +696,66 @@ describe("關房清理與休眠", () => {
     });
   });
 
+  test.each([
+    undefined,
+    { attempts: 3, at: Date.now() + 60000 },
+    { attempts: 12, at: null },
+  ])(
+    "休眠還原舊版沒有 alarm 的清理待辦，保留既有重試進度 %j",
+    async (retry) => {
+      const stub = env.ROOM.getByName(crypto.randomUUID());
+      await runInDurableObject(stub, async (_instance, state) => {
+        await state.storage.put("relay", {
+          orphans: { late: relayResource("late", "owner") },
+        });
+        if (retry) await state.storage.put("retry", retry);
+        const startup = vi.spyOn(state, "blockConcurrencyWhile");
+        try {
+          new RoomDO(state, env as unknown as Env);
+          expect(startup).toHaveBeenCalledOnce();
+          await startup.mock.results[0]?.value;
+        } finally {
+          startup.mockRestore();
+        }
+        const saved = await state.storage.get<{
+          attempts: number;
+          at: number | null;
+        }>("retry");
+        expect(saved?.attempts).toBe(retry?.attempts ?? 0);
+        if (retry) expect(saved?.at).toBe(retry.at);
+        else expect(saved?.at).toBeGreaterThan(0);
+        expect(await state.storage.getAlarm()).toBe(saved?.at);
+      });
+    },
+  );
+
+  test("關房後收到較早的舊 alarm，等持久化期限才清理", async () => {
+    const stub = env.ROOM.getByName(crypto.randomUUID());
+    const closed = fakeSfu();
+    await runInDurableObject(stub, async (instance) => {
+      const target = internals(instance);
+      target.env = { ...target.env, ...REALTIME };
+      await instance.retainRelayCleanup(relayResource("late", "owner"));
+    });
+    const at = await alarmTime(stub);
+    expect(at).not.toBeNull();
+    expect(await runAlarmAt(stub, at! - 1)).toBe(true);
+    expect(closed).toEqual([]);
+    expect(await alarmTime(stub)).toBe(at);
+    expect(await runAlarmAt(stub, at!)).toBe(true);
+    expect(closed).toEqual(["session-late"]);
+    expect(await alarmTime(stub)).toBeNull();
+  });
+
   test("清理待辦排 alarm 失敗時，待辦與重試狀態一起回滾；重試保留較早的驗證期限", async () => {
     const room = await createRoom();
     const socket = await connect(room.roomId);
     const stub = env.ROOM.getByName(room.roomId);
     await runInDurableObject(stub, async (instance, state) => {
       const deadline = await state.storage.getAlarm();
+      const direct = vi
+        .spyOn(state.storage, "setAlarm")
+        .mockRejectedValueOnce(new Error("無法排 alarm"));
       const transaction = state.storage.transaction.bind(state.storage);
       const fault = vi
         .spyOn(state.storage, "transaction")
@@ -713,6 +774,7 @@ describe("關房清理與休眠", () => {
         );
       } finally {
         fault.mockRestore();
+        direct.mockRestore();
       }
       expect(await state.storage.get("relay")).toBeUndefined();
       expect(await state.storage.get("retry")).toBeUndefined();
