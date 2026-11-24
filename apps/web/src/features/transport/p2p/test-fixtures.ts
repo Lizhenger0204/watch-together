@@ -7,29 +7,10 @@ import type {
 } from "../index";
 import { Emitter } from "../common";
 import { createFakePeerConnectionFactory } from "../common/rtc-fake";
-import { createP2PHostTransport, createP2PViewerTransport } from "./index";
+import { TestStream, track } from "../common/test-media";
 
-class TestStream {
-  private tracks: MediaStreamTrack[];
-  constructor(tracks: MediaStreamTrack[] = []) {
-    this.tracks = [...tracks];
-  }
-  getTracks() {
-    return [...this.tracks];
-  }
-  getVideoTracks() {
-    return this.tracks.filter((track) => track.kind === "video");
-  }
-  getAudioTracks() {
-    return this.tracks.filter((track) => track.kind === "audio");
-  }
-  addTrack(track: MediaStreamTrack) {
-    if (!this.tracks.includes(track)) this.tracks.push(track);
-  }
-  removeTrack(track: MediaStreamTrack) {
-    this.tracks = this.tracks.filter((current) => current !== track);
-  }
-}
+export { track };
+import { createP2PHostTransport, createP2PViewerTransport } from "./index";
 
 export function useRtcFakes() {
   beforeEach(() => {
@@ -41,17 +22,6 @@ export function useRtcFakes() {
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
-}
-
-export function track(kind: "audio" | "video", height?: number) {
-  return {
-    id: crypto.randomUUID(),
-    kind,
-    contentHint: "",
-    readyState: "live",
-    getSettings: () => ({ height }),
-    stop: vi.fn(),
-  } as unknown as MediaStreamTrack;
 }
 
 export class TestSignal implements TransportSignal {

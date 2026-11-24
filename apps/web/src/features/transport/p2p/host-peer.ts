@@ -11,17 +11,14 @@ import {
   applyVideoEncoding,
   browserCodecCapabilities,
   browserPeerConnectionFactory,
+  isIceConnected,
+  loadIceServers,
   TransportError,
   type RtcPeerConnection,
   type RtcRtpSender,
   type TransportStats,
 } from "../common";
-import {
-  isIceConnected,
-  loadIceServers,
-  Negotiation,
-  peerError,
-} from "./negotiation";
+import { Negotiation, peerError } from "./negotiation";
 
 export type MediaKind = "video" | "audio";
 export interface HostSource {

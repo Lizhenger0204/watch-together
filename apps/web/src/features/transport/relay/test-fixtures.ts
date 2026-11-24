@@ -5,6 +5,9 @@ import type {
   ViewerTransportOptions,
 } from "../index";
 import { createFakePeerConnectionFactory } from "../common/rtc-fake";
+import { TestStream, track } from "../common/test-media";
+
+export { track };
 import { createRelayHostTransport, createRelayViewerTransport } from "./index";
 import { resetPublishQueues } from "./publish-queue";
 
@@ -12,39 +15,6 @@ export const ROOM = "0b6f6e2a-1c2d-4e5f-8a9b-0c1d2e3f4a5b";
 export const TOKEN = "secret-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 export const location = (id = "11111111-2222-3333-4444-555555555555") =>
   `/api/rooms/${ROOM}/relay/${id}`;
-
-class TestStream {
-  private tracks: MediaStreamTrack[];
-  constructor(tracks: MediaStreamTrack[] = []) {
-    this.tracks = [...tracks];
-  }
-  getTracks() {
-    return [...this.tracks];
-  }
-  getVideoTracks() {
-    return this.tracks.filter((track) => track.kind === "video");
-  }
-  getAudioTracks() {
-    return this.tracks.filter((track) => track.kind === "audio");
-  }
-  addTrack(track: MediaStreamTrack) {
-    if (!this.tracks.includes(track)) this.tracks.push(track);
-  }
-  removeTrack(track: MediaStreamTrack) {
-    this.tracks = this.tracks.filter((current) => current !== track);
-  }
-}
-
-export function track(kind: "audio" | "video", height?: number) {
-  return {
-    id: crypto.randomUUID(),
-    kind,
-    contentHint: "",
-    readyState: "live",
-    getSettings: () => ({ height }),
-    stop: vi.fn(),
-  } as unknown as MediaStreamTrack;
-}
 
 /** 一則還沒回應的 HTTP 請求。 */
 export interface PendingRequest {

@@ -3,17 +3,13 @@ import type { CreateViewerTransport, ViewerTransportState } from "../index";
 import {
   browserPeerConnectionFactory,
   Emitter,
+  isIceConnected,
+  loadIceServers,
   TransportError,
   type RtcPeerConnection,
   type TransportStats,
 } from "../common";
-import {
-  isIceConnected,
-  loadIceServers,
-  Negotiation,
-  peerError,
-  subscribeUntilStopped,
-} from "./negotiation";
+import { Negotiation, peerError, subscribeUntilStopped } from "./negotiation";
 
 interface Reception {
   round: Negotiation;

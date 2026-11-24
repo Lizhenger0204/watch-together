@@ -1,7 +1,6 @@
 import type { SignalData } from "@project/shared";
-import type { TransportSignal, ViewerTransportOptions } from "../index";
+import type { TransportSignal } from "../index";
 import {
-  fetchIceServers,
   StatsSampler,
   TransportError,
   type RtcIceCandidate,
@@ -47,26 +46,6 @@ function fragmentOf(candidate: Candidate) {
     candidate?.usernameFragment ??
     /(?:^|\s)ufrag\s+(\S+)/.exec(candidate?.candidate ?? "")?.[1]
   );
-}
-
-export function isIceConnected(pc: RtcPeerConnection) {
-  return (
-    pc.iceConnectionState === "connected" ||
-    pc.iceConnectionState === "completed"
-  );
-}
-
-export async function loadIceServers(
-  options: ViewerTransportOptions,
-  signal: AbortSignal,
-) {
-  try {
-    return await (options.fetchIceServers
-      ? options.fetchIceServers()
-      : fetchIceServers(options.roomId, options.token, { signal }));
-  } catch {
-    throw new TransportError("ICE_UNAVAILABLE", "無法取得 ICE 設定");
-  }
 }
 
 export function peerError(cause: unknown, memberId?: string) {

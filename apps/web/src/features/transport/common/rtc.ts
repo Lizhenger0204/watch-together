@@ -99,6 +99,14 @@ export type PeerConnectionFactory = (
   configuration: RTCConfiguration,
 ) => RtcPeerConnection;
 
+/** ICE 已連通（`connected` 或 `completed`）。 */
+export function isIceConnected(pc: RtcPeerConnection) {
+  return (
+    pc.iceConnectionState === "connected" ||
+    pc.iceConnectionState === "completed"
+  );
+}
+
 // ── 瀏覽器 adapter ──────────────────────────────────────
 
 function toKind(track: MediaStreamTrack | null): "audio" | "video" {
