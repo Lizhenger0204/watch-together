@@ -80,6 +80,17 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
   ? Omit<T, K>
   : never;
 
+/**
+ * 連線中斷（尚未連上、或等待 ack 時 socket 被清掉）造成的請求失敗，不是伺服器拒絕。
+ * 呼叫端應保留意圖，等重新連線、重新驗證後再送。
+ */
+export class SignalDisconnectedError extends ApiError {
+  constructor() {
+    super("INTERNAL");
+    this.name = "SignalDisconnectedError";
+  }
+}
+
 export class SignalClient {
   private socket: SocketLike | null = null;
   private state: ConnectionState = { status: "connecting" };
@@ -155,7 +166,7 @@ export class SignalClient {
     const reqId = String(this.nextReqId++);
     return new Promise((resolve, reject) => {
       if (!this.send({ ...message, reqId } as Outgoing)) {
-        reject(new ApiError("INTERNAL"));
+        reject(new SignalDisconnectedError());
         return;
       }
       const timer = this.timers.setTimeout(() => {
@@ -288,7 +299,7 @@ export class SignalClient {
     }
     for (const [, entry] of this.pending) {
       this.timers.clearTimeout(entry.timer);
-      entry.reject(new ApiError("INTERNAL"));
+      entry.reject(new SignalDisconnectedError());
     }
     this.pending.clear();
   }

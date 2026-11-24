@@ -152,6 +152,23 @@ describe("afterStreamCommandFailed（開播失敗後手動重試）", () => {
     ).toEqual({ live: false, title: null });
   });
 
+  test("換片途中斷線（不是伺服器拒絕）：保留意圖，重新驗證後在新連線自動再送開播", () => {
+    const after = afterStreamCommandFailed(start, start, "disconnected");
+    expect(after).toEqual({ lastSent: null, cancelIntent: false });
+    // 重新驗證後 snapshot 是未開播、意圖仍在：自動補送
+    expect(
+      nextStreamCommand(input({ session: 2, lastSent: after.lastSent })),
+    ).toEqual(start.command);
+  });
+
+  test("較舊的請求因斷線失敗：同樣不動目前的紀錄", () => {
+    const newer = { session: 2, command: { live: true, title: "電影" } };
+    expect(afterStreamCommandFailed(newer, start, "disconnected")).toEqual({
+      lastSent: newer,
+      cancelIntent: false,
+    });
+  });
+
   test("失敗的是較舊的請求：保留目前的紀錄與意圖", () => {
     const newer = { session: 2, command: { live: true, title: "電影" } };
     expect(afterStreamCommandFailed(newer, start)).toEqual({

@@ -55,7 +55,7 @@ export function nextStreamCommand(
 export type SentCommand = { session: number; command: StreamCommand };
 
 /**
- * stream:status 被伺服器拒絕（ack 失敗）後的處理。
+ * stream:status 失敗後的處理。`reason` 區分伺服器拒絕（ack 失敗）與連線中斷。
  * - 忘掉這筆已送出的紀錄，否則 nextStreamCommand 會當成「已經送過」，手動重試也不會再送。
  * - 開播失敗時一併取消開播意圖：按鈕回到「開始直播」，由房主看完錯誤後手動重試，
  *   不在背景自動重送（伺服器持續拒絕時會一直失敗）。
@@ -64,7 +64,11 @@ export type SentCommand = { session: number; command: StreamCommand };
 export function afterStreamCommandFailed(
   lastSent: SentCommand | null,
   failed: SentCommand,
+  reason: "rejected" | "disconnected" = "rejected",
 ): { lastSent: SentCommand | null; cancelIntent: boolean } {
   if (lastSent !== failed) return { lastSent, cancelIntent: false };
+  // 連線中斷不是伺服器拒絕：保留意圖，重新驗證後由 nextStreamCommand 在新連線再送一次
+  //（protocol.md「房主重新連線」第 3 步）。
+  if (reason === "disconnected") return { lastSent: null, cancelIntent: false };
   return { lastSent: null, cancelIntent: failed.command.live };
 }

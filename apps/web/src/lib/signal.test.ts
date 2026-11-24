@@ -3,6 +3,7 @@ import { ApiError } from "./api";
 import {
   IDENTITY_CHECK_AFTER_ATTEMPTS,
   SignalClient,
+  SignalDisconnectedError,
   type SignalClientOptions,
   type SocketLike,
   type Timers,
@@ -195,6 +196,29 @@ describe("SignalClient", () => {
     const pending = client.request({ type: "room:update", locked: true });
     current().drop(1006);
     await expect(pending).rejects.toBeInstanceOf(ApiError);
+    // 斷線造成的失敗要能和伺服器拒絕區分（房主換片途中斷線不可取消開播意圖）
+    await expect(pending).rejects.toBeInstanceOf(SignalDisconnectedError);
+  });
+
+  test("未連上就送 request 也是連線中斷；伺服器拒絕則不是", async () => {
+    const offline = setup();
+    await expect(
+      offline.client.request({ type: "room:update", locked: true }),
+    ).rejects.toBeInstanceOf(SignalDisconnectedError);
+
+    const { client, current, connect } = setup();
+    connect();
+    const bad = client.request({ type: "room:kick", memberId: "x" });
+    const [ask] = current().sent.slice(1) as { reqId: string }[];
+    current().receive({
+      type: "ack",
+      reqId: ask!.reqId,
+      ok: false,
+      code: "FORBIDDEN",
+    });
+    const error = await bad.catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).not.toBeInstanceOf(SignalDisconnectedError);
   });
 
   test("stop 後不再重連", () => {

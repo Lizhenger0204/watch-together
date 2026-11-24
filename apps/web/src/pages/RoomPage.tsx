@@ -16,7 +16,7 @@ import {
 import { roomExit, type RoomView } from "../features/room/room-state";
 import { ApiError } from "../lib/api";
 import { navigate } from "../lib/router";
-import type { ConnectionState } from "../lib/signal";
+import { SignalDisconnectedError, type ConnectionState } from "../lib/signal";
 import { liveIntent, roomToken } from "../lib/storage";
 
 type Room = ReturnType<typeof useRoom>;
@@ -97,13 +97,22 @@ function useLiveIntent(
     lastSent.current = sent;
     setError("");
     actions.setStream(command.live, command.title)?.catch((e: unknown) => {
-      const next = afterStreamCommandFailed(lastSent.current, sent);
+      // 較舊的請求失敗：之後已送出新的，不動紀錄、意圖，也不顯示錯誤。
+      if (lastSent.current !== sent) return;
+      const disconnected = e instanceof SignalDisconnectedError;
+      const next = afterStreamCommandFailed(
+        lastSent.current,
+        sent,
+        disconnected ? "disconnected" : "rejected",
+      );
       lastSent.current = next.lastSent;
       if (next.cancelIntent) {
         liveIntent.set(roomId, false);
         setIntentState(false);
       }
-      setError(e instanceof ApiError ? e.message : "操作失敗，請稍後再試。");
+      // 連線中斷由連線狀態提示，重新連線後會自動再送。
+      if (!disconnected)
+        setError(e instanceof ApiError ? e.message : "操作失敗，請稍後再試。");
     });
   }, [intent, connected, session, stream, ready, title, actions, roomId]);
 
@@ -206,7 +215,7 @@ function ViewerView({ room }: { room: Room }) {
   const host = view.members.find((m) => m.role === "host");
   return (
     <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
-      <section className="grid content-start gap-3">
+      <section className="grid grid-cols-[minmax(0,1fr)] content-start gap-3">
         <div
           className="grid aspect-video grid-cols-[minmax(0,1fr)] place-items-center rounded-2xl bg-black text-center"
           data-testid="viewer-stage"
