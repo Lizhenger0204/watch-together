@@ -4,8 +4,8 @@
  * 這裡只放「型別與介面」，不放實作。實作由：
  * - `p2p/`（GPT）：房主 mesh、收看者連線、信令處理。
  * - `relay/`（Claude）：WHIP / WHEP 客戶端。
- * 各模式實作都實作 `CreateHostTransport`／`CreateViewerTransport`，之後再由
- * 上層（房間 hook）依 `mode` 選用；切換模式 = 拆掉舊傳輸、建立新傳輸。
+ * 兩種模式共用 `CreateHostTransport`／`CreateViewerTransport`。整合後由本檔的
+ * 工廠依 `mode` 選用實作，房間 hook 負責切模式時銷毀舊傳輸、建立新傳輸。
  *
  * 本層是純 TS，不 import React。RTCPeerConnection 一律透過
  * `common/rtc.ts` 的介面，測試注入 `common/rtc-fake.ts` 的 fake。
@@ -28,7 +28,8 @@ export * from "./common";
  *   （WebSocket 未連線等情況回 `false`，adapter 要把它轉成 `SIGNAL_ERROR`）。
  * - `onSignal`：收到信令（`from` = 來源 memberId；收看者收到時是房主，
  *   房主收到時是某位收看者）。
- * - `onPeerRequest`：**僅房主**。有新收看者上線、或需要重連時觸發。
+ * - `onPeerRequest`：P2P 房主收到建連請求。同一成員再次被請求時，作廢舊協商
+ *   代次（含在途建連、ICE 佇列、重試計時與統計）並關閉舊連線。
  */
 export interface TransportSignal {
   sendSignal(to: string, data: SignalData): boolean;
@@ -47,61 +48,64 @@ export type ViewerTransportState = MemberState;
 /**
  * 房主傳輸（送出 stream、管理對每位收看者的連線）。
  *
- * track 所有權：captureStream 產生的 track 由 `features/source/`（T-106）持有與
- * 停止，**傳輸層絕不 `stop()` 這些 track**。`destroy()` 只釋放 RTCPeerConnection
- * 與監聽，不碰 capture track。下一個傳輸（切換模式、重連）沿用同一份 capture
- * stream 與 track。
+ * T-106 每次選檔擷取一份 stream，持有並負責停止它的 tracks。切模式或重連時，
+ * 房間層用 T-106 當下最新的 stream 建立下一個傳輸。
  */
 export interface HostTransport {
   /** 建立時的模式；切換模式是「拆掉重建」，不是改這個欄位。 */
   readonly mode: Mode;
-  /** 送出的串流（房主 captureStream，所有連線共用同一個）。 */
+  /** 建立時傳入的 T-106 stream。換片後的送出軌道由 replaceTrack 更新。 */
   readonly stream: MediaStream;
 
   /**
-   * 開始傳輸。回傳的 Promise 在「可以宣布開播」時 resolve：
-   * - relay：WHIP 回 201 且套用 answer 之後。
-   * - p2p：signal 訂閱（`onPeerRequest`／`onSignal`）就緒、且 capture track 已
-   *   套用到 sender 之後（之後伺服器才會送 `peer:request`）。
-   * 房間層在 `await start()` 之後才送 `stream:status { live: true }`。
+   * P2P 裝好 `onPeerRequest`、`onSignal` 並記住目前各 kind 的 track 與畫質即
+   * resolve，即使尚無收看者。首次 offer 的 sender 等收到 peer:request 才建立。
+   * Relay 在 WHIP 回 201 且已套用 answer 後 resolve。房間層在 `await start()`
+   * 之後才送 `stream:status { live: true, title }`（目前片名）。
    */
   start(): Promise<void>;
-  /** 停止傳輸但保留物件（可再 start()）；會拆除連線／WHIP，失敗走 onError。 */
+  /** 停止傳輸但可再 start()，失敗走 onError。下一次 WHIP 發布須等舊發布清理完成。 */
   stop(): void;
 
   /**
-   * 換片 / track 異動時替換所有連線的 track（streaming.md §1，用 replaceTrack）。
-   * `track` 為 null 代表「暫時沒有這個 kind 的 track」（例如影片播完），不是停止
-   * 直播；停止直播請用 `stop()`。傳輸會記住最新 track 與畫質，套用到現有與之後
-   * 新建的 sender，並依新影片高度重算縮放。
+   * 換片或 track 異動時，記住該 kind 最新的 track，null 表示暫時缺軌。
+   * 每條 P2P 連線從首次 offer 就有 video、audio 各一個 sendonly transceiver，
+   * 補軌沿用原 sender。現有與晚加入的 peer 都套用最新 tracks、畫質與縮放，
+   * video track 更換時依新高度重算。
    */
   replaceTrack(kind: "video" | "audio", track: MediaStreamTrack | null): void;
 
   /**
-   * 播放中切畫質（不重建連線，用 setParameters）。依序套用到所有 sender，
-   * 失敗丟出帶 memberId 的 `TRACK_ERROR`。
+   * 先記住最新畫質供之後的 peer 使用，再逐一套用到現有 video sender。
+   * 每個失敗的 peer 各以 onError 回報帶 memberId 的 TRACK_ERROR，其餘照常套用。
+   * Relay 的單一上傳失敗時省略 memberId。
+   * 全部處理完後若有失敗，Promise 以第一個 TRACK_ERROR reject。
    */
   setQuality(quality: Quality): Promise<void>;
 
   /**
-   * 逐人關閉：關閉與某位收看者的連線，並取消該人在途的建連、ICE restart 與統計
-   * 計時。冪等（對不存在或已關閉的 memberId 呼叫是 no-op）。房間層比對
+   * 關閉該成員的連線並作廢其協商代次，包括在途建連、ICE 佇列、重試與統計。
+   * 冪等（對不存在或已關閉的 memberId 呼叫是 no-op）。房間層比對
    * `room:members`，對消失或 `online: false` 的成員呼叫它（踢人、收看者離線）。
    */
   removePeer(memberId: string): void;
 
   onState(handler: (state: HostTransportState) => void): Unsubscribe;
-  /** 每位收看者的連線狀態（P2P；relay 模式下沒有逐人連線，不觸發）。 */
+  /** P2P 逐人的本地狀態，重試用盡時搭配 onError 回報，再 removePeer。 */
   onPeerState(
     handler: (peer: { memberId: string; state: MemberState }) => void,
   ): Unsubscribe;
-  /** 每位收看者的統計（P2P 每 2 秒；relay 模式回報單一上傳統計，無 memberId）。 */
+  /**
+   * 每 2 秒的上傳統計，P2P 依成員，relay 只有一份。rttMs 需有可用的
+   * selectedCandidatePairId 及對應 RTT，packetLoss 取自 remote-inbound-rtp。
+   * 缺少資料時省略該欄位。
+   */
   onStats(
     handler: (stats: TransportStats & { memberId?: string }) => void,
   ): Unsubscribe;
   onError(handler: (error: TransportError) => void): Unsubscribe;
 
-  /** 釋放所有 RTCPeerConnection、監聽與計時；不停止 capture track。呼叫後不可再用。 */
+  /** 釋放連線、監聽與計時，保留來源 tracks。銷毀後停止 UI 事件，仍須依 Location 清理 WHIP。 */
   destroy(): void;
 }
 
@@ -118,19 +122,21 @@ export interface ViewerTransport {
 
   /**
    * 開始接收。回傳的 Promise 在「準備好接收」時 resolve：
-   * - relay：WHEP 回 201 且套用 answer（收到遠端 track）之後。
-   * - p2p：signal 訂閱就緒之後（之後房主才會送 offer）。
-   * 已經開播才加入的收看者，依 snapshot 的 `stream.live: true` 直接 `start()`。
+   * - relay：WHEP 回 201 且已套用 answer。
+   * - p2p：onSignal 就緒。房間層在 auth 前備妥接收器，待此處就緒再交付暫存信令。
+   * 晚加入時依 snapshot 的 stream.live 決定是否立即 start()。手動重連 P2P 時，
+   * 房間層先 destroy 舊傳輸，於新 WebSocket 重新驗證以觸發 peer:request（§3）。
    */
   start(): Promise<void>;
   /** 停止接收但保留物件（可再 start()）；會移除 remoteStream 舊 track。 */
   stop(): void;
 
   onState(handler: (state: ViewerTransportState) => void): Unsubscribe;
+  /** 每 2 秒的接收統計。packetLoss 取自 inbound-rtp，rttMs 取自所選 candidate-pair，各自缺值時省略。 */
   onStats(handler: (stats: TransportStats) => void): Unsubscribe;
   onError(handler: (error: TransportError) => void): Unsubscribe;
 
-  /** 釋放連線、監聽與計時；不停止 capture track。呼叫後不可再用。 */
+  /** 釋放連線、監聽與計時，移除遠端 tracks。銷毀後仍須依 Location 清理 WHEP。 */
   destroy(): void;
 }
 
@@ -145,6 +151,7 @@ export interface TransportRtcOptions {
 }
 
 export interface HostTransportOptions extends TransportRtcOptions {
+  /** 建立這一個傳輸時從 T-106 取得的最新片源。 */
   stream: MediaStream;
   signal: TransportSignal;
   mode: Mode;

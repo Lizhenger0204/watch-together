@@ -28,10 +28,10 @@ apps/signal（Hono on Cloudflare Workers）
 
 1. **建房**：`POST /api/rooms` → `roomId`、`inviteCode`、`hostToken`。
 2. **加入**：輸入邀請碼 → `POST /api/rooms/join` → `memberToken` → 連 WebSocket 並驗證 → 收到 `room:snapshot`。
-3. **開播**：房主選檔 → 格式檢查 → 本地播放 → 依房間模式建立傳輸 → 廣播 `stream:status { live: true }`。
+3. **開播**：房主選檔 → 格式檢查 → 本地播放 → 依房間模式建立傳輸 → `await start()` 就緒後送 `stream:status { live: true, title }` → 伺服器廣播。
 4. **P2P**：伺服器通知房主有新收看者 → 房主建立連線並送 offer → 經 WebSocket 轉送 → 收看者回 answer → 交換 ICE → 開始收看。
 5. **轉發**：房主 `POST /whip` 發布到 Realtime；收看者 `POST /whep` 拉取。
-6. **切換模式**：房主送 `room:update { mode }` → 全房收到 `room:updated` → 雙方拆掉舊傳輸、建立新傳輸。
+6. **切換模式**：直播中房主先送 `stream:status { live: false, title: null }`，收到停播成功的 ack 或停播廣播才送 `room:update { mode }`。全房收到 `room:updated` 後更換傳輸，房主用當下的片源與畫質，在新傳輸就緒後恢復開播。
 
 細節：房間見 [room-and-invite](specs/room-and-invite.md)、串流見 [streaming](specs/streaming.md)、格式見 [protocol](specs/protocol.md)。
 
