@@ -1,0 +1,40 @@
+#!/bin/sh
+# 提交前檢查檔案大小：單檔超過 5,000 token（約 20 KB，位元組 ÷ 4）就拒絕提交。
+# agent 每次都要整份讀進來的檔案太大，會讀得慢又容易漏看，請按功能拆成幾個檔案。
+# 由 package.json 的 prepare 設定 core.hooksPath=.githooks。
+
+LIMIT=20000
+ALLOWLIST=.githooks/size-allowlist
+failed=0
+
+# agent 不會去讀的檔案不查：lockfile、二進位素材、建置產物、封存紀錄。
+skip() {
+  case "$1" in
+    pnpm-lock.yaml | */pnpm-lock.yaml) return 0 ;;
+    *.mp4 | *.webm | *.mov | *.png | *.jpg | *.jpeg | *.gif | *.webp | *.ico | *.pdf | *.woff | *.woff2) return 0 ;;
+    dist/* | */dist/* | build/* | */build/* | coverage/* | */coverage/* | .wrangler/* | */.wrangler/*) return 0 ;;
+    docs/collaboration/archive/*) return 0 ;;
+  esac
+  # 暫時豁免：已經超標、還沒拆的檔案（拆完要從清單移除）。
+  [ -f "$ALLOWLIST" ] && grep -qxF "$1" "$ALLOWLIST" && return 0
+  return 1
+}
+
+# 逐行讀檔名（不轉義中文路徑、允許空白）；用暫存檔而不是 pipe，failed 才留在同一個 shell。
+staged=$(mktemp)
+trap 'rm -f "$staged"' EXIT
+git -c core.quotePath=false diff --cached --name-only --diff-filter=ACMR >"$staged"
+while IFS= read -r file; do
+  skip "$file" && continue
+  size=$(git cat-file -s ":$file" 2>/dev/null) || continue
+  if [ "$size" -gt "$LIMIT" ]; then
+    echo "✗ ${file}：${size} 位元組，約 $((size / 4)) token，超過上限 5,000 token（約 20 KB）。" >&2
+    failed=1
+  fi
+done <"$staged"
+
+if [ "$failed" -ne 0 ]; then
+  echo "" >&2
+  echo "請按功能把上面的檔案拆成幾個較小的檔案，再重新提交。" >&2
+  exit 1
+fi
