@@ -66,31 +66,52 @@
 ### 建立流程（房主主動發起）
 
 1. 伺服器在收看者上線（或房主開播）時，送 `peer:request { memberId }` 給房主。
-2. 房主 `addTransceiver(track, { direction: 'sendonly' })` 加入 video、audio，設定 codec 偏好與碼率，`createOffer` → `setLocalDescription` → `signal { to, data: { type: 'offer', sdp } }`。
-3. 收看者 `setRemoteDescription` → `createAnswer` → 回 `signal { type: 'answer' }`。
-4. 雙方 trickle ICE：`signal { type: 'ice', candidate }`。在 remote description 設定前收到的 candidate 要先暫存。
-5. 成功後收看者送 `member:status { state: 'playing' }`。
+2. 房主 `addTransceiver(track, { direction: 'sendonly' })` 加入 video、audio，用
+   `applyCodecPreferences(transceiver, capabilities)` 設定 codec 偏好、
+   `applyVideoEncoding`／`applyAudioEncoding` 設定碼率與縮放，然後
+   `createOffer()` → `setLocalDescription(offer)` →
+   `signal { to, data: { type: 'offer', sdp } }`。
+3. 收看者 `setRemoteDescription(offer)` → `createAnswer()` →
+   **`setLocalDescription(answer)` 之後才送出** → `signal { type: 'answer', sdp }`。
+4. 房主收到 answer 後 `setRemoteDescription(answer)`。
+5. 雙方 trickle ICE：`signal { type: 'ice', candidate }`。**candidate 可能比 SDP 先到**，
+   在 remote description 設好之前先放進**依成員、依當次協商分開**的佇列，remote
+   description 設好後才依序 `addIceCandidate`。adapter（`common/rtc.ts`）已把
+   `RTCIceCandidate` 正規化成 `{ candidate: string, ... }`（candidate 非空），
+   `candidate === null` 代表 end-of-candidates。
+6. 成功後收看者送 `member:status { state: 'playing' }`。
 
 ### 失敗與重連
 
-- `iceConnectionState` 變成 `disconnected` 超過 5 秒，或變成 `failed`：房主執行 ICE restart（`createOffer({ iceRestart: true })`），最多 3 次；仍失敗就關閉連線，回報 `member:status { state: 'failed' }`。
-- 收看者 WebSocket 重連後重新驗證，伺服器再發一次 `peer:request` 給房主，房主關閉舊連線、建立新連線。
-- 房主 WebSocket 重連（含重新整理、另一分頁取代）後，伺服器把直播改為未開播（protocol.md「房主重新連線」）。房主端關閉所有舊連線；若片源仍在，再送 `stream:status { live: true }`，依伺服器送來的 `peer:request` 對每位收看者重新建立。
+- `iceConnectionState` 變成 `disconnected` 超過 5 秒，或變成 `failed`：房主執行
+  ICE restart（`createOffer({ iceRestart: true })`）。**每次「斷線事件」最多 3 次**，
+  3 次仍失敗就關閉連線、回報 `member:status { state: 'failed' }`，並呼叫
+  `removePeer(memberId)` 清掉這條連線。
+- **等不到 answer 的期限**：收到 `peer:request` 後 15 秒內沒收到該收看者的 answer，
+  視為失敗，走 `PEER_FAILED` + `removePeer(memberId)`。
+- 收看者 WebSocket 重連後重新驗證，伺服器再發一次 `peer:request` 給房主，房主
+  關閉舊連線、建立新連線。
+- 房主 WebSocket 重連（含重新整理、另一分頁取代）後，伺服器把直播改為未開播
+  （protocol.md「房主重新連線」）。房主端關閉所有舊連線；若片源仍在，再送
+  `stream:status { live: true }`，依伺服器送來的 `peer:request` 對每位收看者重新建立。
+- **逐人關閉**：房主踢人、或收到 `room:members` 看到某成員消失／`online: false` 時，
+  由房間層呼叫 `removePeer(memberId)`（冪等），取消該人在途的建連、ICE restart 與
+  統計計時。
 
 ### 實作注意事項（`features/transport/p2p/`，GPT）
 
 以下都是踩過的坑（見 AGENTS.md「影片與 WebRTC」），GPT 實作 p2p/ 時照做，不要猜：
 
-1. **codec 優先 H.264**：video 用 `common/encoding.ts` 的 `applyCodecPreferences()`（H.264 → VP8），音訊只送 Opus。收看端（尤其 Android）不一定能解 HEVC；房主端解碼後已重新編碼，所以送出要選 H.264。
+1. **codec 優先 H.264**：`addTransceiver` 之後用 `common/encoding.ts` 的 `applyCodecPreferences(transceiver, options.getCodecCapabilities(transceiver.kind))`（H.264 → VP8），音訊只送 Opus。capabilities 由注入的 `getCodecCapabilities` 提供（預設 `browserCodecCapabilities`），測試可注入假的。收看端（尤其 Android）不一定能解 HEVC；房主端解碼後已重新編碼，送出要選 H.264。
 2. **4K 要縮放**：`applyVideoEncoding()` 會設 `scaleResolutionDownBy = max(1, sourceHeight / targetHeight)`。4K 片源不設會以 4K 編碼，頻寬和 CPU 爆掉。
-3. **`captureStream()` 只呼叫一次**：所有連線共用 `HostTransportOptions.stream`（同一個 `MediaStream`）；換片用 `replaceTrack`，不要重建連線。
+3. **`captureStream()` 只呼叫一次**：所有連線共用 `HostTransportOptions.stream`（同一個 `MediaStream`）；換片用 `replaceTrack`，不要重建連線。capture track 由 `features/source/`（T-106）持有與停止，**傳輸層不 stop 這些 track**。
 4. **監聽 `addtrack`／`removetrack`**：影片播完時 Chrome 會把擷取的 track 從 stream 移除，重播是新的 track 物件。上層 `useLocalSource(onStreamChange)` 已把這件事包好；房主傳輸接到新 stream 時用 `replaceTrack(kind, track)` 換上，不能假設 track 物件永遠不變。
-5. **ICE candidate 先暫存**：candidate 可能比 SDP 先到。在 `setRemoteDescription` 之前收到的 candidate 先放進佇列，remote description 設好後再 `addIceCandidate`。
+5. **ICE candidate 先暫存**：candidate 可能比 SDP 先到。在 `setRemoteDescription` 之前收到的 candidate 先放進佇列（依成員、依當次協商分開），remote description 設好後再依序 `addIceCandidate`。
 6. **音訊不要開 `echoCancellation`／`noiseSuppression`／`autoGainControl`**：那是給麥克風用的，會修壞電影音效。captureStream 的軌道預設就是關的；`applyAudioEncoding()` 只設 maxBitrate，不要再動這三個。
 7. **每次建連線前取 ICE**：`common/ice.ts` 的 `fetchIceServers(roomId, token)`（或注入的 `options.fetchIceServers`）。TURN 憑證短效，不要快取。
-8. **`onPeerRequest` 觸發時**：若同一個 `memberId` 已有連線，先 `close()` 舊的再建新的（收看者重連或房主接手）。
-9. **信令格式**：`SignalData`（`packages/shared`）的 `ice.candidate` 是 `IceCandidate`（`{ candidate, sdpMid, sdpMLineIndex, usernameFragment }`）。瀏覽器 `RTCPeerConnectionIceEvent.candidate` 是 `RTCIceCandidate`，送出前把它的 `candidate`／`sdpMid`／`sdpMLineIndex`／`usernameFragment` 複製成 `IceCandidate`；`candidate === null` 時送 `{ type: "ice", candidate: null }`（end-of-candidates）。
-10. **統計**：每 2 秒用 `common/stats.ts` 的 `StatsSampler` 取碼率／RTT／遺失，透過 `onStats` 回報；收看者側由房間層送 `member:status`（傳輸層不直接送 `member:status`，它只有 signal 介面）。
+8. **`onPeerRequest` 觸發時**：若同一個 `memberId` 已有連線，先 `close()` 舊的再建新的（收看者重連或房主接手）。房主踢人／成員離線則走 `removePeer(memberId)`（見 §3「失敗與重連」）。
+9. **信令格式**：`RtcPeerConnection` adapter（`common/rtc.ts`）已把 `RTCIceCandidate` 正規化成 `{ candidate: string, ... }`、把 offer/answer 的 `sdp` 保證為非空 string。收到 `onicecandidate` 且 `candidate === null` 時送 `{ type: "ice", candidate: null }`（end-of-candidates）。這些值可直接塞進 `SignalData`（shared 要求 string）。
+10. **統計**：每 2 秒用 `common/stats.ts` 的 `StatsSampler` 取碼率／RTT／遺失。房主方向 `"send"`、收看者方向 `"receive"`；透過 `onStats` 回報。收看者側由房間層送 `member:status`（傳輸層不直接送 `member:status`，它只有 signal 介面）。
 11. **單元測試用 fake**：`RTCPeerConnection` 一律透過 `common/rtc.ts` 介面，測試用 `common/rtc-fake.ts` 的 `createFakePeerConnectionFactory()` 注入，不依賴真實瀏覽器（testing.md）。
 
 ## 4. 轉發模式（`features/transport/relay/` + `apps/signal/src/relay/`）
@@ -111,38 +132,74 @@
 
 ## 6. 模式切換
 
-- 只有房主可切換：`room:update { mode: 'p2p' | 'relay' }`。伺服器廣播 `room:updated`。
-- **傳輸物件的 `mode` 是建立時固定的**：切換模式 = 拆掉舊傳輸、依新模式建立新傳輸，不是改欄位。切換由**房間層（hook）**協調，不是傳輸自己切；傳輸只負責建立、傳送、銷毀。
+- 只有房主可切換：`room:update { mode: 'p2p' | 'relay' }`，伺服器廣播 `room:updated`。
+- **傳輸物件的 `mode` 是建立時固定的**：切換 = 拆掉舊傳輸、建立新傳輸，不是改欄位。
+  由**房間層（hook）**協調，傳輸只負責建立、傳送、銷毀。
+
+### 直播中切模式（避免漏掉 `peer:request`）
+
+伺服器在 `room:updated` 之後**會立刻**對每位在線收看者發 `peer:request`（P2P）。若
+房間層等 React effect 才建立新傳輸並訂閱，就會漏掉。因此直播中切模式採「**先停再開**」：
 
 ```
-房間層收到 room:updated（mode 改變）
-  房主  ：old.destroy() → createHostTransport({ mode: 新mode, stream: 同一個 captureStream, ... }) → start()
-  收看者：old.destroy() → createViewerTransport({ mode: 新mode, ... })
-          ├─ p2p   ：start()，等房主 offer（伺服器會對每位收看者再發 peer:request 給房主）
-          └─ relay ：等 stream:status { live: true } 再 start()（送 WHEP）
+房主（直播中）：
+  1. 送 stream:status { live: false }（先宣布停止）
+  2. 送 room:update { mode }（切模式）
+  3. 收到 room:updated：old.destroy() → createHostTransport({ mode: 新mode, stream: 同一個 })
+  4. await start()  ← p2p：signal 訂閱就緒；relay：WHIP 回 201 且套用 answer
+  5. 送 stream:status { live: true }（伺服器這時才發 peer:request，訂閱已就緒）
+
+收看者：
+  1. 收到 stream:status { live: false } → 關掉舊連線／WHEP
+  2. 收到 room:updated → old.destroy() → createViewerTransport({ mode: 新mode })
+     - p2p  ：await start()（訂閱就緒，等房主 offer）
+     - relay：等 stream:status { live: true } 再 start()
 ```
 
-- **stream 不重建**：房主換模式時沿用同一個 `captureStream()` 的 stream，只換傳輸物件。
-- 事件順序：`room:updated` → 舊傳輸 `destroy()`（釋放 RTCPeerConnection 與監聽）→ 新傳輸建立並 `start()` → 房主若在直播中重新送 `stream:status { live: true }` → 收看者依新模式等 offer（P2P）或送 WHEP（轉發）。
+- **stream 不重建**：房主換模式沿用同一個 `captureStream()`，只換傳輸物件。
+- **WHIP 何時就緒**：房主 relay 的 `start()` 在 WHIP 回 `201` 且套用 answer 後才
+  resolve；房間層要 `await start()` 之後才送 `live: true`，收看者的 WHEP 才不會撞
+  `409 STREAM_NOT_LIVE`。
 - 預期中斷數秒，UI 顯示「切換中」。
 
-### 房主重新連線（T-114）
+### 房主重新連線（protocol.md「房主重新連線」）
 
-- 房主 WebSocket 重連後重新 `auth`。伺服器會回 `room:snapshot`，並對每位在線收看者發 `peer:request`（順序見 protocol.md 與 T-114）。
-- 房主傳輸收到一連串 `peer:request`：同一個 `memberId` 已有連線就先 `close()` 舊的、建新的（見 §3「失敗與重連」）。**stream 沿用同一個**，不重新 `captureStream()`。
-- 房主重連後若仍在直播，由房間層再送 `stream:status { live: true }`（room-and-invite.md）。
+依 protocol.md 的順序，關鍵是「**訂閱就緒才宣布開播**」：
+
+1. 伺服器把直播改為未開播，對其他成員送 `stream:status { live: false }`。
+2. 回房主 `room:snapshot`（`stream.live: false`）。
+3. 房主端若仍有片源與開播意圖：先 `old.destroy()` → `createHostTransport(...)` →
+   `await start()`（p2p 訂閱就緒）→ 送 `stream:status { live: true }`。
+4. 伺服器廣播 live，P2P 下對每位收看者發 `peer:request`（房主已訂閱，不會漏）。
+
+- 房主傳輸收到一連串 `peer:request`：同一個 `memberId` 已有連線就先 `close()` 舊的、
+  建新的（見 §3「失敗與重連」）。**stream 沿用同一個**，不重新 `captureStream()`。
+
+### 已經開播才加入的收看者
+
+- 收看者加入時收到的 `room:snapshot` 若 `stream.live: true`，房間層直接
+  `createViewerTransport(...)` → `await start()`（relay 送 WHEP；p2p 訂閱等 offer），
+  不必再等一次 `stream:status`。
 
 ## 7. 收看端播放（`features/player/`）
 
 - `<video autoplay playsinline>`，`srcObject = remoteStream`。
+- **`remoteStream` 是固定的 `MediaStream`**：每個 viewer transport 建立時就 new 一個，
+  T-110 只要綁一次 `srcObject`。傳輸在 `ontrack` 用 **`event.track`** 加進 remoteStream
+  （不要依賴 `event.streams`，Chrome 上 sendonly transceiver 的 `event.streams` 是空的）；
+  停止或重連時移除舊 track。
 - 瀏覽器的自動播放政策會擋有聲音的自動播放：進房顯示「點擊開始觀看」覆蓋層，點擊後才 `play()`。`play()` 被拒時恢復覆蓋層。
 - 狀態提示：等待房主開播、連線中、播放中、緩衝中、連線失敗（提供「重新連線」按鈕）。
 - 收看者沒有播放控制列，只有音量與全螢幕。
 
 ## 8. 連線統計
 
-- 每 2 秒用 `getStats()` 取得碼率、封包遺失、RTT。前端用 `features/transport/common/stats.ts` 的 `StatsSampler` 取樣並算碼率（需上一次取樣做差）。
-- 收看者每 5 秒送 `member:status { state, bitrateKbps, rttMs, packetLoss }`，伺服器只轉給房主，房主的成員列表顯示每人連線品質。`member:status` 由**房間層**送（傳輸層只暴露 `onState`／`onStats` 事件，沒有送 `member:status` 的介面）。
+- 每 2 秒用 `getStats()` 取樣。前端用 `features/transport/common/stats.ts` 的
+  `StatsSampler(getStats, direction)`，房主方向 `"send"`（加總 `bytesSent`）、收看者
+  方向 `"receive"`（加總 `bytesReceived`）；**影音各一條 RTP stream，碼率是兩條加總**。
+  RTT 依 `transport.selectedCandidatePairId` 找對應 candidate-pair；`packetsLost` 負值
+  夾到 0，遺失率夾到 0～1。
+- 收看者每 5 秒送 `member:status { state, bitrateKbps, rttMs, packetLoss }`，伺服器只轉給房主，房主的成員列表顯示每人連線品質。`member:status` 由**收看者的房間層**送（傳輸層只暴露 `onState`／`onStats` 事件，沒有送 `member:status` 的介面）；房主只發本地 `onPeerState`。
 
 ## 9. 傳輸層契約（`features/transport/`）
 
@@ -156,21 +213,38 @@ createHostTransport({ stream, signal, mode, quality, roomId, token }): HostTrans
 createViewerTransport({ signal, mode, roomId, token }): ViewerTransport
 ```
 
-- 兩者都可再注入：`fetchIceServers`（預設 `common/ice.ts` 的 `fetchIceServers(roomId, token)`）、`createPeerConnection`（預設瀏覽器原生，測試注入 fake）。
+- 可注入：`fetchIceServers`（預設 `common/ice.ts`）、`createPeerConnection`（預設瀏覽器
+  adapter）、`getCodecCapabilities`（預設 `browserCodecCapabilities`）。
 - `token` 是 `hostToken`／`memberToken`（機密，不可寫進 log）。
-- 建立後**不會**自動開始，要呼叫 `start()`；`stop()` 停止但保留物件；`destroy()` 釋放所有連線、track 與監聽，之後不可再用。
+- `start()` 回傳 `Promise`，**resolve 才代表就緒**：relay 在 WHIP／WHEP 回 201 且套用
+  answer 後、p2p 在 signal 訂閱就緒後。房間層要 `await start()` 之後才送
+  `stream:status { live: true }`。
+- `stop()` 停止但保留物件（可再 start）；`destroy()` 釋放所有連線、監聽、計時，之後不可用。
+  `stop()`／`destroy()` 都要冪等，重複呼叫是 no-op。`destroy()` 之後晚到的回應／事件一律
+  丟棄，不再觸發 onState／onError。
+
+### track 所有權
+
+- captureStream 產生的 track 由 `features/source/`（T-106）持有與停止，**傳輸層絕不
+  `stop()` 這些 track**。`destroy()` 只釋放 RTCPeerConnection 與監聽，不碰 capture track。
+- 換片／切模式／重連時，下一個傳輸沿用同一份 capture stream。
+- 房間層把 `useLocalSource(onStreamChange)` 的 stream 變化，轉成各 kind 的 track 或 null，
+  呼叫 `host.replaceTrack(kind, track | null)`。`null` 代表「暫時沒有這個 kind 的 track」
+  （例如影片播完），**不是停止直播**；停止直播用 `stop()`。
+- 傳輸會記住最新的 track 與畫質，套用到現有與之後新建的 sender，並依新影片高度重算縮放。
 
 ### `signal`：傳輸層需要的最小介面（不依賴 lib/signal.ts）
 
 ```ts
 interface TransportSignal {
-  sendSignal(to: string, data: SignalData): void;
+  sendSignal(to: string, data: SignalData): boolean; // false = 送出失敗
   onSignal(handler: (message: { from: string; data: SignalData }) => void): () => void;
   onPeerRequest(handler: (request: { memberId: string }) => void): () => void;
 }
 ```
 
 - `onPeerRequest` 只在房主端有用。T-115 不依賴 T-105；GPT 寫 p2p/ 可用 fake signal 測試。
+- `sendSignal` 回 `false` 時（WebSocket 未連線等），adapter 要把它轉成 `SIGNAL_ERROR`。
 
 ### `HostTransport`（房主）回傳物件
 
@@ -178,12 +252,14 @@ interface TransportSignal {
 | --- | --- | --- |
 | `mode` | `Mode` | 建立時固定，切換 = 重建 |
 | `stream` | `MediaStream` | 送出的 captureStream（所有連線共用） |
-| `start()` / `stop()` / `destroy()` | | 生命週期 |
-| `replaceTrack(kind, track)` | | 換片／track 異動時換上（`replaceTrack`） |
-| `setQuality(quality)` | | 播放中切畫質（`setParameters`） |
+| `start()` | `Promise<void>` | relay：WHIP 201 + answer 後 resolve；p2p：訂閱就緒後 resolve |
+| `stop()` / `destroy()` | `void` | 冪等；destroy 不 stop capture track |
+| `replaceTrack(kind, track)` | `void` | 換片／track 異動（`track=null` = 暫時沒有該 kind） |
+| `setQuality(quality)` | `Promise<void>` | 依序套用到所有 sender，失敗帶 memberId 的 `TRACK_ERROR` |
+| `removePeer(memberId)` | `void` | 冪等；關閉該成員連線並取消在途建連／ICE restart／統計 |
 | `onState(handler)` | `HostTransportState = "idle" \| "live" \| "error"` | 整體狀態 |
-| `onPeerState(handler)` | `{ memberId, state: MemberState }` | 每位收看者的連線狀態（P2P；relay 無逐人連線，不觸發） |
-| `onStats(handler)` | `TransportStats & { memberId? }` | P2P 每 2 秒每位收看者；relay 回報單一上傳統計（無 memberId） |
+| `onPeerState(handler)` | `{ memberId, state: MemberState }` | 每位收看者的**本地**連線狀態（P2P；relay 不觸發） |
+| `onStats(handler)` | `TransportStats & { memberId? }` | P2P 每 2 秒每位收看者；relay 回報單一上傳統計 |
 | `onError(handler)` | `TransportError` | 錯誤，`memberId` 指出是哪位收看者 |
 
 ### `ViewerTransport`（收看者）回傳物件
@@ -191,10 +267,11 @@ interface TransportSignal {
 | 成員 | 型別 | 說明 |
 | --- | --- | --- |
 | `mode` | `Mode` | 建立時固定 |
-| `remoteStream` | `MediaStream` | `<video srcObject>` 用 |
-| `start()` / `stop()` / `destroy()` | | 生命週期 |
-| `onState(handler)` | `ViewerTransportState = MemberState`（`waiting`／`connecting`／`playing`／`buffering`／`failed`） | 直接對應收看者 UI 與 `member:status` |
-| `onStats(handler)` | `TransportStats` | 每 2 秒 |
+| `remoteStream` | `MediaStream` | 建立時就 new 的固定 MediaStream；用 ontrack 的 `event.track` 加 track |
+| `start()` | `Promise<void>` | relay：WHEP 201 + answer 後 resolve；p2p：訂閱就緒後 resolve |
+| `stop()` / `destroy()` | `void` | 冪等；stop 移除 remoteStream 舊 track |
+| `onState(handler)` | `ViewerTransportState = MemberState` | `waiting`／`connecting`／`playing`／`failed`（`buffering` 由播放器回報） |
+| `onStats(handler)` | `TransportStats` | 每 2 秒（方向 `"receive"`） |
 | `onError(handler)` | `TransportError` | 錯誤 |
 
 ### 共用型別
@@ -202,16 +279,63 @@ interface TransportSignal {
 ```ts
 type TransportStats = { bitrateKbps: number; rttMs?: number; packetLoss?: number }; // packetLoss 0–1
 type TransportErrorCode =
-  | "ICE_UNAVAILABLE" | "SIGNAL_ERROR" | "PEER_FAILED" | "TRACK_ERROR" | "RELAY_FAILED";
+  | "ICE_UNAVAILABLE" | "SIGNAL_ERROR" | "PEER_FAILED" | "TRACK_ERROR"
+  | "RELAY_FAILED" | "STREAM_NOT_LIVE" | "RELAY_UNAVAILABLE";
 class TransportError extends Error { code; message; memberId?; cause? }
 ```
 
+- `STREAM_NOT_LIVE`：收看者 WHEP 回 409，回到 `waiting`（不是致命錯誤）。
+- `RELAY_UNAVAILABLE`：轉發服務回 503，提示停用轉發。若要在使用者選之前就停用轉發選項，
+  需要伺服器提供能力旗標（另開任務）。
+
+### 狀態轉換
+
+**房主整體（`HostTransportState`）**
+
+| 狀態 | 進入 | 離開 |
+| --- | --- | --- |
+| `idle` | 建立後、或 `stop()` | `start()` resolve → `live` |
+| `live` | `start()` resolve | `stop()`／`destroy()` → `idle`；致命錯誤 → `error` |
+| `error` | 致命錯誤（加 track、ICE 全掛等） | 只能 `destroy()` 後重建 |
+
+**房主逐人連線（`onPeerState`，transport 層的本地判斷）**
+
+| 狀態 | 進入 | 離開 |
+| --- | --- | --- |
+| `connecting` | 收到 `peer:request`，建連中 | answer 到 + ICE 連通 → `playing`；失敗 → `failed` |
+| `playing` | ICE 連通（連線通了、媒體在送） | ICE `disconnected`/`failed` → 進 restart（算 `connecting`）；`removePeer` → 移除 |
+| `failed` | restart 3 次仍失敗、或 answer 15 秒沒到 | `removePeer` 移除 |
+
+**收看者（`ViewerTransportState`，transport 層）**
+
+| 狀態 | 進入 | 離開 |
+| --- | --- | --- |
+| `waiting` | 建立後、或 `stop()`；WHEP 回 409 | `start()` → `connecting` |
+| `connecting` | `start()` 建連中 | ICE 連通 → `playing`；失敗 → `failed` |
+| `playing` | ICE 連通（收到媒體） | `stop()` → `waiting`；ICE 斷線 → `connecting` |
+| `failed` | 連線失敗、無法自動恢復 | 房間層「重新連線」→ 重建 |
+
+- **`playing` 是「連線通了」，不是「真的在播」**。真正卡住（`buffering`）由**播放器
+  （T-110）**偵測 `<video>` 播放停滯後回報，房間層把它併進 `member:status`。收看者的
+  房間層每 5 秒送 `member:status`；房主只發本地 `onPeerState`，不送 `member:status`。
+
 ### 生命週期與誰協調
 
-- **傳輸層**只負責建立／傳送／統計／銷毀，不碰 React、不碰 `member:status`／`stream:status` 訊息。
-- **房間層（hook）**負責：何時建立／銷毀傳輸（含模式切換、房主重連）、把 `onState`／`onStats` 轉成 `member:status`、送 `stream:status`、把 `TransportSignal` 接到真正的 SignalClient。
+- **傳輸層**只負責建立／傳送／統計／銷毀，不碰 React、不碰 `member:status`／`stream:status`。
+- **房間層（hook）**負責：何時建立／銷毀傳輸（含模式切換、房主重連）、把 `onState`／
+  `onStats` 轉成 `member:status`、送 `stream:status`、把 `TransportSignal` 接到真正的 SignalClient。
+
+### 匯出位置（p2p/ 與 relay/ 的交付）
+
+| 檔案 | 匯出 | 負責 |
+| --- | --- | --- |
+| `features/transport/p2p/index.ts` | `createP2PHostTransport: CreateHostTransport`、`createP2PViewerTransport: CreateViewerTransport` | GPT |
+| `features/transport/relay/index.ts` | `createRelayHostTransport: CreateHostTransport`、`createRelayViewerTransport: CreateViewerTransport` | Claude |
+| `features/transport/index.ts` | 型別與介面（本檔）；dispatcher `createHostTransport`／`createViewerTransport`（依 `mode` 選 p2p/ 或 relay/）等 T-107、T-109 合併後由 Claude 補上 | Claude |
 
 ### `RTCPeerConnection` 介面與 fake
 
-- 傳輸層一律透過 `common/rtc.ts` 的 `RtcPeerConnection`（及 `RtcRtpSender`／`RtcRtpTransceiver`）介面，不直接用原生 `RTCPeerConnection`。
-- 單元測試用 `common/rtc-fake.ts` 的 `createFakePeerConnectionFactory()` 注入（testing.md），不依賴真實瀏覽器。
+- 傳輸層一律透過 `common/rtc.ts` 的 `RtcPeerConnection` 介面與瀏覽器 adapter，不直接用
+  原生 `RTCPeerConnection`。adapter 記下 kind、正規化 candidate 與 sdp（保證非空 string）。
+- 單元測試用 `common/rtc-fake.ts` 的 `createFakePeerConnectionFactory()` 注入
+  （testing.md），不依賴真實瀏覽器。
