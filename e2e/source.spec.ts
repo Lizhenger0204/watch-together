@@ -34,7 +34,9 @@ test("plays a local movie and replaces its captured stream after selecting anoth
 
   await play.click();
   await expect
-    .poll(() => video.evaluate((element) => element.currentTime))
+    .poll(() =>
+      video.evaluate((element: HTMLVideoElement) => element.currentTime),
+    )
     .toBeGreaterThan(0);
   await page.getByRole("button", { name: "暫停", exact: true }).click();
   await expect(video).toHaveJSProperty("paused", true);
@@ -70,7 +72,9 @@ test("plays a local movie and replaces its captured stream after selecting anoth
   await expect(page.getByText("擷取音軌 0・擷取影像軌 1")).toBeVisible();
   await play.click();
   await expect
-    .poll(() => video.evaluate((element) => element.currentTime))
+    .poll(() =>
+      video.evaluate((element: HTMLVideoElement) => element.currentTime),
+    )
     .toBeGreaterThan(0);
 });
 
@@ -87,7 +91,9 @@ test("checks HEVC playback or displays a decode error on unsupported hosts", asy
     await page.getByRole("button", { name: "播放", exact: true }).click();
     await expect
       .poll(() =>
-        page.locator("video").evaluate((element) => element.currentTime),
+        page
+          .locator("video")
+          .evaluate((element: HTMLVideoElement) => element.currentTime),
       )
       .toBeGreaterThan(0);
     console.log("HEVC: decoded and played with video and audio tracks");
