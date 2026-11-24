@@ -1,21 +1,26 @@
 /**
  * 測試用 fake RTCPeerConnection（testing.md：WebRTC 邏輯要用 fake，不依賴真實瀏覽器）。
  *
- * 它不做真實協商，只記錄呼叫並提供控制方法讓測試驅動事件：
- * - 建立 offer/answer 回傳固定 SDP。
- * - `fireIceCandidate`／`fireTrack`／`setConnectionState` 等手動觸發事件。
- * - `statsReport` 可被測試覆寫，`getStats()` 直接回傳。
+ * 盡量貼近真實 Chrome 的行為：
+ * - `createOffer`／`createAnswer` 只回傳描述，不改變 signalingState；
+ *   signalingState 在 `set*Description` 時才轉換。
+ * - `addIceCandidate` 在 remote description 還沒設定前會 throw；`null` 記為
+ *   end-of-candidates。
+ * - `fireTrack` 模擬遠端建立的接收 track（供收看者的 recvonly transceiver）。
+ * - `getStats()` 回傳 Map 形狀（測試可覆寫 `statsReport`）。
  *
- * 測試裡用 `createFakePeerConnectionFactory()` 拿到 factory 與建立的連線清單，
+ * 測試用 `createFakePeerConnectionFactory()` 拿到 factory 與建立的連線清單，
  * 再把 factory 傳進 `createHostTransport`／`createViewerTransport` 的
  * `createPeerConnection` 選項。
  */
 import type {
   PeerConnectionFactory,
+  RtcIceCandidate,
   RtcIceCandidateEvent,
   RtcPeerConnection,
   RtcRtpSender,
   RtcRtpTransceiver,
+  RtcSessionDescription,
   RtcTrackEvent,
 } from "./rtc";
 
@@ -90,13 +95,14 @@ export class FakeRtcPeerConnection implements RtcPeerConnection {
   onsignalingstatechange: (() => void) | null = null;
   ontrack: ((event: RtcTrackEvent) => void) | null = null;
 
-  localDescription: RTCLocalSessionDescriptionInit | null = null;
-  remoteDescription: RTCSessionDescriptionInit | null = null;
-  iceCandidates: RTCIceCandidateInit[] = [];
+  localDescription: RtcSessionDescription | null = null;
+  remoteDescription: RtcSessionDescription | null = null;
+  iceCandidates: RtcIceCandidate[] = [];
+  endOfCandidates = false;
   offerOptions: RTCOfferOptions[] = [];
   closed = false;
 
-  /** 測試可覆寫 `getStats()` 的回傳內容。 */
+  /** 測試可覆寫 `getStats()` 的回傳內容（Map 形狀）。 */
   statsReport: unknown = new Map();
 
   private transceivers: FakeRtcRtpTransceiver[] = [];
@@ -124,35 +130,44 @@ export class FakeRtcPeerConnection implements RtcPeerConnection {
     return [...this.transceivers];
   }
 
-  async createOffer(
-    options?: RTCOfferOptions,
-  ): Promise<RTCSessionDescriptionInit> {
+  async createOffer(options?: RTCOfferOptions): Promise<RtcSessionDescription> {
     this.offerOptions.push(options ?? {});
-    this.signalingState = "have-local-offer";
     return { type: "offer", sdp: "v=0\r\nfake-offer\r\n" };
   }
 
-  async createAnswer(): Promise<RTCSessionDescriptionInit> {
-    this.signalingState = "have-local-pranswer";
+  async createAnswer(): Promise<RtcSessionDescription> {
     return { type: "answer", sdp: "v=0\r\nfake-answer\r\n" };
   }
 
   async setLocalDescription(
-    description?: RTCLocalSessionDescriptionInit,
+    description?: RtcSessionDescription,
   ): Promise<void> {
-    if (description) this.localDescription = description;
-    this.signalingState = "stable";
+    if (description) {
+      this.localDescription = description;
+      this.signalingState =
+        description.type === "offer" ? "have-local-offer" : "stable";
+    } else {
+      this.signalingState = "stable";
+    }
   }
 
   async setRemoteDescription(
-    description: RTCSessionDescriptionInit,
+    description: RtcSessionDescription,
   ): Promise<void> {
     this.remoteDescription = description;
-    this.signalingState = "have-remote-offer";
+    this.signalingState =
+      description.type === "offer" ? "have-remote-offer" : "stable";
   }
 
-  async addIceCandidate(candidate?: RTCIceCandidateInit | null): Promise<void> {
-    if (candidate) this.iceCandidates.push(candidate);
+  async addIceCandidate(candidate: RtcIceCandidate | null): Promise<void> {
+    if (!this.remoteDescription) {
+      throw new Error("remote description 尚未設定，不能 addIceCandidate");
+    }
+    if (candidate === null) {
+      this.endOfCandidates = true;
+    } else {
+      this.iceCandidates.push(candidate);
+    }
   }
 
   async getStats(): Promise<RTCStatsReport> {
@@ -166,11 +181,12 @@ export class FakeRtcPeerConnection implements RtcPeerConnection {
 
   // ── 測試控制用 ─────────────────────────────────────────
 
-  fireIceCandidate(candidate: RTCIceCandidateInit | null): void {
+  fireIceCandidate(candidate: RtcIceCandidate | null): void {
     this.onicecandidate?.({ candidate });
   }
 
-  fireTrack(track: MediaStreamTrack, streams: MediaStream[]): void {
+  /** 模擬遠端 track 到達；`streams` 預設為空（貼近 Chrome 的 sendonly 行為）。 */
+  fireTrack(track: MediaStreamTrack, streams: MediaStream[] = []): void {
     const transceiver =
       this.transceivers.find((t) => t.kind === track.kind) ??
       this.transceivers[0];

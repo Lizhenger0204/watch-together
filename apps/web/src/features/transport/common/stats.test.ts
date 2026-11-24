@@ -7,8 +7,12 @@ import {
   type StatsEntry,
 } from "./stats";
 
-function entry(type: string, fields: Record<string, unknown>): StatsEntry {
-  return { type, id: `${type}-1`, timestamp: 1000, ...fields };
+function entry(
+  type: string,
+  id: string,
+  fields: Record<string, unknown>,
+): StatsEntry {
+  return { type, id, timestamp: 1000, ...fields };
 }
 
 describe("estimateTotalUploadBitrate", () => {
@@ -27,44 +31,79 @@ describe("shouldWarnTotalUpload", () => {
 });
 
 describe("computeTransportStats", () => {
-  it("computes bitrate from the bytes delta over time", () => {
-    const result = computeTransportStats(
-      [entry("outbound-rtp", { bytesSent: 2000 })],
-      2000,
-      { bytes: 1000, timestamp: 1000 },
-    );
-    expect(result.stats.bitrateKbps).toBe(8);
-    expect(result.bytes).toBe(2000);
-  });
-
-  it("extracts RTT from a succeeded candidate pair", () => {
-    const result = computeTransportStats(
-      [
-        entry("candidate-pair", {
-          state: "succeeded",
-          currentRoundTripTime: 0.05,
-        }),
-      ],
-      1000,
-    );
-    expect(result.stats.rttMs).toBe(50);
-  });
-
-  it("computes the packet loss ratio", () => {
-    const result = computeTransportStats(
-      [entry("inbound-rtp", { packetsLost: 1, packetsReceived: 9 })],
-      1000,
-    );
-    expect(result.stats.packetLoss).toBeCloseTo(0.1);
+  it("sums bytes across video and audio RTP streams", () => {
+    const entries = [
+      entry("outbound-rtp", "rtp-v", { bytesSent: 800 }),
+      entry("outbound-rtp", "rtp-a", { bytesSent: 16 }),
+    ];
+    const previous = {
+      bytesByRtp: new Map([
+        ["rtp-v", 0],
+        ["rtp-a", 0],
+      ]),
+      timestamp: 0,
+    };
+    const result = computeTransportStats(entries, "send", 1000, previous);
+    // (800 + 16) bytes × 8 / 1000 ms = 6.528 kbps
+    expect(result.stats.bitrateKbps).toBeCloseTo(6.528);
   });
 
   it("returns zero bitrate on the first sample", () => {
-    const result = computeTransportStats(
-      [entry("outbound-rtp", { bytesSent: 1000 })],
-      1000,
-    );
+    const entries = [entry("outbound-rtp", "rtp-v", { bytesSent: 1000 })];
+    const result = computeTransportStats(entries, "send", 1000);
     expect(result.stats.bitrateKbps).toBe(0);
-    expect(result.bytes).toBe(1000);
+    expect(result.snapshot.bytesByRtp.get("rtp-v")).toBe(1000);
+  });
+
+  it("extracts RTT via selectedCandidatePairId", () => {
+    const entries = [
+      entry("transport", "t1", { selectedCandidatePairId: "cp-2" }),
+      entry("candidate-pair", "cp-1", {
+        state: "succeeded",
+        currentRoundTripTime: 0.01,
+      }),
+      entry("candidate-pair", "cp-2", {
+        state: "succeeded",
+        currentRoundTripTime: 0.05,
+      }),
+    ];
+    const result = computeTransportStats(entries, "receive", 1000);
+    expect(result.stats.rttMs).toBe(50);
+  });
+
+  it("falls back to the first succeeded candidate-pair without selectedCandidatePairId", () => {
+    const entries = [
+      entry("candidate-pair", "cp-1", {
+        state: "succeeded",
+        currentRoundTripTime: 0.03,
+      }),
+    ];
+    const result = computeTransportStats(entries, "receive", 1000);
+    expect(result.stats.rttMs).toBe(30);
+  });
+
+  it("clamps negative packet loss to 0", () => {
+    const entries = [
+      entry("inbound-rtp", "rtp-v", {
+        bytesReceived: 1000,
+        packetsLost: -3,
+        packetsReceived: 10,
+      }),
+    ];
+    const result = computeTransportStats(entries, "receive", 1000);
+    expect(result.stats.packetLoss).toBe(0);
+  });
+
+  it("computes the packet loss ratio", () => {
+    const entries = [
+      entry("inbound-rtp", "rtp-v", {
+        bytesReceived: 1000,
+        packetsLost: 1,
+        packetsReceived: 9,
+      }),
+    ];
+    const result = computeTransportStats(entries, "receive", 1000);
+    expect(result.stats.packetLoss).toBeCloseTo(0.1);
   });
 });
 
@@ -72,8 +111,22 @@ describe("StatsSampler", () => {
   it("keeps the previous bytes across samples", async () => {
     let bytes = 1000;
     let now = 1000;
+    const report = () =>
+      new Map<string, StatsEntry>([
+        [
+          "rtp-v",
+          {
+            type: "outbound-rtp",
+            id: "rtp-v",
+            timestamp: now,
+            bytesSent: bytes,
+          },
+        ],
+      ]) as unknown as RTCStatsReport;
+
     const sampler = new StatsSampler(
-      async () => [entry("outbound-rtp", { bytesSent: bytes })],
+      async () => report(),
+      "send",
       () => now,
     );
 

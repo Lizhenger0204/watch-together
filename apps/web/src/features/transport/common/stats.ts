@@ -1,5 +1,12 @@
 /**
  * 連線統計與頻寬預估（docs/specs/streaming.md §2、§8）。
+ *
+ * 統計的取法（見 streaming.md §8）：
+ * - 碼率：依方向（host 用 bytesSent、viewer 用 bytesReceived）對每個 RTP id
+ *   算兩次取樣之間的 bytes 差，再**加總**（影音各一條 RTP stream）。
+ * - RTT：先找 `transport` 的 `selectedCandidatePairId`，再取該 candidate-pair 的
+ *   `currentRoundTripTime`。
+ * - 封包遺失：`packetsLost` 夾到 ≥ 0，遺失率夾到 0～1。
  */
 import {
   P2P_TOTAL_BITRATE_WARNING,
@@ -17,12 +24,21 @@ export interface TransportStats {
   packetLoss?: number;
 }
 
+/** 取樣方向：房主送出（bytesSent）、收看者收到（bytesReceived）。 */
+export type StatsDirection = "send" | "receive";
+
 /** getStats() 的單一項目（最小結構，方便在 Node 測試環境造資料）。 */
 export interface StatsEntry {
   type: string;
   id: string;
   timestamp: number;
   [key: string]: unknown;
+}
+
+/** 上次取樣留下的快照，用來算碼率。 */
+export interface StatsSnapshot {
+  bytesByRtp: Map<string, number>;
+  timestamp: number;
 }
 
 /** 開播前總上傳量預估（bps）：P2P 每條連線都要上傳一份。streaming.md §2。 */
@@ -44,79 +60,105 @@ export function shouldWarnTotalUpload(
 }
 
 /**
- * 從 getStats() 項目算出統計。`now` 與 `previous` 用來算碼率（兩個取樣之間的
- * bytes 差），rtt 與封包遺失是取樣當下的值。
- *
- * 回傳 `bytes` 是本次觀察到的累計 bytes（bytesSent 或 bytesReceived），
- * 呼叫端存起來當下次的 `previous`。
+ * 從 getStats() 項目算出統計。
+ * `previous` 是上一次取樣留下的 `snapshot`（第一次可省略，此時碼率為 0）。
  */
 export function computeTransportStats(
   entries: Iterable<StatsEntry>,
+  direction: StatsDirection,
   now: number,
-  previous?: { bytes: number; timestamp: number },
-): { stats: TransportStats; bytes?: number } {
-  let rttMs: number | undefined;
-  let bytes: number | undefined;
-  let packetsLost: number | undefined;
-  let packetsReceived: number | undefined;
+  previous?: StatsSnapshot,
+): { stats: TransportStats; snapshot: StatsSnapshot } {
+  const list = [...entries];
 
-  for (const entry of entries) {
-    if (entry.type === "candidate-pair" && entry.state === "succeeded") {
-      const rttSeconds = asFiniteNumber(entry.currentRoundTripTime);
-      if (rttSeconds !== undefined) rttMs = rttSeconds * 1000;
-    } else if (entry.type === "outbound-rtp" || entry.type === "inbound-rtp") {
-      bytes =
-        asFiniteNumber(entry.bytesSent) ??
-        asFiniteNumber(entry.bytesReceived) ??
-        bytes;
-      packetsLost = asFiniteNumber(entry.packetsLost) ?? packetsLost;
-      packetsReceived =
-        asFiniteNumber(entry.packetsReceived) ?? packetsReceived;
-    }
+  // RTT：依 selectedCandidatePairId 找 selected 的 candidate-pair。
+  const transport = list.find((entry) => entry.type === "transport");
+  const selectedCandidatePairId = asString(transport?.selectedCandidatePairId);
+  let rttMs: number | undefined;
+  const selectedPair =
+    selectedCandidatePairId !== undefined
+      ? list.find(
+          (entry) =>
+            entry.type === "candidate-pair" &&
+            entry.id === selectedCandidatePairId &&
+            entry.state === "succeeded",
+        )
+      : list.find(
+          (entry) =>
+            entry.type === "candidate-pair" && entry.state === "succeeded",
+        );
+  if (selectedPair) {
+    const rtt = asFiniteNumber(selectedPair.currentRoundTripTime);
+    if (rtt !== undefined) rttMs = rtt * 1000;
+  }
+
+  // 依方向加總 bytes 與封包（影音各一條 RTP stream）。
+  const rtpType = direction === "send" ? "outbound-rtp" : "inbound-rtp";
+  const bytesByRtp = new Map<string, number>();
+  let packetsLost = 0;
+  let packetsReceived = 0;
+  for (const entry of list) {
+    if (entry.type !== rtpType) continue;
+    const bytes = asFiniteNumber(
+      direction === "send" ? entry.bytesSent : entry.bytesReceived,
+    );
+    if (bytes !== undefined) bytesByRtp.set(entry.id, bytes);
+
+    const lost = asFiniteNumber(entry.packetsLost);
+    if (lost !== undefined) packetsLost += Math.max(0, lost);
+    const received = asFiniteNumber(entry.packetsReceived);
+    if (received !== undefined) packetsReceived += Math.max(0, received);
   }
 
   let bitrateKbps = 0;
-  if (
-    bytes !== undefined &&
-    previous !== undefined &&
-    previous.bytes !== undefined
-  ) {
-    const deltaBytes = Math.max(0, bytes - previous.bytes);
+  if (previous) {
     const deltaMs = now - previous.timestamp;
-    if (deltaMs > 0) bitrateKbps = (deltaBytes * 8) / deltaMs;
+    if (deltaMs > 0) {
+      let deltaBytes = 0;
+      for (const [id, bytes] of bytesByRtp) {
+        const prev = previous.bytesByRtp.get(id);
+        if (prev !== undefined) deltaBytes += Math.max(0, bytes - prev);
+      }
+      bitrateKbps = (deltaBytes * 8) / deltaMs;
+    }
   }
 
+  const totalPackets = packetsReceived + packetsLost;
   let packetLoss: number | undefined;
-  const totalPackets = (packetsLost ?? 0) + (packetsReceived ?? 0);
-  if (packetsLost !== undefined && totalPackets > 0) {
-    packetLoss = packetsLost / totalPackets;
+  if (totalPackets > 0) {
+    packetLoss = Math.min(1, Math.max(0, packetsLost / totalPackets));
   }
 
   const stats: TransportStats = { bitrateKbps };
   if (rttMs !== undefined) stats.rttMs = rttMs;
   if (packetLoss !== undefined) stats.packetLoss = packetLoss;
-  return { stats, bytes };
+  return { stats, snapshot: { bytesByRtp, timestamp: now } };
 }
 
 /**
- * 定期取樣器：持有上一次的 bytes 與時間，算出碼率。
- * 建構時注入 `getStats`（通常是 `() => pc.getStats()`）與 `now`（測試用假時鐘）。
+ * 定期取樣器：持有上一次的快照，算出碼率。
+ * 建構時注入 `getStats`（`() => pc.getStats()`）、方向與 `now`（測試用假時鐘）。
  */
 export class StatsSampler {
-  private previous: { bytes: number; timestamp: number } | undefined;
+  private previous: StatsSnapshot | undefined;
 
   constructor(
-    private readonly getStats: () => Promise<Iterable<StatsEntry>>,
+    private readonly getStats: () => Promise<RTCStatsReport>,
+    private readonly direction: StatsDirection,
     private readonly now: () => number = Date.now,
   ) {}
 
   async sample(): Promise<TransportStats> {
-    const entries = await this.getStats();
+    const report = await this.getStats();
+    const entries = [...report.values()] as unknown as StatsEntry[];
     const timestamp = this.now();
-    const result = computeTransportStats(entries, timestamp, this.previous);
-    if (result.bytes !== undefined) {
-      this.previous = { bytes: result.bytes, timestamp };
-    }
+    const result = computeTransportStats(
+      entries,
+      this.direction,
+      timestamp,
+      this.previous,
+    );
+    this.previous = result.snapshot;
     return result.stats;
   }
 }
@@ -125,4 +167,8 @@ function asFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value)
     ? value
     : undefined;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" && value !== "" ? value : undefined;
 }

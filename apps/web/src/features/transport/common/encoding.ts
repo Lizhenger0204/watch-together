@@ -10,12 +10,19 @@ import type { RtcRtpSender, RtcRtpTransceiver } from "./rtc";
 
 export { AUDIO_MAX_BITRATE };
 
+/** 依 kind 取 codec 能力的函式；測試注入假的 capabilities。 */
+export type CodecCapabilities = (kind: "audio" | "video") => RTCRtpCodec[];
+
+/** 預設：從瀏覽器取得 codec 能力。 */
+export const browserCodecCapabilities: CodecCapabilities = (kind) =>
+  RTCRtpSender.getCapabilities(kind)?.codecs ?? [];
+
 /** 依 §2 設定 video sender 的編碼參數（碼率、幀率、縮放、降級策略）。 */
-export function applyVideoEncoding(
+export async function applyVideoEncoding(
   sender: RtcRtpSender,
   preset: QualityPreset,
   sourceHeight: number,
-): void {
+): Promise<void> {
   const parameters = sender.getParameters();
   // degradationPreference 是 RTCRtpSendParameters 的欄位，不是 per-encoding。
   parameters.degradationPreference = "maintain-framerate";
@@ -28,16 +35,16 @@ export function applyVideoEncoding(
     encoding.maxFramerate = preset.maxFramerate;
     encoding.scaleResolutionDownBy = scaleResolutionDownBy;
   }
-  void sender.setParameters(parameters);
+  await sender.setParameters(parameters);
 }
 
 /** 依 §2 設定 audio sender 的編碼參數（Opus，上限 128 kbps）。 */
-export function applyAudioEncoding(sender: RtcRtpSender): void {
+export async function applyAudioEncoding(sender: RtcRtpSender): Promise<void> {
   const parameters = sender.getParameters();
   for (const encoding of parameters.encodings) {
     encoding.maxBitrate = AUDIO_MAX_BITRATE;
   }
-  void sender.setParameters(parameters);
+  await sender.setParameters(parameters);
 }
 
 /** 依 §2 設定 video track 的 contentHint（`motion`）。 */
@@ -71,13 +78,18 @@ export function preferredAudioCodecs(
   );
 }
 
-/** addTransceiver 之後呼叫：依 kind 設定 codec 偏好（H.264 優先 / Opus）。 */
-export function applyCodecPreferences(transceiver: RtcRtpTransceiver): void {
-  const capabilities =
-    RTCRtpSender.getCapabilities(transceiver.kind)?.codecs ?? [];
+/**
+ * addTransceiver 之後呼叫：把傳入的 codec capabilities 依 transceiver.kind
+ * 排成偏好順序（video：H.264 優先；audio：Opus），再設到 transceiver 上。
+ * `codecs` 由 `options.getCodecCapabilities`（預設 `browserCodecCapabilities`）提供。
+ */
+export function applyCodecPreferences(
+  transceiver: RtcRtpTransceiver,
+  codecs: readonly RTCRtpCodec[],
+): void {
   const preferred =
     transceiver.kind === "video"
-      ? preferredVideoCodecs(capabilities)
-      : preferredAudioCodecs(capabilities);
+      ? preferredVideoCodecs(codecs)
+      : preferredAudioCodecs(codecs);
   transceiver.setCodecPreferences(preferred);
 }
