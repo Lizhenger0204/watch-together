@@ -5,6 +5,7 @@ import {
   joinRoomRequestSchema,
   normalizeInviteCode,
   type ErrorCode,
+  type Mode,
   type ReuseRoomResponse,
 } from "@project/shared";
 import { Hono, type Context, type MiddlewareHandler } from "hono";
@@ -15,8 +16,14 @@ import { createRelayRoutes, type RelayEnv } from "./relay";
 import { isRoomId } from "./room/crypto";
 import type { AuthedMember, Services } from "./services";
 
+export type RoomMember = AuthedMember & { mode: Mode; relayGeneration: number };
+
 export interface AppServices extends Services {
-  rooms: Omit<Services["rooms"], "joinRoom"> & {
+  rooms: Omit<Services["rooms"], "joinRoom" | "authenticate"> & {
+    authenticate(
+      roomId: string,
+      token: string,
+    ): Promise<Result<Omit<RoomMember, "roomId">>>;
     joinRoom(
       inviteCode: string,
       nickname: string,
@@ -32,7 +39,7 @@ export interface AppServices extends Services {
 
 export type AppEnv = {
   Bindings: TurnEnv & RelayEnv;
-  Variables: { services: AppServices; member: AuthedMember };
+  Variables: { services: AppServices; member: RoomMember };
 };
 
 type Ctx = Context<AppEnv>;

@@ -1,9 +1,6 @@
 import {
   PROTOCOL_VERSION,
-  createRoomResponseSchema,
   iceResponseSchema,
-  joinRoomResponseSchema,
-  parseServerMessage,
   regenerateInviteCodeResponseSchema,
   reuseRoomResponseSchema,
   type ServerMessage,
@@ -16,37 +13,29 @@ import {
 } from "cloudflare:test";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { createApp } from "../src/app";
+import { workersServices } from "../src/runtime/workers/services";
 import type { RelayResource } from "../src/relay";
 import type { RoomState } from "../src/room/room";
 import type { Env } from "../src/runtime/workers/env";
 import { RoomDO } from "../src/runtime/workers/room-do";
-import { workersServices } from "../src/runtime/workers/services";
-
-const BASE = "https://signal.test";
-
-function post(path: string, body?: unknown, token?: string) {
-  return SELF.fetch(`${BASE}${path}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "CF-Connecting-IP": `10.0.0.${Math.floor(Math.random() * 250)}`,
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-}
-
-async function createRoom() {
-  const res = await post("/api/rooms", { nickname: "房主" });
-  expect(res.status).toBe(201);
-  return createRoomResponseSchema.parse(await res.json());
-}
-
-async function joinRoom(inviteCode: string, nickname = "朋友") {
-  const res = await post("/api/rooms/join", { inviteCode, nickname });
-  expect(res.status).toBe(200);
-  return joinRoomResponseSchema.parse(await res.json());
-}
+import {
+  BASE,
+  post,
+  connect,
+  createRoom,
+  joinRoom,
+  deferred,
+  alarmTime,
+  runAlarmAt,
+  relayRoom,
+} from "./room-fixture";
+import {
+  request,
+  publishOffer,
+  subscribeOffer,
+  REALTIME,
+  endpoint,
+} from "./relay-fixture";
 
 type DirectoryLike = {
   replace?: (oldCode: string, roomId: string, opId: string) => Promise<string>;
@@ -60,11 +49,6 @@ type RoomInternals = {
   sendTo: (ws: WebSocket, message: ServerMessage) => void;
 };
 const internals = (instance: RoomDO) => instance as unknown as RoomInternals;
-
-const REALTIME = {
-  REALTIME_APP_ID: "test-app",
-  REALTIME_APP_TOKEN: "private-realtime-credential",
-};
 
 function relayResource(id: string, ownerId: string): RelayResource {
   return {
@@ -97,81 +81,6 @@ function fakeSfu(fail: (sessionId: string) => boolean = () => false) {
     }),
   );
   return closed;
-}
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((r) => (resolve = r));
-  return { promise, resolve };
-}
-
-async function alarmTime(stub: DurableObjectStub<RoomDO>) {
-  return runInDurableObject(stub, (_i, state) => state.storage.getAlarm());
-}
-
-/** 把時鐘撥到 `now` 再執行已排定的 alarm。 */
-async function runAlarmAt(stub: DurableObjectStub<RoomDO>, now: number) {
-  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-  try {
-    return await runDurableObjectAlarm(stub);
-  } finally {
-    clock.mockRestore();
-  }
-}
-
-/** 開 WebSocket，收集伺服器訊息，提供 next(type) 等待特定訊息。 */
-async function connect(roomId: string) {
-  const res = await SELF.fetch(`${BASE}/api/rooms/${roomId}/ws`, {
-    headers: { Upgrade: "websocket" },
-  });
-  const ws = res.webSocket;
-  if (!ws) throw new Error(`沒有 WebSocket（status ${res.status}）`);
-  ws.accept();
-
-  const inbox: ServerMessage[] = [];
-  const waiters: Array<() => void> = [];
-  let closed: { code: number } | null = null;
-  ws.addEventListener("message", (event) => {
-    const parsed = parseServerMessage(event.data as string);
-    if (!parsed.ok) throw new Error(parsed.error);
-    inbox.push(parsed.message);
-    waiters.splice(0).forEach((wake) => wake());
-  });
-  ws.addEventListener("close", (event) => {
-    closed = { code: event.code };
-    waiters.splice(0).forEach((wake) => wake());
-  });
-
-  async function next<T extends ServerMessage["type"]>(type: T) {
-    for (;;) {
-      const index = inbox.findIndex((m) => m.type === type);
-      if (index >= 0) {
-        return inbox.splice(index, 1)[0] as Extract<ServerMessage, { type: T }>;
-      }
-      if (closed)
-        throw new Error(`連線已關閉（${closed.code}），沒有收到 ${type}`);
-      await new Promise<void>((resolve) => waiters.push(resolve));
-    }
-  }
-  async function closedWith() {
-    while (!closed) await new Promise<void>((resolve) => waiters.push(resolve));
-    return closed.code;
-  }
-
-  return {
-    send: (message: unknown) => ws.send(JSON.stringify(message)),
-    auth: (token: string) =>
-      ws.send(
-        JSON.stringify({
-          type: "auth",
-          token,
-          protocolVersion: PROTOCOL_VERSION,
-        }),
-      ),
-    next,
-    closedWith,
-    close: () => ws.close(1000),
-  };
 }
 
 /** 連到不能用的房間：記下 upgrade 狀態、關閉碼、原因與收到的訊息，用來比對各情況的回應是否一致。 */
@@ -905,7 +814,7 @@ describe("關房清理與休眠", () => {
       expect(await state.storage.get("relay")).toMatchObject({
         orphans: { orphan: resource },
       });
-      expect(await state.storage.get("retry")).toMatchObject({ attempts: 0 });
+      expect(await state.storage.get("retry")).toMatchObject({ attempts: 1 });
       expect(await state.storage.getAlarm()).toBe(deadline);
     });
     socket.close();
@@ -916,9 +825,12 @@ describe("關房清理與休眠", () => {
     [410, "unexpected", false],
     [503, "session_error", false],
   ] as const)("清理 SFU %s %s：完成=%s", async (status, errorCode, done) => {
-    const room = await createRoom();
+    const room = await relayRoom();
     const stub = env.ROOM.getByName(room.roomId);
-    await stub.registerRelayResource(relayResource("ended", room.memberId));
+    expect(
+      (await stub.registerRelayResource(relayResource("ended", room.memberId)))
+        .ok,
+    ).toBe(true);
     await runInDurableObject(stub, (instance) => {
       const target = internals(instance);
       target.env = { ...target.env, ...REALTIME };
@@ -941,16 +853,28 @@ describe("關房清理與休眠", () => {
 
   test("關房：邀請碼與每個轉發資源各自推進、各自保存進度；失敗的部分由 alarm 重試", async () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
-    const room = await createRoom();
-    const host = await connect(room.roomId);
-    host.auth(room.hostToken);
-    await host.next("room:snapshot");
+    const room = await relayRoom();
+    const host = room.host;
+    host.send({
+      type: "stream:status",
+      live: true,
+      title: null,
+      reqId: "live",
+    });
+    await host.next("ack");
     const stub = env.ROOM.getByName(room.roomId);
-    for (const id of ["one", "two"]) {
-      expect(
-        (await stub.registerRelayResource(relayResource(id, room.memberId))).ok,
-      ).toBe(true);
-    }
+    expect(
+      (await stub.registerRelayResource(relayResource("one", room.memberId)))
+        .ok,
+    ).toBe(true);
+    expect(
+      (
+        await stub.registerRelayResource({
+          ...relayResource("two", room.memberId),
+          publicationId: "one",
+        })
+      ).ok,
+    ).toBe(true);
     let sfuFailures = 1;
     const closed = fakeSfu(
       (session) => session === "session-two" && sfuFailures-- > 0,
@@ -1008,11 +932,27 @@ describe("關房清理與休眠", () => {
 
   test("清理最多嘗試 12 次（含第一次）；放棄後保留未完成的紀錄、不再排 alarm", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    const room = await createRoom();
+    const room = await relayRoom();
+    const host = room.host;
+    host.send({
+      type: "stream:status",
+      live: true,
+      title: null,
+      reqId: "live",
+    });
+    await host.next("ack");
     const stub = env.ROOM.getByName(room.roomId);
-    for (const id of ["ok", "stuck"]) {
-      await stub.registerRelayResource(relayResource(id, room.memberId));
-    }
+    expect(
+      (await stub.registerRelayResource(relayResource("ok", room.memberId))).ok,
+    ).toBe(true);
+    expect(
+      (
+        await stub.registerRelayResource({
+          ...relayResource("stuck", room.memberId),
+          publicationId: "ok",
+        })
+      ).ok,
+    ).toBe(true);
     const closed = fakeSfu((session) => session === "session-stuck");
     let releases = 0;
     await runInDurableObject(stub, (instance) => {
@@ -1358,52 +1298,7 @@ describe("連到不存在或已關閉的房間", () => {
 });
 
 describe("WHIP / WHEP", () => {
-  const route = createApp(workersServices);
-  const credentials = {
-    REALTIME_APP_ID: "test-app",
-    REALTIME_APP_TOKEN: "private-realtime-credential",
-  };
-  const endpoint = "https://rtc.live.cloudflare.com/v1/apps/test-app/sessions";
-  const sdp = (direction: string) =>
-    [
-      "v=0",
-      "o=- 1 2 IN IP4 127.0.0.1",
-      "s=-",
-      "t=0 0",
-      "m=video 9 UDP/TLS/RTP/SAVPF 96",
-      "a=mid:0",
-      `a=${direction}`,
-      "",
-    ].join("\r\n");
-  const publishOffer = sdp("sendonly");
-  const subscribeOffer = sdp("recvonly");
-
   afterEach(() => vi.unstubAllGlobals());
-
-  function request(
-    path: string,
-    token?: string,
-    body?: string,
-    options: {
-      bindings?: Partial<typeof credentials>;
-      contentType?: string;
-    } = {},
-  ) {
-    return route.request(
-      `${BASE}${path}`,
-      {
-        method: body === undefined ? "DELETE" : "POST",
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          ...(body !== undefined
-            ? { "Content-Type": options.contentType ?? "application/sdp" }
-            : {}),
-        },
-        body,
-      },
-      { ...env, ...(options.bindings ?? credentials) },
-    );
-  }
 
   function mockRealtime(...responses: Response[]) {
     const mock = vi.fn<typeof fetch>(async () => {
@@ -1416,7 +1311,7 @@ describe("WHIP / WHEP", () => {
   }
 
   test("驗證成員與房主角色、SDP 格式及必要憑證", async () => {
-    const room = await createRoom();
+    const room = await relayRoom();
     const viewer = await joinRoom(room.inviteCode);
     const base = `/api/rooms/${room.roomId}`;
     const upstream = mockRealtime();
@@ -1436,7 +1331,7 @@ describe("WHIP / WHEP", () => {
         "REALTIME_APP_TOKEN",
       ] as const) {
         const response = await request(path, token, body, {
-          bindings: { ...credentials, [missing]: undefined },
+          bindings: { ...REALTIME, [missing]: undefined },
         });
         expect(response.status).toBe(503);
         expect(await response.json()).toMatchObject({
@@ -1460,11 +1355,9 @@ describe("WHIP / WHEP", () => {
   });
 
   test("開播及發布後才允許訂閱，只有資源建立者能關閉 track", async () => {
-    const room = await createRoom();
+    const room = await relayRoom();
     const viewer = await joinRoom(room.inviteCode);
-    const host = await connect(room.roomId);
-    host.auth(room.hostToken);
-    await host.next("room:snapshot");
+    const host = room.host;
     const base = `/api/rooms/${room.roomId}`;
     const subscribe = () =>
       request(`${base}/whep`, viewer.memberToken, subscribeOffer);
@@ -1588,7 +1481,7 @@ describe("WHIP / WHEP", () => {
       ]);
       for (const [, init] of upstream.mock.calls) {
         expect(new Headers(init?.headers).get("Authorization")).toBe(
-          `Bearer ${credentials.REALTIME_APP_TOKEN}`,
+          `Bearer ${REALTIME.REALTIME_APP_TOKEN}`,
         );
         expect(init?.signal).toBeInstanceOf(AbortSignal);
       }
@@ -1599,11 +1492,11 @@ describe("WHIP / WHEP", () => {
 
   test("WHIP 與關房同時發生：登記被拒且回滾失敗時，tracks 記成清理待辦，之後由 alarm 關掉", async () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
-    const room = await createRoom();
+    const room = await relayRoom();
     const stub = env.ROOM.getByName(room.roomId);
     await runInDurableObject(stub, (instance) => {
       const target = internals(instance);
-      target.env = { ...target.env, ...credentials };
+      target.env = { ...target.env, ...REALTIME };
     });
     const entered = deferred();
     const resume = deferred();
@@ -1666,11 +1559,11 @@ describe("WHIP / WHEP", () => {
   });
 
   test("上游回傳錯誤時只公開通用錯誤", async () => {
-    const room = await createRoom();
+    const room = await relayRoom();
     const upstream = mockRealtime(
       Response.json(
         {
-          errorDescription: credentials.REALTIME_APP_TOKEN,
+          errorDescription: REALTIME.REALTIME_APP_TOKEN,
           other: room.hostToken,
         },
         { status: 502 },
@@ -1687,7 +1580,7 @@ describe("WHIP / WHEP", () => {
     expect(JSON.parse(body)).toMatchObject({
       error: { code: "RELAY_UNAVAILABLE" },
     });
-    expect(body).not.toContain(credentials.REALTIME_APP_TOKEN);
+    expect(body).not.toContain(REALTIME.REALTIME_APP_TOKEN);
     expect(body).not.toContain(room.hostToken);
     expect(upstream).toHaveBeenCalledOnce();
   });

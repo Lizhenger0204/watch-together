@@ -23,7 +23,7 @@
 | DELETE | `<Location>` | 同建立者 | — | `200` |
 | GET | `/api/health` | 無 | — | `200 { ok: true, protocolVersion }` |
 
-WHIP 只需房間已切到 relay 即可發布。WHIP 的 409 訊息為「請先切換到轉發模式再發布」，WHEP 的 409 訊息為「目前沒有可收看的轉發直播」。兩者皆用通用 REST 錯誤格式。踢人或淘汰成員後，舊憑證再送 WHEP 回 `401 UNAUTHORIZED`。
+WHIP 只需房間已切到 relay 即可發布。P2P 模式下，WHIP 的 409 訊息為「請先切換到轉發模式再發布」，WHEP 的 409 訊息為「目前沒有可收看的轉發直播」。兩者皆用通用 REST 錯誤格式。若 SFU 建連期間已切離轉發、建立者離線，或 WHEP 所訂閱的發布已失效，即使房間又切回轉發或成員已重連，也會撤回這次登記並回 `409 STREAM_NOT_LIVE`（「房間狀態已變更，請確認轉發狀態後重試」）。踢人或淘汰成員後，舊憑證再送 WHEP 回 `401 UNAUTHORIZED`。若移除前就已驗證、移除後才登記，則回 `403 FORBIDDEN` 並回滾已建立的 tracks。
 
 加入與沿用共用每 IP 每分鐘 10 次的限流。呼叫端可用 `excludeRoomIds` 列出已持有憑證的房間，禁止為這些房間配置新席位。帶 `existingRoomId` 時必須用 `Authorization: Bearer <token>`，且只嘗試沿用：邀請目錄與房間當下的碼皆符合、房號相同且憑證仍屬於成員，才回傳原 memberId 與 `reused: true`。客戶端保留原憑證與角色，沿用回應不含 token。鎖房與滿房不影響沿用。錯碼、錯房、沿用時的失效憑證及鎖房一律回相同的 `404 ROOM_NOT_FOUND`。只提供 header 或只提供房號也一律拒絕。新加入時，房間開放但已滿，一律回相同的 `409 ROOM_FULL` 本文。有空位才檢查排除名單，命中回 `404 ROOM_NOT_FOUND`。客戶端收到 404 或 409 都可嘗試沿用。
 

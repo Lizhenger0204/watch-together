@@ -20,6 +20,8 @@ export type MemberRecord = {
   tokenHash: string;
   joinedAt: number;
   lastSeenAt: number;
+  /** 舊房間未儲存此欄位，視為第 0 代。 */
+  relayGeneration?: number;
 };
 
 export type RoomState = {
@@ -159,6 +161,21 @@ export function touchMember(
     ...state,
     members: state.members.map((m) =>
       m.memberId === memberId ? { ...m, lastSeenAt: now } : m,
+    ),
+  };
+}
+
+/** 切離轉發時使全房在途請求失效；單人離線只影響自己的請求。 */
+export function invalidateRelayRequests(
+  state: RoomState,
+  memberId?: string,
+): RoomState {
+  return {
+    ...state,
+    members: state.members.map((member) =>
+      memberId === undefined || member.memberId === memberId
+        ? { ...member, relayGeneration: (member.relayGeneration ?? 0) + 1 }
+        : member,
     ),
   };
 }

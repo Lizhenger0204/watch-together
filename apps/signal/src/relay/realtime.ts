@@ -21,16 +21,13 @@ const newSession = z.object({
   sessionId: identifier.regex(/^[\w-]+$/),
 });
 const trackResults = z.object({
+  errorCode: z.string().optional(),
+  tracks: z.array(z.unknown()),
+});
+const addedTrack = z.object({
   ...errorFields,
-  tracks: z
-    .array(
-      z.object({
-        mid: identifier,
-        trackName: identifier.optional(),
-        errorCode: z.string().optional(),
-      }),
-    )
-    .min(1),
+  mid: identifier,
+  trackName: identifier.optional(),
 });
 const negotiation = z.object({
   sessionDescription: z.object({ type: z.literal("answer"), sdp: identifier }),
@@ -99,41 +96,53 @@ export function createRealtime(
     }
   }
 
-  async function post(path: string, body?: unknown) {
-    const response = await call(path, "POST", body);
-    if (!response.ok) throw new AppError("RELAY_UNAVAILABLE");
-    return response.data;
-  }
-
   return {
     closeTracks,
-    async open(sdp: string, tracks: TrackRequest[]) {
-      const session = newSession.safeParse(await post("/new"));
-      if (!session.success) throw new AppError("RELAY_UNAVAILABLE");
+    async open(
+      sdp: string,
+      tracks: TrackRequest[],
+      rollback: (sessionId: string, tracks: RelayTrack[]) => Promise<void>,
+    ) {
+      const created = await call("/new", "POST");
+      const session = newSession.safeParse(created.data);
+      if (!created.ok || !session.success)
+        throw new AppError("RELAY_UNAVAILABLE");
       const { sessionId } = session.data;
-      const response = await post(`/${sessionId}/tracks/new`, {
+      const response = await call(`/${sessionId}/tracks/new`, "POST", {
         sessionDescription: { type: "offer", sdp },
         tracks,
       });
-      const results = trackResults.safeParse(response);
-      const answer = negotiation.safeParse(response);
+      const results = trackResults.safeParse(response.data);
+      const answer = negotiation.safeParse(response.data);
+      // 一個 track 失敗（可能沒有 mid）也要保留同一個回應中已建立的 tracks。
       const added = results.success
-        ? results.data.tracks.filter((track) => !track.errorCode)
+        ? results.data.tracks.flatMap((raw) => {
+            const track = addedTrack.safeParse(raw);
+            return track.success ? [track.data] : [];
+          })
         : [];
       const matched = tracks.map(({ trackName }) =>
         added.find((track) => track.trackName === trackName),
       );
       if (
+        !response.ok ||
+        !results.success ||
+        results.data.errorCode ||
+        results.data.tracks.length !== added.length ||
         !answer.success ||
         added.length !== tracks.length ||
         new Set(added.map(({ mid }) => mid)).size !== tracks.length ||
         matched.some((track) => !track) ||
         answer.data.sessionDescription.sdp.includes(REALTIME_APP_TOKEN)
       ) {
-        await closeTracks(
+        // 上游可能只提供 mid；清理只依 sessionId 與 mid 關閉已建立的 tracks。
+        await rollback(
           sessionId,
-          added.map(({ mid }) => mid),
-        ).catch(() => {});
+          added.map(({ mid, trackName }) => ({
+            mid,
+            trackName: trackName ?? "",
+          })),
+        );
         throw new AppError("RELAY_UNAVAILABLE");
       }
       return {

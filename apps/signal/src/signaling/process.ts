@@ -4,6 +4,7 @@ import {
   findMember,
   findMemberByTokenHash,
   hostOf,
+  invalidateRelayRequests,
   removeMember,
   toMembers,
   toRoomInfo,
@@ -242,7 +243,7 @@ export function onMessage(
       };
       const switchedToP2p = state.mode !== "p2p" && next.mode === "p2p";
       return {
-        state: next,
+        state: switchedToP2p ? invalidateRelayRequests(next) : next,
         effects: [
           ...ok(self, reqId),
           ...roomUpdatedTo(next, online),
@@ -373,6 +374,7 @@ export function onDisconnect(
   if (!member || onlineAfter.has(memberId)) return { state, effects: [] };
 
   let next = touchMember(state, memberId, now);
+  if (state.mode === "relay") next = invalidateRelayRequests(next, memberId);
   if (onlineAfter.size === 0) next = { ...next, idleSince: now };
 
   const effects = membersTo(next, onlineAfter);
