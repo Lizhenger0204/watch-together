@@ -276,6 +276,7 @@ describe("joinKeepingIdentity", () => {
     const before = api.admissions();
     await expect(joinKeepingIdentity(ROTATED, "朋友")).rejects.toMatchObject({
       code: "ROOM_NOT_FOUND",
+      message: "先前保存的房間身份已失效，請再按一次「加入」。",
     });
     await expect(joinKeepingIdentity(ROTATED, "朋友")).resolves.toEqual({
       roomId: ROOM,

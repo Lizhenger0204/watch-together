@@ -72,12 +72,16 @@ function storedIdentity(key: string) {
 
 function readIdentity(key: string) {
   const stored = storedIdentity(key);
-  if (
-    stored !== undefined &&
-    stored !== (lastStoredIdentity.get(key) ?? null)
-  ) {
+  const last = lastStoredIdentity.get(key) ?? null;
+  if (stored !== undefined && stored !== last) {
+    const current = memory.local.get(key);
     lastStoredIdentity.set(key, stored);
-    memory.local.set(key, stored);
+    // 只有本分頁沒有身份（沒讀過或已清除），或記憶體的值本來就來自共用儲存時，
+    // 才採用其他分頁寫入的新值。本分頁寫入失敗、只存在記憶體的有效身份
+    // （例如建房時存不進去的房主憑證）不可被覆蓋；它失效時由 clearIfCurrent 接手共用值。
+    if (current === undefined || current === null || current === last) {
+      memory.local.set(key, stored);
+    }
   }
   return memory.local.get(key) ?? null;
 }

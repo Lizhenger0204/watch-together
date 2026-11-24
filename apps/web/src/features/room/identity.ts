@@ -176,6 +176,7 @@ async function join(inviteCode: string, nickname: string) {
   }
 
   // 鎖房、滿房或名單超過上限時，已有的席位仍可沿用。
+  let identityExpired = false;
   for (const roomId of roomIds) {
     const existing = roomToken.get(roomId);
     if (!existing) continue;
@@ -189,11 +190,19 @@ async function join(inviteCode: string, nickname: string) {
     } catch (error) {
       if (!(error instanceof ApiError && error.code === "ROOM_NOT_FOUND"))
         throw error;
-      await verifyStoredIdentity(roomId, existing);
+      const check = await verifyStoredIdentity(roomId, existing);
+      if (check === "unauthorized" || check === "room_closed")
+        identityExpired = true;
       // 若中途達到 IP 限流，下次重試會先檢查尚未比對的房號。
       rememberedRooms.delete(roomId);
       rememberedRooms.add(roomId);
     }
+  }
+  if (identityExpired && admissionError?.code === "ROOM_NOT_FOUND") {
+    // 舊身份剛確認失效並已清除：同一個邀請碼再送一次就能重新加入，不要讓人以為碼打錯。
+    const expired = new ApiError("ROOM_NOT_FOUND");
+    expired.message = "先前保存的房間身份已失效，請再按一次「加入」。";
+    throw expired;
   }
   if (admissionError) throw admissionError;
   const error = new ApiError("BAD_REQUEST");
