@@ -8,6 +8,7 @@ import {
   parseClientMessage,
   parseServerMessage,
   qualitySchema,
+  reuseRoomResponseSchema,
 } from "../src";
 
 const token = "x".repeat(43);
@@ -152,8 +153,17 @@ describe.each([
 });
 
 describe("REST 與常數", () => {
+  test("沿用成功只確認原成員，不回傳憑證", () => {
+    const reused = { roomId: "r", memberId: "m", reused: true };
+    expect(reuseRoomResponseSchema.safeParse(reused).success).toBe(true);
+    expect(
+      reuseRoomResponseSchema.safeParse({ ...reused, memberToken: token })
+        .success,
+    ).toBe(false);
+  });
+
   test("加入可指定沿用的房號與禁止增配的房號", () => {
-    const roomId = crypto.randomUUID();
+    const roomId = "12345678-1234-4234-9234-123456789abc";
     const input = {
       inviteCode: "ABCDEFGH",
       nickname: "朋友",

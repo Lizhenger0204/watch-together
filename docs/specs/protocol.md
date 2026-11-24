@@ -15,7 +15,7 @@
 | 方法 | 路徑 | 認證 | 請求 | 回應 |
 | --- | --- | --- | --- | --- |
 | POST | `/api/rooms` | 無 | `{ nickname }` | `201 { roomId, inviteCode, hostToken, memberId }` |
-| POST | `/api/rooms/join` | 新加入免認證；沿用身份帶 Bearer | `{ inviteCode, nickname, existingRoomId?, excludeRoomIds? }` | `200 { roomId, memberToken, memberId }` |
+| POST | `/api/rooms/join` | 新加入免認證；沿用身份帶 Bearer | `{ inviteCode, nickname, existingRoomId?, excludeRoomIds? }` | 新加入 `200 { roomId, memberToken, memberId }`；沿用 `200 { roomId, memberId, reused: true }` |
 | POST | `/api/rooms/:roomId/invite-code` | host | — | `200 { inviteCode }`（重新產生） |
 | GET | `/api/rooms/:roomId/ice` | 任一成員 | — | `200 { iceServers: RTCIceServer[] }` |
 | POST | `/api/rooms/:roomId/whip` | host | SDP offer（`application/sdp`） | `201` SDP answer + `Location` |
@@ -23,7 +23,7 @@
 | DELETE | `<Location>` | 同建立者 | — | `200` |
 | GET | `/api/health` | 無 | — | `200 { ok: true, protocolVersion }` |
 
-加入與沿用共用每 IP 每分鐘 10 次的限流。呼叫端可用 `excludeRoomIds` 列出已持有憑證的房間，禁止為這些房間配置新席位。帶 `existingRoomId` 時必須用 `Authorization: Bearer <token>`，且只嘗試沿用：邀請目錄與房間當下的碼皆符合、房號相同且憑證仍屬於成員，才回傳原 memberId 與原憑證（沿用房主時同樣保留房主角色）。鎖房與滿房不影響沿用。錯碼、錯房、失效憑證、被排除的新席位及鎖房一律回相同的 `404 ROOM_NOT_FOUND`。只提供 header 或只提供房號也一律拒絕。一般新加入沿用原有的回應格式與滿房行為。
+加入與沿用共用每 IP 每分鐘 10 次的限流。呼叫端可用 `excludeRoomIds` 列出已持有憑證的房間，禁止為這些房間配置新席位。帶 `existingRoomId` 時必須用 `Authorization: Bearer <token>`，且只嘗試沿用：邀請目錄與房間當下的碼皆符合、房號相同且憑證仍屬於成員，才回傳原 memberId 與 `reused: true`。客戶端保留原憑證與角色，沿用回應不含 token。鎖房與滿房不影響沿用。錯碼、錯房、失效憑證、被排除的新席位及鎖房一律回相同的 `404 ROOM_NOT_FOUND`。只提供 header 或只提供房號也一律拒絕。一般新加入沿用原有的回應格式與滿房行為。
 
 ## WebSocket
 

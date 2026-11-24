@@ -46,6 +46,12 @@ export const joinRoomResponseSchema = z.object({
 });
 export type JoinRoomResponse = z.infer<typeof joinRoomResponseSchema>;
 
+export const reuseRoomResponseSchema = z.strictObject({
+  roomId: idSchema,
+  memberId: idSchema,
+  reused: z.literal(true),
+});
+
 // POST /api/rooms/:roomId/invite-code
 export const regenerateInviteCodeResponseSchema = z.object({
   inviteCode: inviteCodeSchema,
