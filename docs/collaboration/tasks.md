@@ -124,3 +124,9 @@ Review（GPT 第二輪，監工核對）：結論「小修後可合併」。第�
 - 第一次沒有音軌時，沒有替每種 kind 預留 transceiver，之後換成有聲片就加不回聲音。換片後重建 transport 時，也沒寫清楚要用 T-106 的哪一個 stream。
 
 第四項「停止後立即重開轉發，晚到的舊 WHIP 會蓋掉新發布」屬於轉發的開停序列化，改列為 T-109 的必做項，若需要伺服器辨識發布世代則另開任務。應修：同一成員重複發出 `peer:request` 或 ICE restart 時，舊協商要整個作廢，並補上 restart 的 answer 期限；fake 要在套用遠端 offer 時自動建立接收 transceiver；統計缺值時的規則；T-109 單次 HTTP offer 的 ICE 收集方式，以及取得完整 `localDescription` 的入口。
+
+> 2026-11-24 使用者決定：T-115 第二輪審查的修正改由 GPT 直接處理，Claude 這輪不動 T-115。分兩個子對話，依檔案切開，避免衝突：
+> - `gpt/T-115-fix-contract`：`docs/specs/streaming.md`、`features/transport/index.ts`。
+> - `gpt/T-115-fix-common`：`features/transport/common/`。
+>
+> 監工把兩個分支合併到 T-115 分支，再派審查，通過後才併入 main。
