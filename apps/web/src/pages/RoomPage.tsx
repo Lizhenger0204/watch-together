@@ -9,7 +9,7 @@ import {
   StreamSettings,
   useRoom,
 } from "../features/room";
-import type { HostPhase } from "../features/room/host-session";
+import type { HostPhase } from "../features/room/host-session-types";
 import {
   formatMbps,
   roomExit,

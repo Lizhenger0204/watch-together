@@ -1,22 +1,29 @@
-import type {
-  ClientMessageOf,
-  Member,
-  Mode,
-  Quality,
-  ServerMessage,
-} from "@project/shared";
-import { ApiError } from "../../lib/api";
-import {
-  SignalDisconnectedError,
-  type ConnectionState,
-} from "../../lib/signal";
+import type { Mode, Quality, ServerMessage } from "@project/shared";
+import type { ConnectionState } from "../../lib/signal";
 import {
   createHostTransport,
-  TransportError,
   type CreateHostTransport,
   type HostTransport,
   type TransportSignal,
 } from "../transport";
+import { HostSessionBase } from "./host-session-base";
+import {
+  KINDS,
+  NO_TRACKS,
+  browserTimers,
+  disconnected,
+  onlineViewers,
+  readable,
+  tracksOf,
+} from "./host-session-types";
+import type {
+  HostPhase,
+  HostSessionOptions,
+  HostSessionView,
+  HostSource,
+  Op,
+  Tracks,
+} from "./host-session-types";
 import { streamTitle } from "./live-intent";
 import type { SessionTimers } from "./viewer-session";
 
@@ -26,138 +33,56 @@ import type { SessionTimers } from "./viewer-session";
 // 收看者消失或離線時 removePeer；直播中切模式照 §6「房主」1～4 步；
 // 重新驗證（room:snapshot）時拆掉舊傳輸再依意圖重建；連線以 4000 等關閉時銷毀傳輸。
 // 不依賴 React；SignalClient、傳輸工廠與計時器都可注入。
+// 送請求、等 ack／廣播與建立傳輸的部分在 host-session-base.ts 的抽象基類。
 //
 // 房主的 stream:status 一律由本類別送出（取代 RoomPage 原本的 useLiveIntent），不要兩套並存。
 
-/** useLocalSource 的片源狀態（check.status 原樣傳入）。 */
-export type HostSource = {
-  stream: MediaStream | null;
-  status: "idle" | "checking" | "ready" | "warning" | "error";
-  /** 去掉副檔名的檔名；送出前用 live-intent.ts 的 streamTitle 截斷。 */
-  title: string;
-};
-
-export type HostPhase =
-  /** 沒有開播意圖。 */
-  | "idle"
-  /** 有開播意圖，但暫時不能開播（未連線、片源未就緒）。UI 顯示「直播暫停中」。 */
-  | "waiting"
-  /** 建立傳輸、await start()、送 live:true 中。 */
-  | "starting"
-  /** 伺服器已確認直播。 */
-  | "live"
-  /** 送出 live:false，等確認。 */
-  | "stopping"
-  /** §6 直播中切模式 1～4 步進行中。UI 顯示「切換中」。 */
-  | "switching";
-
-export type HostSessionView = {
-  intent: boolean;
-  phase: HostPhase;
-  /** 給房主看的可讀錯誤（開播失敗、轉發不可用、切換失敗、畫質套用失敗）。 */
-  error: string | null;
-};
-
-type HostRequest =
-  | Omit<ClientMessageOf<"stream:status">, "reqId">
-  | Omit<ClientMessageOf<"room:update">, "reqId">;
-
-/** SignalClient 的子集（測試注入 fake）。 */
-export interface HostSessionClient {
-  onMessage(handler: (message: ServerMessage) => void): () => void;
-  onState(handler: (state: ConnectionState) => void): () => void;
-  send(message: ClientMessageOf<"signal">): boolean;
-  /** 等同一 reqId 的 ack；失敗以 ApiError（連線中斷為 SignalDisconnectedError）reject。 */
-  request(message: HostRequest): Promise<void>;
-}
-
-export type HostSessionOptions = {
-  client: HostSessionClient;
-  roomId: string;
-  /** hostToken。不可寫進 log。 */
-  token: string;
-  /** 分頁儲存的開播意圖（liveIntent.get）。 */
-  initialIntent: boolean;
-  /** 意圖改變時呼叫（由 hook 寫回 liveIntent）。 */
-  onIntentChange?: (on: boolean) => void;
-  createTransport?: CreateHostTransport;
-  /** 目前沒有自己的計時（逾時沿用 SignalClient.request 的 10 秒）；保留注入點。 */
-  timers?: SessionTimers;
-};
-
-type Kind = "video" | "audio";
-type Tracks = Record<Kind, MediaStreamTrack | null>;
-type Op = "starting" | "stopping" | "switching";
-
-const KINDS: Kind[] = ["video", "audio"];
-const NO_TRACKS: Tracks = { video: null, audio: null };
-
-/** 和 P2P host 的 start() 一樣：各 kind 取第一條還沒結束的 track。 */
-function tracksOf(stream: MediaStream | null): Tracks {
-  if (!stream) return NO_TRACKS;
-  const pick = (list: MediaStreamTrack[]) =>
-    list.find((track) => track.readyState !== "ended") ?? null;
-  return {
-    video: pick(stream.getVideoTracks()),
-    audio: pick(stream.getAudioTracks()),
-  };
-}
-
-function onlineViewers(members: Member[]) {
-  return new Set(
-    members
-      .filter((m) => m.role === "member" && m.online)
-      .map((m) => m.memberId),
-  );
-}
-
-const disconnected = (error: unknown) =>
-  error instanceof SignalDisconnectedError;
-
-function readable(error: unknown): string {
-  if (error instanceof TransportError || error instanceof ApiError) {
-    return error.message;
-  }
-  return "操作失敗，請稍後再試。";
-}
-
-export class HostSession {
+export class HostSession extends HostSessionBase {
   private host = false;
   /** 已收到這條連線的 room:snapshot，且連線仍是 open。 */
   private connected = false;
   /** 連線以關閉碼結束（4000 等）：之後什麼都不送。 */
-  private closed = false;
-  private destroyed = false;
+  protected closed = false;
+  protected destroyed = false;
   private intent: boolean;
-  private source: HostSource = { stream: null, status: "idle", title: "" };
-  private mode: Mode = "p2p";
-  private quality: Quality = "standard";
+  protected source: HostSource = { stream: null, status: "idle", title: "" };
+  protected mode: Mode = "p2p";
+  protected quality: Quality = "standard";
   /** 伺服器目前的直播狀態（snapshot、stream:status 廣播、自己 live:true 的 ack）。 */
-  private serverLive = false;
-  private serverTitle: string | null = null;
+  protected serverLive = false;
+  protected serverTitle: string | null = null;
   /** 直播中已送出、還沒確認的片名更新。 */
-  private pendingTitle: string | null = null;
+  protected pendingTitle: string | null = null;
+  /** pendingTitle 用 null 代表「無待送」，但 null 也是合法片名，用這個旗標區分。 */
+  protected hasPendingTitle = false;
   private viewers = new Set<string>();
   private transport: HostTransport | null = null;
   /** 最後一次交給傳輸的各 kind track。 */
   private applied: Tracks = NO_TRACKS;
   /** 每次建立或拆掉傳輸、每次重新驗證就加一，讓晚到的回呼失效。 */
-  private generation = 0;
-  private signalHandler: Parameters<TransportSignal["onSignal"]>[0] | null =
+  protected generation = 0;
+  protected signalHandler: Parameters<TransportSignal["onSignal"]>[0] | null =
     null;
-  private peerHandler: Parameters<TransportSignal["onPeerRequest"]>[0] | null =
-    null;
-  private op: Op | null = null;
+  protected peerHandler:
+    Parameters<TransportSignal["onPeerRequest"]>[0] | null = null;
+  protected op: Op | null = null;
   /** 等停播確認時，收到 live:false 廣播就呼叫。 */
-  private stopWaiter: (() => void) | null = null;
+  protected stopWaiter: (() => void) | null = null;
   /** 切模式第 2 步：收到目標模式的 room:updated 就呼叫。 */
-  private modeWaiter: { mode: Mode; resolve: () => void } | null = null;
+  protected modeWaiter: { mode: Mode; resolve: () => void } | null = null;
+  /** modeWaiter 的等待廣播期限計時器。 */
+  protected modeTimer: unknown = null;
   private error: string | null = null;
   private view: HostSessionView;
   private readonly listeners = new Set<() => void>();
-  private readonly createTransport: CreateHostTransport;
+  protected readonly createTransport: CreateHostTransport;
+  protected readonly options: HostSessionOptions;
+  protected readonly timers: SessionTimers;
 
-  constructor(private readonly options: HostSessionOptions) {
+  constructor(options: HostSessionOptions) {
+    super();
+    this.options = options;
+    this.timers = options.timers ?? browserTimers;
     this.intent = options.initialIntent;
     this.createTransport = options.createTransport ?? createHostTransport;
     this.view = { intent: this.intent, phase: this.phase(), error: null };
@@ -247,7 +172,7 @@ export class HostSession {
     this.dropTransport();
     this.op = null;
     this.stopWaiter = null;
-    this.modeWaiter = null;
+    this.clearModeWaiter();
     this.destroyed = true;
     this.listeners.clear();
   }
@@ -308,7 +233,7 @@ export class HostSession {
     this.dropTransport();
     this.op = null;
     this.stopWaiter = null;
-    this.modeWaiter = null;
+    this.clearModeWaiter();
     this.host = message.you.role === "host";
     if (!this.host) {
       this.connected = false;
@@ -336,7 +261,7 @@ export class HostSession {
       this.mode = mode;
       const waiter = this.modeWaiter;
       if (waiter?.mode === mode) {
-        this.modeWaiter = null;
+        this.clearModeWaiter();
         waiter.resolve();
       }
     }
@@ -371,9 +296,13 @@ export class HostSession {
     return this.source.status === "ready" && this.source.stream !== null;
   }
 
-  /** 直播中換檔檢查期間（checking）保留傳輸，tracks 暫時為 null（§9）。 */
+  /** 直播中換檔檢查期間（checking）與等房主確認的 warning 保留傳輸，tracks 暫時為 null（§9）。 */
   private sourceHolding() {
-    return this.sourceReady() || this.source.status === "checking";
+    return (
+      this.sourceReady() ||
+      this.source.status === "checking" ||
+      this.source.status === "warning"
+    );
   }
 
   /** 依目前狀態決定要開播、停播、更新片名或切到伺服器的模式。進行中的操作結束後會再呼叫。 */
@@ -420,17 +349,46 @@ export class HostSession {
     try {
       await transport.start();
     } catch (error) {
-      if (gen === this.generation) this.failStart(error);
+      if (gen !== this.generation) return;
+      if (disconnected(error)) {
+        // 不是傳輸本身失敗，是連線中斷：保留意圖，重新驗證（snapshot）後重建。
+        this.dropTransport();
+        this.op = null;
+        this.publish();
+        return;
+      }
+      this.failStart(error);
       return;
     }
     if (gen !== this.generation) return;
-    // start() 期間停止意圖、片源壞掉或模式被改：交給 reconcile 收尾。
+    // start() 期間停止意圖、片源換掉或模式被改：這個傳輸已過時，拆掉交給 reconcile 收尾。
     if (!this.intent || !this.sourceReady() || transport.mode !== this.mode) {
       this.op = null;
-      if (transport.mode !== this.mode) this.dropTransport();
+      if (!this.sourceReady() || transport.mode !== this.mode) {
+        this.dropTransport();
+      }
       this.reconcile();
       this.publish();
       return;
+    }
+
+    // 上一次停播尚未確認（live:false 逾時或傳輸失敗）時，serverLive 仍可能為 true。
+    // 先確認停播，伺服器才會在收 live:true 時走 false→true 並對收看者重發 peer:request。
+    if (this.serverLive) {
+      try {
+        await this.confirmStop();
+      } catch (error) {
+        if (gen !== this.generation) return;
+        if (disconnected(error)) {
+          this.dropTransport();
+          this.op = null;
+          this.publish();
+          return;
+        }
+        this.failStart(error);
+        return;
+      }
+      if (gen !== this.generation) return;
     }
 
     const title = streamTitle(this.source.title);
@@ -515,6 +473,8 @@ export class HostSession {
       if (!disconnected(error)) {
         this.error = `切換失敗，仍維持原本的傳送方式：${readable(error)}`;
       }
+      // 重新讀取意圖：切換途中可能已經按停止，要繼續走停播。
+      this.reconcile();
       this.publish();
       return;
     }
@@ -547,112 +507,10 @@ export class HostSession {
     this.publish();
   }
 
-  /** 送停播；同一 reqId 的 ack 或之後的 live:false 廣播先到者為確認。 */
-  private confirmStop(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      let settled = false;
-      const onBroadcast = () => settle(resolve);
-      const settle = (fn: () => void) => {
-        if (settled) return;
-        settled = true;
-        if (this.stopWaiter === onBroadcast) this.stopWaiter = null;
-        fn();
-      };
-      this.stopWaiter = onBroadcast;
-      this.options.client
-        .request({ type: "stream:status", live: false, title: null })
-        .then(
-          () => {
-            this.serverLive = false;
-            this.serverTitle = null;
-            settle(resolve);
-          },
-          (error: unknown) => settle(() => reject(error)),
-        );
-    });
-  }
-
-  /** 送 room:update { mode }，收到該模式的 room:updated 才 resolve。 */
-  private confirmMode(target: Mode): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const waiter = { mode: target, resolve };
-      this.modeWaiter = waiter;
-      this.options.client
-        .request({ type: "room:update", mode: target })
-        .catch((error: unknown) => {
-          if (this.modeWaiter !== waiter) return;
-          this.modeWaiter = null;
-          reject(error);
-        });
-    });
-  }
-
-  private updateTitle() {
-    const title = streamTitle(this.source.title);
-    if (title === this.serverTitle || title === this.pendingTitle) return;
-    const gen = this.generation;
-    this.pendingTitle = title;
-    this.options.client
-      .request({ type: "stream:status", live: true, title })
-      .then(
-        () => {
-          if (gen !== this.generation || this.pendingTitle !== title) return;
-          this.pendingTitle = null;
-          this.serverTitle = title;
-          this.publish();
-        },
-        (error: unknown) => {
-          if (gen !== this.generation || this.pendingTitle !== title) return;
-          this.pendingTitle = null;
-          this.showError(error);
-        },
-      );
-  }
-
   // ── 傳輸 ───────────────────────────────────────────────
 
-  private build(gen: number): HostTransport {
-    const current = () =>
-      gen === this.generation && !this.destroyed && !this.closed;
-    const signal: TransportSignal = {
-      sendSignal: (to, data) =>
-        current() && this.options.client.send({ type: "signal", to, data }),
-      onSignal: (handler) => {
-        if (current()) this.signalHandler = handler;
-        return () => {
-          if (this.signalHandler === handler) this.signalHandler = null;
-        };
-      },
-      onPeerRequest: (handler) => {
-        if (current()) this.peerHandler = handler;
-        return () => {
-          if (this.peerHandler === handler) this.peerHandler = null;
-        };
-      },
-    };
-    const transport = this.createTransport({
-      stream: this.source.stream!,
-      signal,
-      mode: this.mode,
-      quality: this.quality,
-      roomId: this.options.roomId,
-      token: this.options.token,
-    });
-    transport.onError((error) => {
-      // 個別收看者的連線失敗由傳輸自己 removePeer；只顯示畫質套用失敗。
-      if (current() && error.code === "TRACK_ERROR") this.showError(error);
-    });
-    transport.onState((state) => {
-      // 開播中的失敗由 start() 的 reject 處理。
-      if (state === "error" && current() && this.op !== "starting") {
-        this.failLive();
-      }
-    });
-    return transport;
-  }
-
   /** 直播中傳輸整體無法繼續：拆掉、取消意圖、讓收看者停止舊連線。 */
-  private failLive() {
+  protected failLive() {
     const wasLive = this.serverLive;
     this.dropTransport();
     this.op = null;
@@ -684,6 +542,7 @@ export class HostSession {
     this.peerHandler = null;
     this.applied = NO_TRACKS;
     this.pendingTitle = null;
+    this.hasPendingTitle = false;
   }
 
   private cancelIntent() {
@@ -692,7 +551,13 @@ export class HostSession {
     this.options.onIntentChange?.(false);
   }
 
-  private showError(error: unknown) {
+  private clearModeWaiter() {
+    this.modeWaiter = null;
+    this.timers.clearTimeout(this.modeTimer);
+    this.modeTimer = null;
+  }
+
+  protected showError(error: unknown) {
     if (this.destroyed || disconnected(error)) return;
     this.error = readable(error);
     this.publish();
@@ -704,7 +569,7 @@ export class HostSession {
     return this.intent ? "waiting" : "idle";
   }
 
-  private publish() {
+  protected publish() {
     if (this.destroyed) return;
     const next: HostSessionView = {
       intent: this.intent,

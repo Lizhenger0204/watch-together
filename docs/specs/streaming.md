@@ -156,7 +156,7 @@
 **房主**
 
 1. 送 `stream:status { live: false, title: null, reqId }`，等待**同一 reqId** 的 `ack { reqId, ok: true }`，或本次停播後收到的廣播 `stream:status { live: false, title: null, startedAt: null }`。若停播失敗或逾時而尚未確認，停在這一步。
-2. 確認停播後，停止舊傳輸，再送 `room:update { mode }`。收到目標模式的 `room:updated` 後，呼叫 `old.destroy()`。
+2. 確認停播後，停止舊傳輸，再送 `room:update { mode }`。收到目標模式的 `room:updated` 後，呼叫 `old.destroy()`。**等待 `room:updated` 有期限（10 秒）**，期限內沒收到就視為失敗。
 3. 仍有片源及開播意圖時，以 **T-106 當下最新的 stream** 與目前畫質建立新 host transport。等 `start()` resolve（P2P 訂閱與 tracks／畫質就緒，relay 為 WHIP 201 且已套用 answer）。
 4. 送 `stream:status { live: true, title }`。伺服器廣播 `stream:status { live: true, title, startedAt }`，並在 P2P 模式下為在線收看者發出 `peer:request`。若已換片，使用新片名。
 
@@ -165,6 +165,14 @@
 1. 收到停播廣播 `stream:status { live: false, title: null, startedAt: null }` 時停止舊傳輸，關閉連線。轉發模式也須清理 WHEP。
 2. 收到變更模式的 `room:updated` 時，銷毀舊 transport，依新模式建立 viewer transport。P2P 可立即 `await start()`，房間層在訂閱就緒前先緩衝新模式的信令，之後依序交付。
 3. Relay 等開播廣播 `stream:status { live: true, title, startedAt }` 再 `start()` 拉取 WHEP。
+
+### 切模式失敗的保守處理（房主房間層）
+
+以下情況審查認可，實作照做，不要另想一套：
+
+- **第 2 步等不到 `room:updated`**（逾時）或 `room:update` 被拒：銷毀舊傳輸，依開播意圖用**原模式**重建，並顯示可讀錯誤。伺服器仍是舊模式，不能直接用新模式重建。
+- **開播途中模式被改**（`room:update` 與開播同時進行，收到 `room:updated` 時手上還有舊傳輸）：照本節「先停再開」停播後重建，**不再送一次 `room:update`**（伺服器已經是新模式）。
+- 切模式第 1 步停播失敗或逾時：停在原模式，不送 `room:update`、不停舊傳輸；若期間房主已按停止，重讀意圖繼續停播。
 
 ### 房主重新連線（protocol.md「房主重新連線」）
 
@@ -312,6 +320,14 @@ class TransportError extends Error { code; message; memberId?; cause? }
 
 - **傳輸層**只負責建立／傳送／統計／銷毀，不碰 React、不碰 `member:status`／`stream:status`。
 - **房間層（hook）**協調建立／銷毀傳輸、模式切換與重連，並將 `TransportSignal` 接到 SignalClient。收看者把自己的 `onState`／`onStats` 轉成 `member:status`。開播、停播的 `stream:status` 由房主送出。
+
+### 房主房間層的廣播與錯誤處理（保守判斷）
+
+以下情況審查認可，實作照做：
+
+- **收到不是自己要求的 `stream:status { live: false }` 廣播**、手上又有傳輸時：拆掉傳輸，依開播意圖重新開播（伺服器可能是被另一分頁接手或主動改為未開播）。
+- **傳輸 `onState` 為 `error`**（整體無法繼續）：取消開播意圖並送 `stream:status { live: false }`，讓收看者停止舊連線；顯示可讀錯誤。
+- **個別收看者的 `PEER_FAILED` 不顯示給房主**：由傳輸自己 `removePeer` 清理，房主只在成員列表看到該收看者離線。
 
 ### 匯出位置（p2p/ 與 relay/ 的交付）
 
