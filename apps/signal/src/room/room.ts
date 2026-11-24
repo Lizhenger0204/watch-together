@@ -115,6 +115,7 @@ export function addMember(
   state: RoomState,
   input: {
     inviteCode: string;
+    excluded?: boolean;
     member: { memberId: string; nickname: string; tokenHash: string };
   },
   online: Online,
@@ -129,6 +130,7 @@ export function addMember(
   if (pruned.members.length >= config.maxMembers) {
     return { ok: false, code: "ROOM_FULL" };
   }
+  if (input.excluded) return { ok: false, code: "ROOM_NOT_FOUND" };
   return {
     ok: true,
     state: {

@@ -229,6 +229,7 @@ export class RoomDO extends DurableObject<Env> {
   async join(input: {
     inviteCode: string;
     nickname: string;
+    excluded?: boolean;
   }): Promise<Result<{ memberToken: string; memberId: string }>> {
     if (!this.room) return { ok: false, code: "ROOM_NOT_FOUND" };
     const memberToken = generateToken();
@@ -239,6 +240,7 @@ export class RoomDO extends DurableObject<Env> {
       this.room,
       {
         inviteCode: input.inviteCode,
+        excluded: input.excluded,
         member: { memberId, nickname: input.nickname, tokenHash },
       },
       this.online(),

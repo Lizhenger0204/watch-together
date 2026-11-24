@@ -34,10 +34,14 @@ export function workersServices(c: Context<AppEnv>): AppServices {
       },
       async joinRoom(inviteCode, nickname, excludeRoomIds) {
         const roomId = await directory().lookup(inviteCode);
-        if (!roomId || excludeRoomIds?.includes(roomId)) {
+        if (!roomId) {
           return { ok: false, code: "ROOM_NOT_FOUND" };
         }
-        const result = await room(roomId).join({ inviteCode, nickname });
+        const result = await room(roomId).join({
+          inviteCode,
+          nickname,
+          excluded: excludeRoomIds?.includes(roomId) ?? false,
+        });
         return result.ok
           ? { ok: true, value: { roomId, ...result.value } }
           : result;

@@ -1,4 +1,5 @@
 import {
+  JOIN_MAX_BODY_BYTES,
   PROTOCOL_VERSION,
   createRoomRequestSchema,
   joinRoomRequestSchema,
@@ -40,10 +41,35 @@ function fail(c: Ctx, code: ErrorCode) {
   return c.json(errorBody(code), errorStatus(code) as 400);
 }
 
-async function parseBody<T>(c: Ctx, schema: z.ZodType<T>): Promise<T> {
+async function readJoinJson(request: Request): Promise<unknown> {
+  if (!request.body) throw new AppError("BAD_REQUEST");
+  const reader = request.body.getReader();
+  const buffer = new Uint8Array(JOIN_MAX_BODY_BYTES);
+  let size = 0;
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value.byteLength > buffer.byteLength - size) {
+        await reader.cancel();
+        throw new AppError("BAD_REQUEST");
+      }
+      buffer.set(value, size);
+      size += value.byteLength;
+    }
+    return JSON.parse(new TextDecoder().decode(buffer.subarray(0, size)));
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+async function parseBody<T>(
+  json: Promise<unknown>,
+  schema: z.ZodType<T>,
+): Promise<T> {
   let body: unknown;
   try {
-    body = await c.req.json();
+    body = await json;
   } catch {
     throw new AppError("BAD_REQUEST");
   }
@@ -92,7 +118,7 @@ export function createApp(resolveServices: (c: Ctx) => AppServices) {
   );
 
   app.post("/api/rooms", async (c) => {
-    const { nickname } = await parseBody(c, createRoomRequestSchema);
+    const { nickname } = await parseBody(c.req.json(), createRoomRequestSchema);
     return c.json(await c.var.services.rooms.createRoom(nickname), 201);
   });
 
@@ -101,7 +127,10 @@ export function createApp(resolveServices: (c: Ctx) => AppServices) {
     if (!(await c.var.services.joinLimiter.allow(ip))) {
       return fail(c, "RATE_LIMITED");
     }
-    const body = await parseBody(c, joinRoomRequestSchema);
+    const body = await parseBody(
+      readJoinJson(c.req.raw),
+      joinRoomRequestSchema,
+    );
     const inviteCode = normalizeInviteCode(body.inviteCode);
     const token = bearerToken(c);
     const hasAuthorization = c.req.header("Authorization") !== undefined;
