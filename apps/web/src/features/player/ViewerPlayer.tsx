@@ -4,17 +4,18 @@ import { playerStatus } from "./player-status";
 
 // 收看端播放器（streaming.md §7）：原生 <video srcObject>，只有音量與全螢幕。
 // 自動播放政策會擋有聲音的播放，所以進房一律先顯示「點擊開始觀看」，點擊後才 play()；
-// play() 被拒時恢復覆蓋層。
+// play() 被拒時恢復覆蓋層。<video> 不可加 autoPlay：從邀請頁按「加入」後，Chrome 已把那次
+// 點擊算成使用者手勢，autoPlay 會在覆蓋層還在時就播出聲音。
 
-/** 有 track 且暫停中才 play()；被自動播放政策擋下時呼叫 onBlocked。 */
+/** 有 track 且暫停中才 play()；播放失敗時呼叫 onBlocked（恢復覆蓋層讓使用者重試）。 */
 function playIfReady(video: HTMLVideoElement | null, onBlocked: () => void) {
   const stream = video?.srcObject;
   if (!video || !(stream instanceof MediaStream)) return;
   if (stream.getTracks().length === 0 || !video.paused) return;
   video.play().catch((error: unknown) => {
-    if (error instanceof DOMException && error.name === "NotAllowedError") {
-      onBlocked();
-    }
+    // 換 srcObject 會中斷前一次 play()（AbortError），新的 stream 會再呼叫一次，不用處理。
+    if (error instanceof DOMException && error.name === "AbortError") return;
+    onBlocked();
   });
 }
 
@@ -72,13 +73,13 @@ export function ViewerPlayer({
         <video
           ref={videoRef}
           className="h-full w-full object-contain"
-          autoPlay
           playsInline
           onWaiting={() => viewer.setBuffering(true)}
           onStalled={() => viewer.setBuffering(true)}
           onPlaying={() => viewer.setBuffering(false)}
         />
-        {!armed ? (
+        {/* 連線失敗時直接給「重新連線」，即使還沒按過開始觀看（按鈕本身就是使用者手勢）。 */}
+        {!armed && !status.reconnect ? (
           <button
             type="button"
             className="absolute inset-0 grid place-items-center bg-black/60 text-white transition-colors hover:bg-black/50 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:outline-none focus-visible:ring-inset"
@@ -119,7 +120,10 @@ export function ViewerPlayer({
                   <button
                     type="button"
                     className="inline-flex min-h-10 items-center rounded-lg bg-violet-600 px-4 text-sm font-medium text-white hover:bg-violet-500 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:outline-none"
-                    onClick={() => viewer.reconnect()}
+                    onClick={() => {
+                      setArmed(true);
+                      viewer.reconnect();
+                    }}
                   >
                     重新連線
                   </button>
