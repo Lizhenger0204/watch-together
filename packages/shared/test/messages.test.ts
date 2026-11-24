@@ -4,6 +4,7 @@ import {
   QUALITY_PRESETS,
   SDP_MAX_LENGTH,
   createRoomRequestSchema,
+  joinRoomRequestSchema,
   parseClientMessage,
   parseServerMessage,
   qualitySchema,
@@ -151,6 +152,25 @@ describe.each([
 });
 
 describe("REST 與常數", () => {
+  test("加入可指定沿用的房號與禁止增配的房號", () => {
+    const roomId = crypto.randomUUID();
+    const input = {
+      inviteCode: "ABCDEFGH",
+      nickname: "朋友",
+      existingRoomId: roomId,
+      excludeRoomIds: [roomId],
+    };
+    expect(joinRoomRequestSchema.parse(input)).toEqual(input);
+    expect(
+      joinRoomRequestSchema.safeParse({ ...input, existingRoomId: "bad" })
+        .success,
+    ).toBe(false);
+    expect(
+      joinRoomRequestSchema.safeParse({ ...input, excludeRoomIds: ["bad"] })
+        .success,
+    ).toBe(false);
+  });
+
   test("暱稱會 trim，空白暱稱不合法", () => {
     expect(createRoomRequestSchema.parse({ nickname: "  小明 " })).toEqual({
       nickname: "小明",

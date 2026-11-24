@@ -35,6 +35,8 @@ export type CreateRoomResponse = z.infer<typeof createRoomResponseSchema>;
 export const joinRoomRequestSchema = z.object({
   inviteCode: z.string().min(1).max(32),
   nickname: nicknameSchema,
+  existingRoomId: z.uuid().optional(),
+  excludeRoomIds: z.array(z.uuid()).optional(),
 });
 export type JoinRoomRequest = z.infer<typeof joinRoomRequestSchema>;
 export const joinRoomResponseSchema = z.object({
