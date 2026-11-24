@@ -31,7 +31,7 @@
 | T-112 | 部署：給零經驗使用者的 Cloudflare 帳號與網域設定圖文指南、`pnpm deploy`、secrets 設定、CI | GPT | T-103 | DONE |
 | T-113 | 人工驗收清單（ADR 0002 待驗證項目），做完後交給使用者與朋友實測 | Claude | T-109, T-111, T-112 | TODO |
 | T-114 | T-103 審查修正：邀請碼重產與關房序列化、關房清理可重試、限流後備、token 常數時間比對；spec 補房主接手（4000）時的 `peer:request` 順序、未驗證連線格式錯誤以 4400 關閉、ICE 新路徑同步 shared 與版本說明；關房時呼叫 `RoomDO.closeRelayResources()`（失敗保留記錄重試） | Claude | T-103, T-108 | DONE |
-| T-115 | 傳輸層共用架構：`createHostTransport` / `createViewerTransport` 介面、`features/transport/common/`（編碼與畫質、ICE 設定取得、狀態事件、統計共用部分）、模式切換流程，寫進 streaming.md；給 T-107（GPT）與 T-109 共用 | Claude | T-102 | REVIEW |
+| T-115 | 傳輸層共用架構：`createHostTransport` / `createViewerTransport` 介面、`features/transport/common/`（編碼與畫質、ICE 設定取得、狀態事件、統計共用部分）、模式切換流程，寫進 streaming.md；給 T-107（GPT）與 T-109 共用 | Claude | T-102 | DOING |
 | T-116 | T-114 第二輪審查的後續修正：邀請目錄換碼改為單一交易（不留孤兒對照）；relay 清理待辦、重試狀態與 alarm 一起提交；SFU 回 `410 session_error` 時視為已結束、不重試；可考慮 WebSocket upgrade 每 IP 限流；protocol.md 4408 改為「5 秒內未完成驗證」；room-and-invite.md「前端以最後收到的回應為準」改為前端序列化重產或以 snapshot 校正 | Claude | T-114 | TODO |
 
 可平行的組合：T-101 完成後 → T-102（Claude）∥ T-106（GPT）；T-102 完成後 → T-103、T-105（Claude，依序）∥ T-104（GPT）；T-103 完成後 → T-108、T-112（GPT）。T-115（Claude）可與 T-105／T-114 的審查同時進行；T-114 與 T-115 都合併後 → T-107（GPT）∥ T-109、T-110（Claude）。
@@ -116,3 +116,11 @@ Review（GPT 第二輪，監工核對）：結論「小修後可合併」。第�
 ### T-115 第一輪審查（GPT，2026-11-24）— 退回修正
 審查 93b2b40：檢查全過（Vitest 181、e2e 3），三個反向實驗都會讓對應測試失敗。審查角度是「T-107 只看契約能不能不猜就寫出 p2p/」。監工核對後同意退回，T-107 要等 T-115 修正並再審一次才派。阻擋項：`HostTransport` 沒有逐人關閉入口，被踢的收看者在 ICE 自然斷線前仍可收看；`rtc.ts` 把原生 transceiver 硬轉型成有 `kind` 的介面，H.264 偏好實際沒套用（fake 有 `kind`，所以測試全綠）；`stats.ts` 覆寫而非加總各 RTP 的位元組，RTT 與負 `packetsLost` 也會算錯；`destroy()` 與換片時的 track 所有權不清（不可 stop T-106 持有的 capture track）；房主重連與直播中切模式的事件順序和 protocol.md 不一致；answer 與 ICE candidate 的順序、型別（`string | undefined`）沒寫全；`remoteStream` 要用 `event.track` 加入；WHIP 何時算就緒（何時才能送 `live:true`）沒有定義。應修：狀態轉換表與重試計數、轉發不可用的錯誤碼、`setQuality` 的失敗回報、fake 的協商狀態要貼近真實 Chrome、工廠的匯出位置與整合負責人。
 
+
+### T-115 第二輪審查（GPT，2026-11-24）— 退回修正
+審查 7eb27c4：檢查全過（Vitest 188、e2e 3）。真實 Chrome 驗證 H.264 優先已生效，`event.track` 也已加入固定的 `remoteStream`。第一輪 13 項中 7 項已修、6 項部分修正。監工核對後確認三項阻擋：
+- P2P 的 `start()` 要等 capture track 套到 sender 才 resolve，但 sender 要收到 `peer:request` 才會建立，兩者互等。§6 範例的 `stream:status` 少了必填的 `title`，停播會被拒絕，切模式時就會漏掉請求。
+- 收看者只重建 transport 時，房主不會收到再發 offer 的觸發。§3 要房主送 `member:status`，但伺服器會擋下房主送的這則訊息。
+- 第一次沒有音軌時，沒有替每種 kind 預留 transceiver，之後換成有聲片就加不回聲音。換片後重建 transport 時，也沒寫清楚要用 T-106 的哪一個 stream。
+
+第四項「停止後立即重開轉發，晚到的舊 WHIP 會蓋掉新發布」屬於轉發的開停序列化，改列為 T-109 的必做項，若需要伺服器辨識發布世代則另開任務。應修：同一成員重複發出 `peer:request` 或 ICE restart 時，舊協商要整個作廢，並補上 restart 的 answer 期限；fake 要在套用遠端 offer 時自動建立接收 transceiver；統計缺值時的規則；T-109 單次 HTTP offer 的 ICE 收集方式，以及取得完整 `localDescription` 的入口。
