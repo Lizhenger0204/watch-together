@@ -21,7 +21,7 @@
 | T-102 | `packages/shared`：依 protocol.md 寫 zod schema、訊息型別、常數 | Claude | T-101 | DONE |
 | T-103 | 房間核心 + REST（建房 / 加入 / 重產邀請碼）+ RoomDO / InviteDirectoryDO + WebSocket 驗證 + 信令轉送 + 生命週期 + 限流 | Claude | T-102 | DONE |
 | T-104 | `/api/ice`：STUN 清單 + Cloudflare TURN 短效憑證（沒有 secrets 時只回 STUN） | GPT | T-102 | DONE |
-| T-105 | 前端頁面：首頁（建房 / 輸入邀請碼）、`/join/:code`、房間頁（房主版 / 收看者版）、成員列表與連線品質、模式與畫質選項卡、複製邀請碼 | Claude | T-102 | REVIEW |
+| T-105 | 前端頁面：首頁（建房 / 輸入邀請碼）、`/join/:code`、房間頁（房主版 / 收看者版）、成員列表與連線品質、模式與畫質選項卡、複製邀請碼 | Claude | T-102 | DOING |
 | T-106 | 選片：檔案選擇、開播前檢查、本地播放與自訂控制列、captureStream、房主音量實測並更新 streaming.md | GPT | T-101 | DONE |
 | T-107 | P2P 傳輸（`features/transport/p2p/`，照 T-115 的介面）：房主 mesh、收看者連線、codec 偏好、畫質與縮放、ICE restart、統計 | GPT | T-103, T-104, T-114, T-115 | TODO |
 | T-108 | 轉發轉接：WHIP / WHEP → Cloudflare Realtime（參考官方範例，先確認授權） | GPT | T-103 | DONE |
@@ -109,4 +109,7 @@ Review（Claude 監工）：沒有新增套件、沒有改 pnpm-workspace.yaml�
 4. 驗證方式：`pnpm typecheck && pnpm lint && pnpm test && pnpm e2e`（合併時根目錄 60 + signal 93、e2e 3 全過）。
 
 Review（GPT 第二輪，監工核對）：結論「小修後可合併」。第一輪的阻擋項（房主回來後排隊中的關房仍執行）已修，四個反向實驗都會讓對應測試失敗。GPT 另列兩項阻擋：目錄換碼寫到一半失敗留下孤兒對照、relay 待辦的 alarm 沒排上。兩者都要先發生 storage 寫入失敗才會出現，孤兒碼不能拿來進房，SFU 也會自行回收 session，監工降為應修，與「SFU 回 410 仍重試 12 次」一起開為 T-116。
+
+### T-105 第二輪審查（GPT，2026-11-24）— 退回修正
+用 T-114 + T-105 合併後的版本驗收：檢查全過（Vitest 224、e2e 3），第一輪的房主身份覆寫、重新驗證後恢復直播、到期回首頁等項目大致通過。監工核對後認定一項阻擋：收看者第一次加入時沒有記住邀請碼和房間的對照，之後每點一次邀請連結都會呼叫 `POST /join`，伺服器留下離線成員，10 分鐘內就可能 `ROOM_FULL`。這輪一起修：長片名在 390px 撐寬版面（房主 533px、收看 473px）、開播失敗後手動重試沒有送出請求。其餘（舊分頁 4401 清掉新分頁 token、跨分頁停播後舊分頁自動開播、組合 emoji 截斷、身份檢查同時在途的筆數、忽略舊 ICE 回應的假綠測試、`host_closed` 文案、REST 與廣播亂序）可併入 T-116 或之後處理。
 
