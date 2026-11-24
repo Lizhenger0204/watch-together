@@ -6,13 +6,15 @@
  *   signalingState 在 `set*Description` 時才轉換。
  * - `addIceCandidate` 在 remote description 還沒設定前會 throw；`null` 記為
  *   end-of-candidates。
- * - `fireTrack` 模擬遠端建立的接收 track（供收看者的 recvonly transceiver）。
+ * - 遠端 offer 的影音 m-line 會建立接收 transceiver，再用 `fireTrack` 送入測試 track。
+ * - `fireIceCandidate` 模擬本機收集，candidate 會寫進測試 SDP，null 表示收集完成。
  * - `getStats()` 回傳 Map 形狀（測試可覆寫 `statsReport`）。
  *
  * 測試用 `createFakePeerConnectionFactory()` 拿到 factory 與建立的連線清單，
  * 再把 factory 傳進 `createHostTransport`／`createViewerTransport` 的
  * `createPeerConnection` 選項。
  */
+import { waitForIceGathering } from "./ice-gathering";
 import type {
   PeerConnectionFactory,
   RtcIceCandidate,
@@ -84,9 +86,13 @@ export class FakeRtcRtpTransceiver implements RtcRtpTransceiver {
   }
 }
 
-export class FakeRtcPeerConnection implements RtcPeerConnection {
+export class FakeRtcPeerConnection
+  extends EventTarget
+  implements RtcPeerConnection
+{
   connectionState: RTCPeerConnectionState = "new";
   iceConnectionState: RTCIceConnectionState = "new";
+  iceGatheringState: RTCIceGatheringState = "new";
   signalingState: RTCSignalingState = "stable";
 
   onicecandidate: ((event: RtcIceCandidateEvent) => void) | null = null;
@@ -95,24 +101,35 @@ export class FakeRtcPeerConnection implements RtcPeerConnection {
   onsignalingstatechange: (() => void) | null = null;
   ontrack: ((event: RtcTrackEvent) => void) | null = null;
 
-  localDescription: RtcSessionDescription | null = null;
+  private local: RtcSessionDescription | null = null;
+  private readonly lifetime = new AbortController();
   remoteDescription: RtcSessionDescription | null = null;
   iceCandidates: RtcIceCandidate[] = [];
   endOfCandidates = false;
   offerOptions: RTCOfferOptions[] = [];
-  closed = false;
 
   /** 測試可覆寫 `getStats()` 的回傳內容（Map 形狀）。 */
   statsReport: unknown = new Map();
 
   private transceivers: FakeRtcRtpTransceiver[] = [];
 
-  constructor(readonly configuration: RTCConfiguration) {}
+  constructor(readonly configuration: RTCConfiguration) {
+    super();
+  }
+
+  get closed(): boolean {
+    return this.lifetime.signal.aborted;
+  }
+
+  get localDescription(): RtcSessionDescription | null {
+    return this.local ? { ...this.local } : null;
+  }
 
   addTransceiver(
     trackOrKind: MediaStreamTrack | "audio" | "video",
     init?: RTCRtpTransceiverInit,
   ): FakeRtcRtpTransceiver {
+    this.lifetime.signal.throwIfAborted();
     // MediaStreamTrack.kind 在 DOM 型別是 string，這裡收窄成 "audio" | "video"。
     const kind: "audio" | "video" =
       typeof trackOrKind === "string"
@@ -131,37 +148,66 @@ export class FakeRtcPeerConnection implements RtcPeerConnection {
   }
 
   async createOffer(options?: RTCOfferOptions): Promise<RtcSessionDescription> {
+    this.lifetime.signal.throwIfAborted();
     this.offerOptions.push(options ?? {});
-    return { type: "offer", sdp: "v=0\r\nfake-offer\r\n" };
+    return this.makeDescription("offer");
   }
 
   async createAnswer(): Promise<RtcSessionDescription> {
-    return { type: "answer", sdp: "v=0\r\nfake-answer\r\n" };
+    this.lifetime.signal.throwIfAborted();
+    if (this.signalingState !== "have-remote-offer") {
+      throw new DOMException("尚未收到遠端 offer", "InvalidStateError");
+    }
+    return this.makeDescription("answer");
   }
 
   async setLocalDescription(
     description?: RtcSessionDescription,
   ): Promise<void> {
-    if (description) {
-      this.localDescription = description;
-      this.signalingState =
-        description.type === "offer" ? "have-local-offer" : "stable";
-    } else {
-      this.signalingState = "stable";
+    this.lifetime.signal.throwIfAborted();
+    const type =
+      this.signalingState === "have-remote-offer" ? "answer" : "offer";
+    if (description && description.type !== type) {
+      throw new DOMException("本機 SDP 與協商狀態不符", "InvalidStateError");
     }
+    this.local = description ? { ...description } : this.makeDescription(type);
+    this.setSignalingState(type === "offer" ? "have-local-offer" : "stable");
+    if (/^m=/m.test(this.local.sdp)) this.setIceGatheringState("gathering");
+  }
+
+  waitForIceGatheringComplete(timeoutMs: number): Promise<void> {
+    return waitForIceGathering(this, this.lifetime.signal, timeoutMs);
   }
 
   async setRemoteDescription(
     description: RtcSessionDescription,
   ): Promise<void> {
-    this.remoteDescription = description;
-    this.signalingState =
-      description.type === "offer" ? "have-remote-offer" : "stable";
+    this.lifetime.signal.throwIfAborted();
+    if (description.type === "offer") {
+      // 每個影音 m-line 只配對一條 transceiver；再次協商沿用已存在的。
+      const available = this.getTransceivers();
+      for (const [, kind] of description.sdp.matchAll(/^m=(\S+) /gm)) {
+        if (kind !== "audio" && kind !== "video") continue;
+        const index = available.findIndex((t) => t.kind === kind);
+        if (index >= 0) available.splice(index, 1);
+        else this.addTransceiver(kind, { direction: "recvonly" });
+      }
+    } else if (this.signalingState !== "have-local-offer") {
+      throw new DOMException("尚未設定本機 offer", "InvalidStateError");
+    }
+    this.remoteDescription = { ...description };
+    this.setSignalingState(
+      description.type === "offer" ? "have-remote-offer" : "stable",
+    );
   }
 
   async addIceCandidate(candidate: RtcIceCandidate | null): Promise<void> {
+    this.lifetime.signal.throwIfAborted();
     if (!this.remoteDescription) {
-      throw new Error("remote description 尚未設定，不能 addIceCandidate");
+      throw new DOMException(
+        "remote description 尚未設定，不能 addIceCandidate",
+        "InvalidStateError",
+      );
     }
     if (candidate === null) {
       this.endOfCandidates = true;
@@ -175,32 +221,77 @@ export class FakeRtcPeerConnection implements RtcPeerConnection {
   }
 
   close(): void {
-    this.closed = true;
+    // Chrome 主動 close() 時會更新狀態，但不派發 signalingstatechange。
+    this.signalingState = "closed";
+    this.iceConnectionState = "closed";
     this.connectionState = "closed";
+    this.lifetime.abort(new DOMException("連線已關閉", "InvalidStateError"));
+  }
+
+  private makeDescription(
+    type: RtcSessionDescription["type"],
+  ): RtcSessionDescription {
+    const lines = ["v=0"];
+    for (const [index, { kind, init }] of this.transceivers.entries()) {
+      lines.push(
+        `m=${kind} 9 UDP/TLS/RTP/SAVPF ${kind === "video" ? 96 : 111}`,
+        `a=mid:${index}`,
+        `a=${init?.direction ?? "sendrecv"}`,
+      );
+    }
+    return { type, sdp: lines.join("\r\n") + "\r\n" };
+  }
+
+  private setSignalingState(state: RTCSignalingState): void {
+    if (this.signalingState === state) return;
+    this.signalingState = state;
+    this.onsignalingstatechange?.();
   }
 
   // ── 測試控制用 ─────────────────────────────────────────
 
   fireIceCandidate(candidate: RtcIceCandidate | null): void {
+    if (this.closed) return;
+    if (candidate && this.local) {
+      const sections = this.local.sdp.trimEnd().split(/\r?\n(?=m=)/);
+      const index =
+        candidate.sdpMid != null
+          ? sections.findIndex((section) =>
+              section.split(/\r?\n/).includes(`a=mid:${candidate.sdpMid}`),
+            )
+          : 1 + (candidate.sdpMLineIndex ?? 0);
+      if (index > 0 && index < sections.length) {
+        sections[index] += `\r\na=${candidate.candidate}`;
+        this.local.sdp = sections.join("\r\n") + "\r\n";
+      }
+    }
+    if (candidate === null) this.setIceGatheringState("complete");
     this.onicecandidate?.({ candidate });
+  }
+
+  setIceGatheringState(state: RTCIceGatheringState): void {
+    if (this.closed || this.iceGatheringState === state) return;
+    this.iceGatheringState = state;
+    this.dispatchEvent(new Event("icegatheringstatechange"));
   }
 
   /** 模擬遠端 track 到達；`streams` 預設為空（貼近 Chrome 的 sendonly 行為）。 */
   fireTrack(track: MediaStreamTrack, streams: MediaStream[] = []): void {
-    const transceiver =
-      this.transceivers.find((t) => t.kind === track.kind) ??
-      this.transceivers[0];
+    if (this.closed) return;
+    const transceiver = this.transceivers.find((t) => t.kind === track.kind);
     if (!transceiver) return;
     transceiver.receiver.track = track;
     this.ontrack?.({ track, streams, transceiver });
   }
 
   setConnectionState(state: RTCPeerConnectionState): void {
+    if (this.closed) return;
     this.connectionState = state;
     this.onconnectionstatechange?.();
   }
 
   setIceConnectionState(state: RTCIceConnectionState): void {
+    if (this.closed) return;
     this.iceConnectionState = state;
     this.oniceconnectionstatechange?.();
   }

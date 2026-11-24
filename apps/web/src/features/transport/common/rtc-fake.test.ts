@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { RtcIceCandidate } from "./rtc";
 import {
   createFakePeerConnectionFactory,
@@ -32,12 +32,74 @@ describe("FakeRtcPeerConnection", () => {
     expect(pc.offerOptions).toEqual([{ iceRestart: true }]);
   });
 
-  it("transitions signalingState on set descriptions", async () => {
+  it("notifies signaling changes only when a description changes the state", async () => {
     const pc = new FakeRtcPeerConnection({});
-    await pc.setLocalDescription({ type: "offer", sdp: "x" });
-    expect(pc.signalingState).toBe("have-local-offer");
+    const states: RTCSignalingState[] = [];
+    pc.onsignalingstatechange = () => states.push(pc.signalingState);
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await pc.setLocalDescription(offer);
     await pc.setRemoteDescription({ type: "answer", sdp: "y" });
-    expect(pc.signalingState).toBe("stable");
+    expect(states).toEqual(["have-local-offer", "stable"]);
+  });
+
+  it("requires a pending remote offer to create an answer", async () => {
+    const pc = new FakeRtcPeerConnection({});
+    const invalidState = { name: "InvalidStateError" };
+    await expect(pc.createAnswer()).rejects.toMatchObject(invalidState);
+    await pc.setRemoteDescription({ type: "offer", sdp: "v=0\r\n" });
+    const answer = await pc.createAnswer();
+    expect(pc.signalingState).toBe("have-remote-offer");
+    await pc.setLocalDescription(answer);
+    await expect(pc.createAnswer()).rejects.toMatchObject(invalidState);
+  });
+
+  it("implicitly creates a local offer or answer for the current state", async () => {
+    const host = new FakeRtcPeerConnection({});
+    const viewer = new FakeRtcPeerConnection({});
+    const states: RTCSignalingState[] = [];
+    viewer.onsignalingstatechange = () => states.push(viewer.signalingState);
+    host.addTransceiver("video", { direction: "sendonly" });
+    await host.setLocalDescription();
+    await host.setLocalDescription();
+    expect(host.signalingState).toBe("have-local-offer");
+    const offer = host.localDescription;
+    expect(offer?.type).toBe("offer");
+    expect(offer?.sdp).toContain("m=video ");
+    await viewer.setRemoteDescription(offer!);
+    expect(viewer.getTransceivers().map((t) => t.kind)).toEqual(["video"]);
+    await viewer.setLocalDescription();
+    const answer = viewer.localDescription;
+    expect(answer?.type).toBe("answer");
+    expect(answer?.sdp).toContain("m=video ");
+    await host.setRemoteDescription(answer!);
+    expect([host.signalingState, viewer.signalingState]).toEqual([
+      "stable",
+      "stable",
+    ]);
+    expect(states).toEqual(["have-remote-offer", "stable"]);
+  });
+
+  it("rejects negotiation and ICE operations after an idempotent close", async () => {
+    const pc = new FakeRtcPeerConnection({});
+    const offer = await pc.createOffer();
+    await pc.setRemoteDescription(offer);
+    pc.close();
+    pc.close();
+    expect(pc.signalingState).toBe("closed");
+    const invalidState = { name: "InvalidStateError" };
+    expect(() => pc.addTransceiver("audio")).toThrow(
+      expect.objectContaining(invalidState),
+    );
+    await expect(pc.createOffer()).rejects.toMatchObject(invalidState);
+    await expect(pc.createAnswer()).rejects.toMatchObject(invalidState);
+    await expect(pc.setLocalDescription()).rejects.toMatchObject(invalidState);
+    await expect(pc.setRemoteDescription(offer)).rejects.toMatchObject(
+      invalidState,
+    );
+    await expect(pc.addIceCandidate(null)).rejects.toMatchObject(invalidState);
+    expect(pc.getTransceivers()).toEqual([]);
+    await expect(pc.getStats()).resolves.toEqual(new Map());
   });
 
   it("rejects addIceCandidate before remote description and records end marker", async () => {
@@ -93,21 +155,76 @@ describe("FakeRtcPeerConnection", () => {
     ]);
   });
 
-  it("supports a receive track via fireTrack with empty streams", () => {
+  it("receives tracks on the transceivers created by the remote media sections", async () => {
     const pc = new FakeRtcPeerConnection({});
-    const recv = pc.addTransceiver("video", { direction: "recvonly" });
-    let received:
-      { track: MediaStreamTrack; streams: readonly MediaStream[] } | undefined;
-    pc.ontrack = (event) => {
-      received = { track: event.track, streams: event.streams };
+    const offer = {
+      type: "offer" as const,
+      sdp: "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n",
     };
+    await pc.setRemoteDescription(offer);
+    const [audio, video] = pc.getTransceivers();
+    expect(pc.getTransceivers().map((t) => t.kind)).toEqual(["audio", "video"]);
+    expect([audio?.init?.direction, video?.init?.direction]).toEqual([
+      "recvonly",
+      "recvonly",
+    ]);
+    expect([audio?.sender.track, video?.sender.track]).toEqual([null, null]);
+    const onTrack = vi.fn();
+    pc.ontrack = onTrack;
 
-    const track = fakeTrack("video", "remote-v");
-    pc.fireTrack(track);
+    const videoTrack = fakeTrack("video");
+    const audioTrack = fakeTrack("audio");
+    pc.fireTrack(videoTrack);
+    pc.fireTrack(audioTrack);
+    expect(video?.receiver.track).toBe(videoTrack);
+    expect(audio?.receiver.track).toBe(audioTrack);
+    expect(onTrack.mock.calls).toEqual([
+      [{ track: videoTrack, streams: [], transceiver: video }],
+      [{ track: audioTrack, streams: [], transceiver: audio }],
+    ]);
 
-    expect(recv.receiver.track).toBe(track);
-    expect(received?.track).toBe(track);
-    expect(received?.streams).toEqual([]);
+    await pc.setLocalDescription();
+    await pc.setRemoteDescription(offer);
+    expect(pc.getTransceivers()).toEqual([audio, video]);
+  });
+
+  it("keeps gathered candidates in their local media sections for a single HTTP offer", async () => {
+    const pc = new FakeRtcPeerConnection({});
+    pc.addTransceiver("video");
+    pc.addTransceiver("audio");
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    const done = pc.waitForIceGatheringComplete(1000);
+    pc.fireIceCandidate({ candidate: "candidate:video", sdpMLineIndex: 0 });
+    pc.fireIceCandidate({ candidate: "candidate:audio", sdpMid: "1" });
+    pc.fireIceCandidate(null);
+    await done;
+    expect(pc.iceGatheringState).toBe("complete");
+    const [, video, audio] = pc.localDescription!.sdp.split(/\r?\n(?=m=)/);
+    expect(video).toContain("a=candidate:video");
+    expect(video).not.toContain("a=candidate:audio");
+    expect(audio).toContain("a=candidate:audio");
+    expect(offer.sdp).not.toContain("a=candidate:");
+  });
+
+  it("exposes only the local candidates gathered before a deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const pc = new FakeRtcPeerConnection({});
+      pc.addTransceiver("video");
+      await pc.setLocalDescription();
+      await pc.setRemoteDescription({ type: "answer", sdp: "v=0\r\n" });
+      await pc.addIceCandidate({ candidate: "candidate:remote", sdpMid: "0" });
+      const done = pc.waitForIceGatheringComplete(100);
+      pc.fireIceCandidate({ candidate: "candidate:local", sdpMid: "0" });
+      await vi.advanceTimersByTimeAsync(100);
+      await done;
+      expect(pc.iceGatheringState).toBe("gathering");
+      expect(pc.localDescription?.sdp).toContain("a=candidate:local");
+      expect(pc.localDescription?.sdp).not.toContain("a=candidate:remote");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("tracks connection state changes", () => {

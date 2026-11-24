@@ -14,6 +14,7 @@
  * 這樣 p2p/、relay/ 拿到的值都能直接送進 `SignalData`（shared 要求 string）。
  */
 import { TransportError } from "./errors";
+import { waitForIceGathering } from "./ice-gathering";
 
 /** RTCRtpSender 最小介面。 */
 export interface RtcRtpSender {
@@ -68,6 +69,8 @@ export interface RtcPeerConnection {
   readonly connectionState: RTCPeerConnectionState;
   readonly iceConnectionState: RTCIceConnectionState;
   readonly signalingState: RTCSignalingState;
+  /** 含目前已收集的本機 ICE candidates，供 WHIP／WHEP 組成單次 HTTP offer。 */
+  readonly localDescription: RtcSessionDescription | null;
 
   addTransceiver(
     trackOrKind: MediaStreamTrack | "audio" | "video",
@@ -77,6 +80,8 @@ export interface RtcPeerConnection {
   createOffer(options?: RTCOfferOptions): Promise<RtcSessionDescription>;
   createAnswer(options?: RTCAnswerOptions): Promise<RtcSessionDescription>;
   setLocalDescription(description?: RtcSessionDescription): Promise<void>;
+  /** 收集完成或逾時時 resolve；連線已關閉或等待中被關閉時 reject InvalidStateError。 */
+  waitForIceGatheringComplete(timeoutMs: number): Promise<void>;
   setRemoteDescription(description: RtcSessionDescription): Promise<void>;
   addIceCandidate(candidate: RtcIceCandidate | null): Promise<void>;
   getStats(): Promise<RTCStatsReport>;
@@ -179,6 +184,7 @@ class BrowserRtcPeerConnection implements RtcPeerConnection {
   ontrack: ((event: RtcTrackEvent) => void) | null = null;
 
   private readonly native: RTCPeerConnection;
+  private readonly closed = new AbortController();
 
   constructor(configuration: RTCConfiguration) {
     this.native = new RTCPeerConnection(configuration);
@@ -193,7 +199,10 @@ class BrowserRtcPeerConnection implements RtcPeerConnection {
       this.onconnectionstatechange?.();
     this.native.oniceconnectionstatechange = () =>
       this.oniceconnectionstatechange?.();
-    this.native.onsignalingstatechange = () => this.onsignalingstatechange?.();
+    this.native.onsignalingstatechange = () => {
+      if (this.signalingState === "closed") this.abortIceGatheringWaits();
+      this.onsignalingstatechange?.();
+    };
     this.native.ontrack = (event) => {
       const transceiver = new BrowserRtcRtpTransceiver(
         event.transceiver,
@@ -217,6 +226,11 @@ class BrowserRtcPeerConnection implements RtcPeerConnection {
 
   get signalingState(): RTCSignalingState {
     return this.native.signalingState;
+  }
+
+  get localDescription(): RtcSessionDescription | null {
+    const description = this.native.localDescription;
+    return description ? toSessionDescription(description) : null;
   }
 
   addTransceiver(
@@ -258,6 +272,10 @@ class BrowserRtcPeerConnection implements RtcPeerConnection {
     return this.native.setLocalDescription(description);
   }
 
+  waitForIceGatheringComplete(timeoutMs: number): Promise<void> {
+    return waitForIceGathering(this.native, this.closed.signal, timeoutMs);
+  }
+
   setRemoteDescription(description: RtcSessionDescription): Promise<void> {
     return this.native.setRemoteDescription(description);
   }
@@ -272,6 +290,11 @@ class BrowserRtcPeerConnection implements RtcPeerConnection {
 
   close(): void {
     this.native.close();
+    this.abortIceGatheringWaits();
+  }
+
+  private abortIceGatheringWaits(): void {
+    this.closed.abort(new DOMException("連線已關閉", "InvalidStateError"));
   }
 }
 
