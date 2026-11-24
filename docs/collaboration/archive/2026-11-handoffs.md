@@ -348,3 +348,60 @@ Windows 驗證步驟（PowerShell，在專案根目錄執行）：
 3. 指定 port：執行 `$env:WEB_PORT='5403'; $env:SIGNAL_PORT='9017'; pnpm dev`，用 5403／9017 重複上面的 curl 檢查，再按 Ctrl+C。
 4. 收尾檢查：執行 `Get-NetTCPConnection -State Listen -LocalPort 5173,8787,5403,9017 -ErrorAction SilentlyContinue`，應該沒有輸出。接著執行 `pnpm test`、`pnpm e2e`。
 
+### T-118 第一輪審查（GPT ultra fast，6d1a837）— 退回修正
+6d1a837 rebase 到 8b733cb 後沒有衝突。兩個版本四項檢查都全過（rebase 後 Vitest 397，e2e 3）。Chrome 三方實測（一位房主、兩位收看者）以下情境都通過：
+- 開播、換片、自然播完後重播、停播與重開
+- 畫質切換（8 Mbps）
+- 踢人：房主的 PC 從 2 降為 1，被踢的人剩 0
+- 房主重新整理後恢復
+- 4000 接手
+- relay fallback
+
+監工核對後，列兩項必修：
+1. **直播中換成無聲片會讓全房停播**：`sourceHolding()` 把可以由房主確認的 `warning` 送進 `stopLive()`。直播中等待房主確認時要保留傳輸，先換入 `null`，確認後再補上 video。
+2. **切模式途中按停止，停播請求逾時後仍在出流**：`switchMode()` 失敗時沒有重讀意圖。要觸發這個情況，伺服器必須在連線還在時卡住，但房主已經明確停止了，所以仍列必修。
+
+應修：
+- 一般停播逾時後再重開，會顯示直播中，但沒有人收到畫面：要保留「停播尚未確認」的狀態。
+- 片名請求沒有完整保留 T-117 的過期判斷：例如 `A → B → A` 會漏送最後的 A，空白片名轉成 `null` 也會漏送。
+- `start()` 完成時若正在換片檢查，新片就緒後可能一直停在「直播暫停中」；`start()` 因斷線失敗時也要保留意圖。
+
+建議：
+- 切模式第 2 步要有等待廣播的期限。
+- 60 Mbps 門檻可以保留，因為房間上限可以設定。
+
+5 個保守判斷審查都認為合理，建議寫進 streaming.md §6、§9（由 Claude 改）。`host-session.ts`（23.5 KB）和它的測試（26 KB）超過 pre-commit 的上限，這次修正要按功能拆檔。
+
+> 2026-11-25 T-118 第一輪修正完成（`origin/claude/T-118-host-transport`，66a7155，已 rebase 到 09a4b6c），送第二輪審查。host-session 已依功能拆檔，通過 pre-commit 檔案大小檢查。Claude 回報 Windows 上 signal 的 dev script 有問題，監工開 T-123 交給 GPT，與 T-118 審查同時進行。兩者不碰同樣的檔案。
+
+### T-118（Claude，2026-11-25）— DONE
+1. 做了什麼：
+   - 新增 `features/room/host-session*`（房主的房間層，依功能拆成 9 個檔案）。
+   - 開播：先 `await start()`，成功才送 `live:true`。
+   - 停播：等 ack 或停播廣播之後，才 `stop()`／`destroy()`。
+   - 換片：用 `replaceTrack`，不重建傳輸。無聲片等房主確認期間，先換成 `null`。
+   - 畫質：收到 `room:updated` 之後才呼叫 `setQuality`。
+   - 移除成員：比對 `room:members`，呼叫 `removePeer`。
+   - 直播中切模式：照 §6 第 1～4 步，等 `room:updated` 最多 10 秒。
+   - 房主重新連線：重建傳輸；收到 4000 時銷毀；顯示 60 Mbps 提示。
+   - `stream:status` 只有 HostSession 會送出。
+   - 5 個保守判斷寫進 streaming.md §6、§9。
+2. 介面變動：無（transport、shared、protocol 都沒改）。
+3. 已知限制：
+   - relay 要等 T-122 接上 dispatcher。
+   - 其餘應修併入 T-121。
+4. 驗證方式：
+   - 四項檢查全過。
+   - Chrome 三方實測：開播、換片、重播、停播重開、畫質、踢人、重新整理恢復、4000 接手、relay fallback、無聲片換軌。
+
+T-118 第二輪審查（GPT ultra fast，66a7155）：第一輪 8 項中 6 項通過，兩項部分修正，詳見上方第一輪審查段與本段。
+- 唯一阻擋：切模式途中按停止，首個停播請求逾時後，要等重送的停播確認才停止出流。這段期間兩位收看者各多收到 12 格。
+- 應修 3 項，建議 2 項。
+
+監工小修（e6c3666）：
+- 第 1 步失敗而且房主已按停止時，立刻 `stop()`／`destroy()` 本機傳輸，再由 `stopLive` 重送 `live:false`。
+- 先確認停播、再開播的路徑，在確認之後重新判斷意圖、片源與模式（應修 1）。
+- 反向實驗 2 個。其餘應修併入 T-121。
+
+合併：rebase 到 main（d51dd31）之後，四項檢查全過（啟動器 2 + Vitest 494 = web／shared 374 + signal 120，e2e 4），以 fast-forward 合併。
+
