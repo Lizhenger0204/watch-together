@@ -33,7 +33,7 @@
 | T-113 | 人工驗收清單（ADR 0002 待驗證項目），做完後交給使用者與朋友實測 | Claude | T-111, T-112, T-122 | TODO |
 | T-114 | T-103 審查修正：邀請碼重產與關房序列化、關房清理可重試、限流後備、token 常數時間比對；spec 補房主接手（4000）時的 `peer:request` 順序、未驗證連線格式錯誤以 4400 關閉、ICE 新路徑同步 shared 與版本說明；關房時呼叫 `RoomDO.closeRelayResources()`（失敗保留記錄重試） | Claude | T-103, T-108 | DONE |
 | T-115 | 傳輸層共用架構：`createHostTransport` / `createViewerTransport` 介面、`features/transport/common/`（編碼與畫質、ICE 設定取得、狀態事件、統計共用部分）、模式切換流程，寫進 streaming.md；給 T-107（GPT）與 T-109 共用 | Claude | T-102 | DONE |
-| T-116 | T-114 第二輪審查的後續修正：邀請目錄換碼改為單一交易（不留孤兒對照）；relay 清理待辦、重試狀態與 alarm 一起提交；SFU 回 `410 session_error` 時視為已結束、不重試；可考慮 WebSocket upgrade 每 IP 限流；protocol.md 4408 改為「5 秒內未完成驗證」；room-and-invite.md「前端以最後收到的回應為準」改為前端序列化重產或以 snapshot 校正；**T-117 審查：有效成員多佔一席**（已知邀請對照遇到 `GET /ice` 暫時失敗時改走 `POST /join`；房主換碼後既有成員點新碼會再配一席，房間已鎖或已滿時回 404／409），需要先改 spec 與 shared，讓持原房憑證的人在配置席位前比對邀請碼、沿用既有成員 ；T-105 第二輪審查併入的次要項目；T-107 合併時回報的兩項（`common/encoding.ts:57` 註解、rtc-fake 的 SDP 補 `o=` 行） | GPT | T-114 | REVIEW |
+| T-116 | T-114 第二輪審查的後續修正：邀請目錄換碼改為單一交易（不留孤兒對照）；relay 清理待辦、重試狀態與 alarm 一起提交；SFU 回 `410 session_error` 時視為已結束、不重試；可考慮 WebSocket upgrade 每 IP 限流；protocol.md 4408 改為「5 秒內未完成驗證」；room-and-invite.md「前端以最後收到的回應為準」改為前端序列化重產或以 snapshot 校正；**T-117 審查：有效成員多佔一席**（已知邀請對照遇到 `GET /ice` 暫時失敗時改走 `POST /join`；房主換碼後既有成員點新碼會再配一席，房間已鎖或已滿時回 404／409），需要先改 spec 與 shared，讓持原房憑證的人在配置席位前比對邀請碼、沿用既有成員 ；T-105 第二輪審查併入的次要項目；T-107 合併時回報的兩項（`common/encoding.ts:57` 註解、rtc-fake 的 SDP 補 `o=` 行） | GPT | T-114 | DOING |
 | T-117 | T-105 第二輪審查遺留修正（T-105 未修完即合併）：**收看者第一次加入時要記住邀請碼與房間的對照**（現在每點一次邀請連結都會 `POST /join`，伺服器累積離線成員，10 分鐘內可能 `ROOM_FULL`，屬阻擋級）；長片名在 390px 撐寬版面；開播失敗後手動重試沒有送出請求 | Claude | T-105 | DONE |
 | T-118 | 房主端接上傳輸層（房間層）：開播時建立傳輸並開始送畫面、換片時更新 track（replaceTrack）、踢人或收看者離線時 `removePeer`、直播中切模式（streaming.md §6「先停再開」）、開播前 60 Mbps 總上傳量提示；依 mode 分派 p2p／relay 的 dispatcher（relay 部分等 T-109） | Claude | T-107, T-110, T-115 | DOING |
 | T-119 | T-110 審查後續（收看端）：實際停格（影格與接收量不再前進）時要回報 `buffering`，恢復後清除；收看分頁被 `4000` 取代後要清理該代傳輸、PC 與計時器；首個 snapshot 前到的信令要以新 socket 為單位暫存，等 snapshot 確認直播後再交付；停播後切模式時，新傳輸的建立時點對齊 §6（`room:updated` 時建立） | GPT | T-110 | DONE |
@@ -103,4 +103,20 @@
 - 60 Mbps 門檻可以保留，因為房間上限可以設定。
 
 5 個保守判斷審查都認為合理，建議寫進 streaming.md §6、§9（由 Claude 改）。`host-session.ts`（23.5 KB）和它的測試（26 KB）超過 pre-commit 的上限，這次修正要按功能拆檔。
+
+### T-116 第一輪審查（GPT ultra fast，b409ecb）— 退回修正（GPT 修）
+可以無衝突 rebase 到 5763f6a，兩輪檢查都全過（rebase 後 Vitest 398，e2e 3）。Chrome 容量情境通過：ICE 503 期間 join 請求數為 0；換碼後沿用同一個 memberId；第 7 位新人回 200、第 8 位回 409。8 個反向變更都會讓測試失敗。A1、A2、A3、C、D 通過，A4 維持現況可以接受。協定的安全面：別房、已被踢、已關房的憑證都無法沿用；新人仍受鎖房與容量限制；限流涵蓋所有新路徑。
+
+監工核對後，必修三項：
+1. **自然淘汰的收看者拿到新邀請碼後永遠 404**：要用獨立的身份檢查確認舊憑證已失效，清掉後讓使用者能重新加入。
+2. **舊分頁記憶體裡的 `null` 蓋過其他分頁寫入的有效憑證**：會多配一席，並覆寫有效憑證。要在加入鎖內重新核對跨分頁寫入的值。
+3. **`excludeRoomIds` 沒有筆數與 body 上限**：先在規格定義上限，再在 shared 驗證；解析前限制實際讀入的量。
+
+降為應修，同輪一起修：
+- 滿房時，排除名單命中與否會回 404 或 409，洩漏「邀請碼對應哪個房號」。要先知道 roomId 才能利用，風險低。
+- 規格要寫清楚：邀請碼已輪替後，點舊連結的語意。
+
+監工補記授權：
+- 本輪修正可改 `apps/web/src/lib/storage.ts`，僅限必修第 2 項。T-118 不動這個檔案，T-121 還沒開工。
+- `apps/signal/test/` 的整合測試列入 T-116 的範圍。
 
