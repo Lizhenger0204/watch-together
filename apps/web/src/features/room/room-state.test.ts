@@ -1,11 +1,11 @@
 import { describe, expect, test } from "vitest";
 import {
-  estimateP2pUpload,
   formatMbps,
   initialRoomView,
   roomExit,
   roomReducer,
   type RoomView,
+  uploadHint,
 } from "./room-state";
 
 const snapshot = {
@@ -150,16 +150,27 @@ describe("roomExit", () => {
   });
 });
 
-describe("estimateP2pUpload", () => {
+describe("uploadHint（P2P 總頻寬保護，streaming.md §2）", () => {
   test("3 人標準畫質：18 Mbps，不提醒", () => {
-    expect(estimateP2pUpload("standard", 3)).toEqual({
+    expect(uploadHint("p2p", "standard", 3)).toEqual({
       total: 18_000_000,
       warn: false,
     });
   });
-  test("7 人高畫質：56 Mbps，不提醒；8 人超過 60 Mbps 才提醒", () => {
-    expect(estimateP2pUpload("high", 7).warn).toBe(false);
-    expect(estimateP2pUpload("high", 8).warn).toBe(true);
+  test("剛好 60 Mbps 不提醒，超過才提醒", () => {
+    // 標準 6 Mbps × 10 人 = 60 Mbps；× 11 人 = 66 Mbps。
+    expect(uploadHint("p2p", "standard", 10)).toEqual({
+      total: 60_000_000,
+      warn: false,
+    });
+    expect(uploadHint("p2p", "standard", 11)?.warn).toBe(true);
+    // 高畫質 8 Mbps：7 人 56 Mbps 不提醒，8 人 64 Mbps 提醒。
+    expect(uploadHint("p2p", "high", 7)?.warn).toBe(false);
+    expect(uploadHint("p2p", "high", 8)?.warn).toBe(true);
+  });
+  test("轉發模式或沒有收看者：不提示", () => {
+    expect(uploadHint("relay", "high", 20)).toBeNull();
+    expect(uploadHint("p2p", "high", 0)).toBeNull();
   });
   test("formatMbps", () => {
     expect(formatMbps(18_000_000)).toBe("18 Mbps");
