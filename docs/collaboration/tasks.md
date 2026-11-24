@@ -130,3 +130,22 @@ Review（GPT 第二輪，監工核對）：結論「小修後可合併」。第�
 > - `gpt/T-115-fix-common`：`features/transport/common/`。
 >
 > 監工把兩個分支合併到 T-115 分支，再派審查，通過後才併入 main。
+
+### T-115 第三輪審查（GPT，2026-11-24）— 退回修正（GPT 修）
+審查 `gpt/T-115-fix-round2`（dc845d8，為 a652929 契約加上 dc845d8 common）：檢查全過（Vitest 211、e2e 3），Chrome 驗證三項都通過（H.264 優先、預留的 transceiver 不必重新協商就能補上音軌、ICE 收集完成後 SDP 含 candidate）。第二輪的阻擋項 (b)、(c)、(d) 已修，(a) 大致修好。
+
+唯一阻擋：signal 的 offer 與 answer 沒有協商識別。房主停播後再開播時，新連線可能套用上一輪在途的 answer，正確的 answer 反而被拒（已用正式 adapter、process.ts 和 Chrome 重現）。監工決定這輪就補上協商識別，因為等 T-107 開工後再改協定，代價更高。改法如下：
+- 房主為每份 offer（含 ICE restart）配發一個識別。
+- answer 與 ICE candidate 都帶這個識別。
+- 房主比對不符就丟棄。
+- 先改 protocol.md 和 shared，再改規格。
+
+應修：
+- 收看者等不到第一份 offer 時要逾時，並提示重新連線。
+- fake 做 ICE restart 時要換 ufrag；連線關閉後，sender 的操作要報錯。
+- 補齊 protocol.md:40、room-and-invite.md:10、process.ts:172 三處 stream:status 範例的 `title` 與 `startedAt`。
+
+留給 T-109：
+- WHIP 首次發布缺軌時要保留哪些 media sections。
+- relay 的 `removePeer` 由誰負責。
+- DELETE 回應遺失、重試拿到 403 時，怎麼確認已經清理完成。
