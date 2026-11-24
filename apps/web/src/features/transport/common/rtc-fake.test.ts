@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { RtcIceCandidate } from "./rtc";
+import type { RtcIceCandidate, RtcSessionDescription } from "./rtc";
 import {
   createFakePeerConnectionFactory,
   FakeRtcPeerConnection,
@@ -13,6 +13,13 @@ function fakeTrack(
   return { kind, id } as MediaStreamTrack;
 }
 
+function iceCredentials({ sdp }: RtcSessionDescription) {
+  const ufrag = /^a=ice-ufrag:(\S+)/m.exec(sdp)?.[1];
+  const pwd = /^a=ice-pwd:(\S+)/m.exec(sdp)?.[1];
+  if (!ufrag || !pwd) throw new Error("Expected ICE credentials in SDP");
+  return { ufrag, pwd };
+}
+
 describe("FakeRtcRtpSender", () => {
   it("records replaceTrack calls", async () => {
     const sender = new FakeRtcRtpSender(fakeTrack("video"));
@@ -20,6 +27,41 @@ describe("FakeRtcRtpSender", () => {
     await sender.replaceTrack(next);
     expect(sender.replaceTrackCalls).toEqual([next]);
     expect(sender.track).toBe(next);
+  });
+
+  it("rejects replaceTrack on a closed peer and retains the attached track", async () => {
+    const pc = new FakeRtcPeerConnection({});
+    const track = fakeTrack("video");
+    const { sender } = pc.addTransceiver(track);
+    pc.close();
+    await expect(sender.replaceTrack(null)).rejects.toMatchObject({
+      name: "InvalidStateError",
+    });
+    expect(sender.track).toBe(track);
+  });
+
+  it("returns empty sender parameters after close and rejects setParameters", async () => {
+    const pc = new FakeRtcPeerConnection({});
+    const { sender } = pc.addTransceiver("video");
+    const active = sender.getParameters();
+    active.encodings[0]!.maxBitrate = 150_000;
+    active.degradationPreference = "maintain-framerate";
+    await sender.setParameters(active);
+    pc.close();
+
+    const closed = sender.getParameters();
+    expect(closed).toEqual({
+      codecs: [],
+      encodings: [],
+      headerExtensions: [],
+      rtcp: { cname: "", reducedSize: false },
+      transactionId: expect.any(String),
+    });
+    const next = sender.getParameters();
+    expect(next.transactionId).not.toBe(closed.transactionId);
+    await expect(sender.setParameters(next)).rejects.toMatchObject({
+      name: "InvalidStateError",
+    });
   });
 });
 
@@ -30,6 +72,98 @@ describe("FakeRtcPeerConnection", () => {
     expect(offer.type).toBe("offer");
     expect(pc.signalingState).toBe("stable");
     expect(pc.offerOptions).toEqual([{ iceRestart: true }]);
+  });
+
+  it("reuses each peer's ICE credentials and rotates both pairs on restart", async () => {
+    const host = new FakeRtcPeerConnection({});
+    const viewer = new FakeRtcPeerConnection({});
+    host.addTransceiver("video");
+    async function negotiate(options?: RTCOfferOptions) {
+      const offer = await host.createOffer(options);
+      await host.setLocalDescription(offer);
+      await viewer.setRemoteDescription(offer);
+      const answer = await viewer.createAnswer();
+      await viewer.setLocalDescription(answer);
+      await host.setRemoteDescription(answer);
+      return { host: iceCredentials(offer), viewer: iceCredentials(answer) };
+    }
+
+    const initial = await negotiate();
+    expect(initial.viewer.ufrag).not.toBe(initial.host.ufrag);
+    expect(initial.viewer.pwd).not.toBe(initial.host.pwd);
+    expect(await negotiate()).toEqual(initial);
+
+    const restart = await negotiate({ iceRestart: true });
+    for (const peer of ["host", "viewer"] as const) {
+      expect(restart[peer].ufrag).not.toBe(initial[peer].ufrag);
+      expect(restart[peer].pwd).not.toBe(initial[peer].pwd);
+    }
+    expect(restart.viewer.ufrag).not.toBe(restart.host.ufrag);
+    expect(restart.viewer.pwd).not.toBe(restart.host.pwd);
+    expect(await negotiate()).toEqual(restart);
+  });
+
+  it("writes candidates only for the applied ICE generation across a restart", async () => {
+    const pc = new FakeRtcPeerConnection({});
+    pc.addTransceiver("audio");
+    await pc.setLocalDescription();
+    const initial = iceCredentials(pc.localDescription!);
+    await pc.createOffer({ iceRestart: true });
+    expect(iceCredentials(await pc.createOffer())).toEqual(initial);
+    const restart = iceCredentials(await pc.createOffer({ iceRestart: true }));
+    const gather = (label: string, usernameFragment: string) =>
+      pc.fireIceCandidate({
+        candidate: `candidate:${label}`,
+        sdpMid: "0",
+        usernameFragment,
+      });
+
+    gather("active", initial.ufrag);
+    gather("premature", restart.ufrag);
+    expect(pc.localDescription?.sdp).toContain("a=candidate:active");
+    expect(pc.localDescription?.sdp).not.toContain("a=candidate:premature");
+
+    await pc.setLocalDescription();
+    expect(iceCredentials(pc.localDescription!)).toEqual(restart);
+    gather("late", initial.ufrag);
+    gather("restarted", restart.ufrag);
+    expect(pc.localDescription?.sdp).not.toContain("a=candidate:active");
+    expect(pc.localDescription?.sdp).not.toContain("a=candidate:late");
+    expect(pc.localDescription?.sdp).toContain("a=candidate:restarted");
+  });
+
+  it("uses the media ufrag before the session default when gathering candidates", async () => {
+    const pc = new FakeRtcPeerConnection({});
+    await pc.setLocalDescription({
+      type: "offer",
+      sdp: [
+        "v=0",
+        "a=ice-ufrag:session",
+        "a=ice-pwd:sessionPasswordForTests",
+        "m=audio 9 UDP/TLS/RTP/SAVPF 111",
+        "a=mid:0",
+        "m=video 9 UDP/TLS/RTP/SAVPF 96",
+        "a=mid:1",
+        "a=ice-ufrag:video",
+        "a=ice-pwd:videoPasswordForTests123",
+        "",
+      ].join("\r\n"),
+    });
+    for (const [sdpMLineIndex, usernameFragment, label] of [
+      [0, "session", "audio"],
+      [1, "session", "wrong"],
+      [1, "video", "video"],
+    ] as const) {
+      pc.fireIceCandidate({
+        candidate: `candidate:${label}`,
+        sdpMLineIndex,
+        usernameFragment,
+      });
+    }
+    const [, audio, video] = pc.localDescription!.sdp.split(/\r?\n(?=m=)/);
+    expect(audio).toContain("a=candidate:audio");
+    expect(video).toContain("a=candidate:video");
+    expect(pc.localDescription?.sdp).not.toContain("a=candidate:wrong");
   });
 
   it("notifies signaling changes only when a description changes the state", async () => {
