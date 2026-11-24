@@ -20,6 +20,36 @@ function iceCredentials({ sdp }: RtcSessionDescription) {
   return { ufrag, pwd };
 }
 
+it("同一個 PC 的 offer 與 answer 共用 session id，ICE restart 只遞增版本", async () => {
+  const host = new FakeRtcPeerConnection({});
+  const viewer = new FakeRtcPeerConnection({});
+  function origin(description: RtcSessionDescription) {
+    const match = /^o=- (\d+) (\d+) IN IP4 127\.0\.0\.1\r?$/m.exec(
+      description.sdp,
+    );
+    if (!match) throw new Error("缺少 SDP origin");
+    return { id: match[1], version: Number(match[2]) };
+  }
+  async function negotiate(
+    from: FakeRtcPeerConnection,
+    to: FakeRtcPeerConnection,
+    restart = false,
+  ) {
+    const offer = await from.createOffer({ iceRestart: restart });
+    await from.setLocalDescription(offer);
+    await to.setRemoteDescription(offer);
+    const answer = await to.createAnswer();
+    await to.setLocalDescription(answer);
+    await from.setRemoteDescription(answer);
+    return [origin(offer), origin(answer)] as const;
+  }
+  const [first, peer] = await negotiate(host, viewer);
+  expect(first.id).not.toBe(peer.id);
+  const [nextPeer, nextHost] = await negotiate(viewer, host, true);
+  expect(nextHost).toEqual({ id: first.id, version: first.version + 1 });
+  expect(nextPeer).toEqual({ id: peer.id, version: peer.version + 1 });
+});
+
 describe("FakeRtcRtpSender", () => {
   it("records replaceTrack calls", async () => {
     const sender = new FakeRtcRtpSender(fakeTrack("video"));

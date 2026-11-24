@@ -33,6 +33,7 @@ interface IceCredentials {
 }
 
 let iceGeneration = 0;
+let nextSessionId = 0;
 
 function newIceCredentials(): IceCredentials {
   const id = ++iceGeneration;
@@ -137,6 +138,8 @@ export class FakeRtcPeerConnection
   onsignalingstatechange: (() => void) | null = null;
   ontrack: ((event: RtcTrackEvent) => void) | null = null;
 
+  private readonly sessionId = ++nextSessionId;
+  private sessionVersion = 0;
   private local: RtcSessionDescription | null = null;
   private lastCreated?: RtcSessionDescription;
   private negotiatedRemoteIce?: IceCredentials;
@@ -309,7 +312,12 @@ export class FakeRtcPeerConnection
         ? undefined
         : readIceCredentials(this.local?.sdp);
     const { ufrag, pwd } = retained ?? newIceCredentials();
-    const lines = ["v=0", `a=ice-ufrag:${ufrag}`, `a=ice-pwd:${pwd}`];
+    const lines = [
+      "v=0",
+      `o=- ${this.sessionId} ${++this.sessionVersion} IN IP4 127.0.0.1`,
+      `a=ice-ufrag:${ufrag}`,
+      `a=ice-pwd:${pwd}`,
+    ];
     for (const [index, { kind, init }] of this.transceivers.entries()) {
       lines.push(
         `m=${kind} 9 UDP/TLS/RTP/SAVPF ${kind === "video" ? 96 : 111}`,

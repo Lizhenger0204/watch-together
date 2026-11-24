@@ -54,7 +54,7 @@ export function setVideoContentHint(track: MediaStreamTrack): void {
   }
 }
 
-/** 依 §2：video codec 偏好 H.264 優先，其次 VP8（不保留其他 video codec）。 */
+/** 依 §2：video codec 偏好 H.264 優先，其次 VP8，其餘 video codec 依原順序排在後面。 */
 export function preferredVideoCodecs(
   codecs: readonly RTCRtpCodec[],
 ): RTCRtpCodec[] {
