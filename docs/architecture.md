@@ -46,9 +46,10 @@ apps/
         room/               邀請碼顯示與複製、成員列表、模式選項卡、房主操作
         source/             選檔、格式檢查、本地播放、captureStream、解析度縮放計算
         transport/          WebRTC 傳輸（純 TS，不 import React）
+          index.ts          對外契約：createHostTransport / createViewerTransport 型別、狀態事件、統計、錯誤、signal 介面
           p2p/              房主 mesh、收看者單一連線、信令處理
           relay/            WHIP / WHEP 客戶端
-          common/           碼率控制、codec 偏好、連線統計
+          common/           編碼與畫質、ICE 設定取得、狀態事件、連線統計、RTCPeerConnection 介面與 fake
         player/             收看端 <video srcObject>、點擊開始觀看、狀態提示
       lib/                  api client、signal WebSocket client、token 儲存
   signal/                   Hono + Cloudflare Workers + Durable Objects
