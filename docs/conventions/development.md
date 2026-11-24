@@ -16,7 +16,7 @@
 | `pnpm build` | 建置全部 |
 | `pnpm typecheck` | `tsc --noEmit`（全 workspace） |
 | `pnpm lint` | ESLint + Prettier 檢查 |
-| `pnpm test` | Vitest（全 workspace） |
+| `pnpm test` | 驗證 signal 啟動參數（Node.js），執行全 workspace 的 Vitest |
 | `pnpm e2e` | Playwright |
 | `pnpm deploy` | 建置 web，再以 `--env production` 部署 signal Worker（前端靜態檔一併上傳，見下方「部署」） |
 
@@ -60,12 +60,14 @@
 
 新增變數時同步更新本表與 `apps/signal/.dev.vars.example`。
 
-### 前端（`apps/web/.env`）
+### 本機開發連接埠
+
+在專案根目錄執行 `pnpm dev` 會讀取 `apps/web/.env`，終端機已設定的同名環境變數優先。要在 macOS 與 Windows 錯開多個 worktree 的連接埠，可在各自的 `apps/web/.env` 寫入 `WEB_PORT=5403` 與 `SIGNAL_PORT=9017`，每行一項。`pnpm e2e` 也使用這組連接埠。
 
 | 變數 | 預設 | 說明 |
 | --- | --- | --- |
 | `WEB_PORT` | `5173` | Vite dev server |
-| `SIGNAL_PORT` | `8787` | Vite proxy 目標 |
+| `SIGNAL_PORT` | `8787` | Wrangler 監聽與 Vite proxy 目標，接受 1 到 65535 的十進位整數 |
 
 ## 本機測試 P2P
 

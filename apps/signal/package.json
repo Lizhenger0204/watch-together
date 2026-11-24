@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "dev": "wrangler dev --port \"${SIGNAL_PORT:-8787}\"",
+    "dev": "node ../../scripts/signal-dev.mjs",
     "build": "esbuild src/runtime/workers/index.ts --bundle --format=esm --external:cloudflare:* --outfile=dist/index.js",
     "test": "vitest run"
   },

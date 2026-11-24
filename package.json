@@ -13,7 +13,7 @@
     "deploy": "pnpm --filter @project/web build && pnpm --filter @project/signal exec wrangler deploy --env production",
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint . && prettier --check .",
-    "test": "vitest run --passWithNoTests && pnpm --filter @project/signal test",
+    "test": "node --test scripts/signal-dev.test.mjs && vitest run --passWithNoTests && pnpm --filter @project/signal test",
     "e2e": "playwright test --config e2e/playwright.config.ts"
   },
   "devDependencies": {
