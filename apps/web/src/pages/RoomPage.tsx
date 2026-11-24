@@ -9,8 +9,9 @@ import {
   useRoom,
 } from "../features/room";
 import {
+  afterStreamCommandFailed,
   nextStreamCommand,
-  type StreamCommand,
+  type SentCommand,
 } from "../features/room/live-intent";
 import { roomExit, type RoomView } from "../features/room/room-state";
 import { ApiError } from "../lib/api";
@@ -78,9 +79,7 @@ function useLiveIntent(
   const { view, actions } = room;
   const [intent, setIntentState] = useState(() => liveIntent.get(roomId));
   const [error, setError] = useState("");
-  const lastSent = useRef<{ session: number; command: StreamCommand } | null>(
-    null,
-  );
+  const lastSent = useRef<SentCommand | null>(null);
   const connected = view.connection.status === "open";
   const { session, stream } = view;
 
@@ -94,12 +93,19 @@ function useLiveIntent(
       lastSent: lastSent.current,
     });
     if (!command) return;
-    lastSent.current = { session, command };
+    const sent = { session, command };
+    lastSent.current = sent;
     setError("");
     actions.setStream(command.live, command.title)?.catch((e: unknown) => {
+      const next = afterStreamCommandFailed(lastSent.current, sent);
+      lastSent.current = next.lastSent;
+      if (next.cancelIntent) {
+        liveIntent.set(roomId, false);
+        setIntentState(false);
+      }
       setError(e instanceof ApiError ? e.message : "操作失敗，請稍後再試。");
     });
-  }, [intent, connected, session, stream, ready, title, actions]);
+  }, [intent, connected, session, stream, ready, title, actions, roomId]);
 
   const setIntent = (on: boolean) => {
     liveIntent.set(roomId, on);
@@ -202,11 +208,11 @@ function ViewerView({ room }: { room: Room }) {
     <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
       <section className="grid content-start gap-3">
         <div
-          className="grid aspect-video place-items-center rounded-2xl bg-black text-center"
+          className="grid aspect-video grid-cols-[minmax(0,1fr)] place-items-center rounded-2xl bg-black text-center"
           data-testid="viewer-stage"
         >
           {view.stream.live ? (
-            <p className="px-4 text-zinc-300">
+            <p className="px-4 wrap-anywhere text-zinc-300">
               {host?.nickname ?? "房主"} 正在播放「{view.stream.title}」
               <span className="mt-1 block text-sm text-zinc-500">
                 畫面連線功能開發中

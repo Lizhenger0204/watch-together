@@ -51,3 +51,20 @@ export function nextStreamCommand(
   }
   return want;
 }
+
+export type SentCommand = { session: number; command: StreamCommand };
+
+/**
+ * stream:status 被伺服器拒絕（ack 失敗）後的處理。
+ * - 忘掉這筆已送出的紀錄，否則 nextStreamCommand 會當成「已經送過」，手動重試也不會再送。
+ * - 開播失敗時一併取消開播意圖：按鈕回到「開始直播」，由房主看完錯誤後手動重試，
+ *   不在背景自動重送（伺服器持續拒絕時會一直失敗）。
+ * 失敗的若是較舊的請求（之後又送了新的），不動目前的紀錄與意圖。
+ */
+export function afterStreamCommandFailed(
+  lastSent: SentCommand | null,
+  failed: SentCommand,
+): { lastSent: SentCommand | null; cancelIntent: boolean } {
+  if (lastSent !== failed) return { lastSent, cancelIntent: false };
+  return { lastSent: null, cancelIntent: failed.command.live };
+}

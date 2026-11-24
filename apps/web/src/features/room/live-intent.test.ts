@@ -1,6 +1,7 @@
 import { TITLE_MAX_LENGTH, type StreamInfo } from "@project/shared";
 import { describe, expect, test } from "vitest";
 import {
+  afterStreamCommandFailed,
   nextStreamCommand,
   streamTitle,
   type StreamCommandInput,
@@ -121,5 +122,41 @@ describe("streamTitle", () => {
 
   test("空白片名送 null", () => {
     expect(streamTitle("  ")).toBeNull();
+  });
+});
+
+describe("afterStreamCommandFailed（開播失敗後手動重試）", () => {
+  const start = { session: 1, command: { live: true, title: "電影" } };
+
+  test("開播被拒：取消意圖並忘掉紀錄，房主再按開始直播會重新送出", () => {
+    const after = afterStreamCommandFailed(start, start);
+    expect(after).toEqual({ lastSent: null, cancelIntent: true });
+    // 意圖取消時不送任何請求（伺服器本來就是未開播）
+    expect(
+      nextStreamCommand(input({ intent: false, lastSent: after.lastSent })),
+    ).toBeNull();
+    // 房主再按一次「開始直播」
+    expect(nextStreamCommand(input({ lastSent: after.lastSent }))).toEqual(
+      start.command,
+    );
+  });
+
+  test("停播被拒：忘掉紀錄但不動意圖，之後狀態變化時會再送停播", () => {
+    const stop = { session: 1, command: { live: false, title: null } };
+    const after = afterStreamCommandFailed(stop, stop);
+    expect(after).toEqual({ lastSent: null, cancelIntent: false });
+    expect(
+      nextStreamCommand(
+        input({ intent: false, stream: on("電影"), lastSent: after.lastSent }),
+      ),
+    ).toEqual({ live: false, title: null });
+  });
+
+  test("失敗的是較舊的請求：保留目前的紀錄與意圖", () => {
+    const newer = { session: 2, command: { live: true, title: "電影" } };
+    expect(afterStreamCommandFailed(newer, start)).toEqual({
+      lastSent: newer,
+      cancelIntent: false,
+    });
   });
 });

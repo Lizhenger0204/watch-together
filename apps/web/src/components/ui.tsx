@@ -48,10 +48,13 @@ export function Card({
     >
       {(title || action) && (
         <div className="mb-4 flex items-center justify-between gap-3">
+          {/* 標題可能含片名（使用者的檔名，常是沒有空白的長字串），要能斷行，不可撐寬版面 */}
           {title && (
-            <h2 className="text-base font-semibold text-white">{title}</h2>
+            <h2 className="min-w-0 text-base font-semibold wrap-anywhere text-white">
+              {title}
+            </h2>
           )}
-          {action}
+          {action && <div className="shrink-0">{action}</div>}
         </div>
       )}
       {children}
