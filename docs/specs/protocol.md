@@ -23,7 +23,9 @@
 | DELETE | `<Location>` | 同建立者 | — | `200` |
 | GET | `/api/health` | 無 | — | `200 { ok: true, protocolVersion }` |
 
-加入與沿用共用每 IP 每分鐘 10 次的限流。呼叫端可用 `excludeRoomIds` 列出已持有憑證的房間，禁止為這些房間配置新席位。帶 `existingRoomId` 時必須用 `Authorization: Bearer <token>`，且只嘗試沿用：邀請目錄與房間當下的碼皆符合、房號相同且憑證仍屬於成員，才回傳原 memberId 與 `reused: true`。客戶端保留原憑證與角色，沿用回應不含 token。鎖房與滿房不影響沿用。錯碼、錯房、失效憑證、被排除的新席位及鎖房一律回相同的 `404 ROOM_NOT_FOUND`。只提供 header 或只提供房號也一律拒絕。一般新加入沿用原有的回應格式與滿房行為。
+加入與沿用共用每 IP 每分鐘 10 次的限流。呼叫端可用 `excludeRoomIds` 列出已持有憑證的房間，禁止為這些房間配置新席位。帶 `existingRoomId` 時必須用 `Authorization: Bearer <token>`，且只嘗試沿用：邀請目錄與房間當下的碼皆符合、房號相同且憑證仍屬於成員，才回傳原 memberId 與 `reused: true`。客戶端保留原憑證與角色，沿用回應不含 token。鎖房與滿房不影響沿用。錯碼、錯房、沿用時的失效憑證及鎖房一律回相同的 `404 ROOM_NOT_FOUND`。只提供 header 或只提供房號也一律拒絕。新加入時，房間開放但已滿，一律回相同的 `409 ROOM_FULL` 本文。有空位才檢查排除名單，命中回 `404 ROOM_NOT_FOUND`。客戶端收到 404 或 409 都可嘗試沿用。
+
+每次加入最多可列 16 個 `excludeRoomIds`。16 個 UUID 的緊湊 JSON 陣列為 625 位元組，足以在單次請求保護多房身份。整份加入請求的 UTF-8 本文上限為 2,048 位元組，保留暱稱、邀請碼、其他欄位與排版空間。恰好達到任一上限可接受。房號過多或實際本文超限都回 `400 BAD_REQUEST` 及通用錯誤本文。伺服器在解析 JSON 前計算串流位元組，超限即停止讀取。
 
 ## WebSocket
 
@@ -120,4 +122,4 @@ type MemberStatus = {
 
 | `PROTOCOL_VERSION` | 內容 |
 | --- | --- |
-| 1 | 第一版（尚未正式發布）。發布前的修改不升版：ICE 路徑由 `/api/ice` 改為 `/api/rooms/:roomId/ice`（才能驗證是哪個房間的成員）、加入關閉碼表、房主重新連線的流程、連到不存在或已關閉的房間改為接受後以 `4001` 關閉（原本回 HTTP 404）、P2P 信令必填 `data.negotiationId`。 |
+| 1 | 第一版（尚未正式發布）。發布前的修改不升版：ICE 路徑由 `/api/ice` 改為 `/api/rooms/:roomId/ice`（才能驗證是哪個房間的成員）、加入關閉碼表、房主重新連線的流程、連到不存在或已關閉的房間改為接受後以 `4001` 關閉（原本回 HTTP 404）、P2P 信令必填 `data.negotiationId`、條件式加入支援 `existingRoomId` 沿用及 `excludeRoomIds` 防止重複配位。 |

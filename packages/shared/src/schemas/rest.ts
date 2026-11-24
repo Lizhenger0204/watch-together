@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { JOIN_MAX_EXCLUDED_ROOMS } from "../constants";
 import {
   errorCodeSchema,
   iceServerSchema,
@@ -36,7 +37,7 @@ export const joinRoomRequestSchema = z.object({
   inviteCode: z.string().min(1).max(32),
   nickname: nicknameSchema,
   existingRoomId: z.uuid().optional(),
-  excludeRoomIds: z.array(z.uuid()).optional(),
+  excludeRoomIds: z.array(z.uuid()).max(JOIN_MAX_EXCLUDED_ROOMS).optional(),
 });
 export type JoinRoomRequest = z.infer<typeof joinRoomRequestSchema>;
 export const joinRoomResponseSchema = z.object({

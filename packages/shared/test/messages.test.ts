@@ -181,6 +181,26 @@ describe("REST 與常數", () => {
     ).toBe(false);
   });
 
+  test("排除名單可列 16 個房號，第 17 個超限", () => {
+    const ids = Array.from(
+      { length: 17 },
+      (_, i) => `12345678-1234-4234-9234-${String(i).padStart(12, "0")}`,
+    );
+    const input = { inviteCode: "ABCDEFGH", nickname: "朋友" };
+    expect(
+      joinRoomRequestSchema.safeParse({
+        ...input,
+        excludeRoomIds: ids.slice(0, 16),
+      }).success,
+    ).toBe(true);
+    expect(
+      joinRoomRequestSchema.safeParse({
+        ...input,
+        excludeRoomIds: ids,
+      }).success,
+    ).toBe(false);
+  });
+
   test("暱稱會 trim，空白暱稱不合法", () => {
     expect(createRoomRequestSchema.parse({ nickname: "  小明 " })).toEqual({
       nickname: "小明",
