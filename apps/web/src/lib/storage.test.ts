@@ -67,6 +67,32 @@ describe("roomToken", () => {
     vi.stubGlobal("localStorage", storage);
     roomToken.clear(ROOM);
     expect(roomToken.get(ROOM)).toBeNull();
+    const renewed = crypto.randomUUID();
+    storage.setItem(`room:${ROOM}:token`, renewed);
+    expect(roomToken.get(ROOM)).toBe(renewed);
+  });
+
+  test("本分頁寫入失敗時保留記憶體身份；共用值改變後採用新身份", () => {
+    const storage = new MemoryStorage();
+    vi.stubGlobal("localStorage", storage);
+    const key = `room:${ROOM}:token`;
+    const [local, previous, updated] = [
+      crypto.randomUUID(),
+      crypto.randomUUID(),
+      crypto.randomUUID(),
+    ] as const;
+    storage.setItem(key, previous);
+    const denied = vi.spyOn(storage, "setItem").mockImplementation(() => {
+      throw new Error("denied");
+    });
+    expect(roomToken.set(ROOM, local)).toBe(false);
+    expect(roomToken.get(ROOM)).toBe(local);
+    expect(roomToken.persisted(ROOM)).toBe(false);
+    denied.mockRestore();
+    storage.setItem(key, updated);
+    expect(roomToken.get(ROOM)).toBe(updated);
+    storage.removeItem(key);
+    expect(roomToken.get(ROOM)).toBeNull();
   });
 
   test("clear 一併清掉邀請碼對照與開播意圖", () => {
@@ -78,6 +104,21 @@ describe("roomToken", () => {
     roomToken.clear(ROOM);
     expect(roomInviteCode.findRoom("ABCDEFGH")).toBeNull();
     expect(liveIntent.get(ROOM)).toBe(false);
+  });
+
+  test("只在記憶體的憑證驗證失敗時，恢復共用儲存中的另一份憑證", () => {
+    const storage = new MemoryStorage();
+    vi.stubGlobal("localStorage", storage);
+    const shared = crypto.randomUUID();
+    const local = crypto.randomUUID();
+    roomToken.set(ROOM, shared);
+    vi.spyOn(storage, "setItem").mockImplementation(() => {
+      throw new Error("denied");
+    });
+    roomToken.set(ROOM, local);
+    roomToken.clearIfCurrent(ROOM, local);
+    expect(storage.getItem(`room:${ROOM}:token`)).toBe(shared);
+    expect(roomToken.get(ROOM)).toBe(shared);
   });
 });
 

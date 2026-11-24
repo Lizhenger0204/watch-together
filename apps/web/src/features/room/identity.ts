@@ -1,4 +1,5 @@
 import {
+  JOIN_MAX_EXCLUDED_ROOMS,
   errorResponseSchema,
   iceResponseSchema,
   joinRoomRequestSchema,
@@ -70,19 +71,25 @@ function roomsWithTokens() {
   return [...rememberedRooms];
 }
 
-function forgetInvalid(roomId: string, token: string) {
-  if (roomToken.get(roomId) !== token) return;
-  try {
-    const shared = globalThis.localStorage?.getItem(`room:${roomId}:token`);
-    if (shared && shared !== token) {
-      // 本分頁的快取已失效，改用另一分頁剛寫入的憑證。
-      roomToken.set(roomId, shared);
-      return;
-    }
-  } catch {
-    // 只存在本分頁的身份同樣可以失效。
+async function verifyStoredIdentity(roomId: string, token: string) {
+  const check = await checkIdentity(roomId, token);
+  if (check === "unauthorized" || check === "room_closed") {
+    roomToken.clearIfCurrent(roomId, token);
   }
-  roomToken.clear(roomId);
+  return check;
+}
+
+async function roomsToExclude() {
+  const ids = roomsWithTokens();
+  if (ids.length <= JOIN_MAX_EXCLUDED_ROOMS) return ids;
+  let remaining = ids.length;
+  for (const id of ids) {
+    const token = roomToken.get(id);
+    if (token) await verifyStoredIdentity(id, token);
+    if (!roomToken.get(id)) remaining--;
+    if (remaining <= JOIN_MAX_EXCLUDED_ROOMS) break;
+  }
+  return roomsWithTokens();
 }
 
 async function conditionalJoin(body: JoinRoomRequest, token?: string) {
@@ -109,56 +116,66 @@ async function conditionalJoin(body: JoinRoomRequest, token?: string) {
   return json;
 }
 
-async function join(
-  inviteCode: string,
-  nickname: string,
-): Promise<{ roomId: string; reused: boolean }> {
+async function joinNew(body: JoinRoomRequest, roomIds: string[]) {
+  const joined = roomIds.length
+    ? joinRoomResponseSchema.parse(
+        await conditionalJoin({ ...body, excludeRoomIds: roomIds }),
+      )
+    : await joinRoom(body.inviteCode, body.nickname);
+  rememberedRooms.add(joined.roomId);
+  // 新身份可能在請求途中由另一分頁寫入。先保住房主或既有成員的憑證。
+  let current = roomToken.get(joined.roomId);
+  while (current && current !== joined.memberToken) {
+    const check = await checkIdentity(joined.roomId, current);
+    const latest = roomToken.get(joined.roomId);
+    if (current !== latest) {
+      current = latest;
+      continue;
+    }
+    if (check === "unknown") throw new ApiError("INTERNAL");
+    if (check === "valid") {
+      roomInviteCode.set(joined.roomId, body.inviteCode);
+      return { roomId: joined.roomId, reused: true };
+    }
+    break;
+  }
+  roomToken.set(joined.roomId, joined.memberToken);
+  roomInviteCode.set(joined.roomId, body.inviteCode);
+  return { roomId: joined.roomId, reused: false };
+}
+
+async function join(inviteCode: string, nickname: string) {
   const known = roomInviteCode.findRoom(inviteCode);
   const token = known && roomToken.get(known);
   if (known && token) {
-    const check = await checkIdentity(known, token);
+    const check = await verifyStoredIdentity(known, token);
     if (check === "valid") {
       rememberedRooms.add(known);
       return { roomId: known, reused: true };
     }
     if (check === "unknown") throw new ApiError("INTERNAL");
-    forgetInvalid(known, token);
     throw new ApiError(
       check === "unauthorized" ? "UNAUTHORIZED" : "ROOM_NOT_FOUND",
     );
   }
 
-  const roomIds = roomsWithTokens();
+  const roomIds = await roomsToExclude();
   const body = { inviteCode, nickname };
-  try {
-    const joined = roomIds.length
-      ? joinRoomResponseSchema.parse(
-          await conditionalJoin({ ...body, excludeRoomIds: roomIds }),
-        )
-      : await joinRoom(inviteCode, nickname);
-    rememberedRooms.add(joined.roomId);
-    // 新身份可能在請求途中由另一分頁寫入。先保住房主或既有成員的憑證。
-    const current = roomToken.get(joined.roomId);
-    if (current && current !== joined.memberToken) {
-      const check = await checkIdentity(joined.roomId, current);
-      if (check === "unknown") throw new ApiError("INTERNAL");
-      if (check === "valid") {
-        roomInviteCode.set(joined.roomId, inviteCode);
-        return { roomId: joined.roomId, reused: true };
-      }
+  let admissionError: ApiError | undefined;
+  if (roomIds.length <= JOIN_MAX_EXCLUDED_ROOMS) {
+    try {
+      return await joinNew(body, roomIds);
+    } catch (error) {
+      if (
+        !(error instanceof ApiError) ||
+        (error.code !== "ROOM_NOT_FOUND" && error.code !== "ROOM_FULL")
+      )
+        throw error;
+      admissionError = error;
     }
-    roomToken.set(joined.roomId, joined.memberToken);
-    roomInviteCode.set(joined.roomId, inviteCode);
-    return { roomId: joined.roomId, reused: false };
-  } catch (error) {
-    if (
-      !(error instanceof ApiError && error.code === "ROOM_NOT_FOUND") ||
-      !roomIds.length
-    )
-      throw error;
   }
 
-  // 404 同時涵蓋已排除的席位、鎖房與錯碼。只能拿舊憑證逐房驗證。
+  // 鎖房、滿房或名單超過上限時，已有的席位仍可沿用。
   for (const roomId of roomIds) {
     const existing = roomToken.get(roomId);
     if (!existing) continue;
@@ -172,12 +189,16 @@ async function join(
     } catch (error) {
       if (!(error instanceof ApiError && error.code === "ROOM_NOT_FOUND"))
         throw error;
+      await verifyStoredIdentity(roomId, existing);
       // 若中途達到 IP 限流，下次重試會先檢查尚未比對的房號。
       rememberedRooms.delete(roomId);
       rememberedRooms.add(roomId);
     }
   }
-  throw new ApiError("ROOM_NOT_FOUND");
+  if (admissionError) throw admissionError;
+  const error = new ApiError("BAD_REQUEST");
+  error.message = `這個瀏覽器保存的房間身份超過 ${JOIN_MAX_EXCLUDED_ROOMS} 個，請等舊房間到期後再加入新房。`;
+  throw error;
 }
 
 const pendingJoins = new Map<string, ReturnType<typeof join>>();

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { JOIN_MAX_EXCLUDED_ROOMS } from "@project/shared";
 import { ApiError } from "../../lib/api";
 import {
   resetMemoryStorage,
@@ -17,15 +18,24 @@ const ROTATED = "XYZW2345";
 beforeEach(() => resetMemoryStorage());
 afterEach(() => vi.unstubAllGlobals());
 
-function mockApi({ locked = false, revoked = false } = {}) {
+function mockApi({ locked = false, revoked = false, full = false } = {}) {
   let code = CODE;
+  let activeToken: string | null = revoked ? null : TOKEN;
+  let nextToken = revoked ? NEW_TOKEN : TOKEN;
   let admissions = 0;
   let iceStatus = 200;
   const fail = (status: number, code: string) =>
     Response.json({ error: { code, message: "測試錯誤" } }, { status });
   const fetcher = vi.fn<typeof fetch>(async (path, init) => {
+    const auth = new Headers(init?.headers).get("Authorization");
     if (String(path).endsWith("/ice")) {
       if (!iceStatus) throw new TypeError("offline");
+      if (
+        iceStatus === 200 &&
+        String(path) === `/api/rooms/${ROOM}/ice` &&
+        auth !== "Bearer " + activeToken
+      )
+        return fail(401, "UNAUTHORIZED");
       return iceStatus === 200
         ? Response.json({ iceServers: [] })
         : fail(
@@ -43,12 +53,16 @@ function mockApi({ locked = false, revoked = false } = {}) {
       existingRoomId?: string;
       excludeRoomIds?: string[];
     } = JSON.parse(String(init?.body));
-    const auth = new Headers(init?.headers).get("Authorization");
     const result = (memberToken: string) =>
       Response.json({ roomId: ROOM, memberId: "member", memberToken });
     if (body.inviteCode !== code) return fail(404, "ROOM_NOT_FOUND");
-    if (auth === "Bearer " + TOKEN && body.existingRoomId === ROOM && !revoked)
+    if (
+      auth === "Bearer " + activeToken &&
+      body.existingRoomId === ROOM &&
+      activeToken
+    )
       return Response.json({ roomId: ROOM, memberId: "member", reused: true });
+    if (full && !body.existingRoomId && !locked) return fail(409, "ROOM_FULL");
     if (
       body.existingRoomId ||
       auth ||
@@ -57,12 +71,17 @@ function mockApi({ locked = false, revoked = false } = {}) {
     )
       return fail(404, "ROOM_NOT_FOUND");
     admissions++;
-    return result(admissions === 1 ? TOKEN : NEW_TOKEN);
+    activeToken = nextToken;
+    nextToken = activeToken === TOKEN ? NEW_TOKEN : crypto.randomUUID();
+    return result(activeToken);
   });
   vi.stubGlobal("fetch", fetcher);
   return {
     fetcher,
     admissions: () => admissions,
+    evict: () => {
+      activeToken = null;
+    },
     rotate: () => {
       code = ROTATED;
     },
@@ -146,6 +165,40 @@ describe("joinKeepingIdentity", () => {
     expect(roomToken.get(ROOM)).toBe(NEW_TOKEN);
   });
 
+  test("配位後核對舊身份期間，保留其他分頁剛寫入的新身份", async () => {
+    persistedTokens([]);
+    const key = `room:${ROOM}:token`;
+    const request = vi.fn<typeof fetch>(async (path, init) => {
+      if (path === "/api/rooms/join") {
+        localStorage.setItem(key, TOKEN);
+        return Response.json({
+          roomId: ROOM,
+          memberId: "viewer",
+          memberToken: crypto.randomUUID(),
+        });
+      }
+      expect(path).toBe(`/api/rooms/${ROOM}/ice`);
+      if (
+        new Headers(init?.headers).get("Authorization") ===
+        "Bearer " + TOKEN
+      ) {
+        localStorage.setItem(key, NEW_TOKEN);
+        return new Response(null, { status: 401 });
+      }
+      expect(
+        new Headers(init?.headers).get("Authorization") ===
+          "Bearer " + NEW_TOKEN,
+      ).toBe(true);
+      return Response.json({ iceServers: [] });
+    });
+    vi.stubGlobal("fetch", request);
+    await expect(joinKeepingIdentity(CODE, "朋友")).resolves.toEqual({
+      roomId: ROOM,
+      reused: true,
+    });
+    expect(localStorage.getItem(key)).toBe(NEW_TOKEN);
+  });
+
   test("同一分頁同時首次提交兩次只配置一席", async () => {
     const api = mockApi();
     const joined = await Promise.all([
@@ -213,6 +266,176 @@ describe("joinKeepingIdentity", () => {
       code: "ROOM_NOT_FOUND",
     });
     expect(api.admissions()).toBe(0);
+  });
+
+  test("自然淘汰後持新碼明確重送，只重新配置一席", async () => {
+    const api = mockApi();
+    await joinKeepingIdentity(CODE, "朋友");
+    api.evict();
+    api.rotate();
+    const before = api.admissions();
+    await expect(joinKeepingIdentity(ROTATED, "朋友")).rejects.toMatchObject({
+      code: "ROOM_NOT_FOUND",
+    });
+    await expect(joinKeepingIdentity(ROTATED, "朋友")).resolves.toEqual({
+      roomId: ROOM,
+      reused: false,
+    });
+    await expect(joinKeepingIdentity(ROTATED, "朋友")).resolves.toEqual({
+      roomId: ROOM,
+      reused: true,
+    });
+    expect(api.admissions() - before).toBe(1);
+  });
+
+  test.each([200, 503])(
+    "錯碼沿用回 404，獨立 ICE %i 保留原憑證",
+    async (status) => {
+      persistedTokens([[ROOM, TOKEN]]);
+      const api = mockApi();
+      api.ice(status);
+      await expect(joinKeepingIdentity(ROTATED, "朋友")).rejects.toBeInstanceOf(
+        ApiError,
+      );
+      expect(api.fetcher.mock.lastCall?.[0]).toBe(`/api/rooms/${ROOM}/ice`);
+      expect(roomToken.get(ROOM)).toBe(TOKEN);
+      expect(api.admissions()).toBe(0);
+    },
+  );
+
+  test("滿房 409 仍可沿用同房身份，其他房的成員仍看到滿房", async () => {
+    persistedTokens([[OTHER, NEW_TOKEN]]);
+    const api = mockApi({ full: true });
+    await expect(joinKeepingIdentity(CODE, "朋友")).rejects.toMatchObject({
+      code: "ROOM_FULL",
+    });
+    roomToken.set(ROOM, TOKEN);
+    await expect(joinKeepingIdentity(CODE, "朋友")).resolves.toEqual({
+      roomId: ROOM,
+      reused: true,
+    });
+    expect(api.admissions()).toBe(0);
+  });
+
+  test("換碼後，快取的舊連結只憑有效身份回房", async () => {
+    const api = mockApi();
+    await joinKeepingIdentity(CODE, "朋友");
+    api.rotate();
+    api.fetcher.mockClear();
+    await expect(joinKeepingIdentity(CODE, "朋友")).resolves.toEqual({
+      roomId: ROOM,
+      reused: true,
+    });
+    expect(api.fetcher).toHaveBeenCalledOnce();
+    expect(api.fetcher.mock.lastCall?.[0]).toBe(`/api/rooms/${ROOM}/ice`);
+    api.evict();
+    await expect(joinKeepingIdentity(CODE, "朋友")).rejects.toMatchObject({
+      code: "UNAUTHORIZED",
+    });
+    await expect(joinKeepingIdentity(CODE, "朋友")).rejects.toMatchObject({
+      code: "ROOM_NOT_FOUND",
+    });
+    expect(api.admissions()).toBe(1);
+  });
+
+  test("舊分頁已清除身份，取得加入鎖後沿用另一分頁剛配的席位", async () => {
+    persistedTokens([]);
+    const api = mockApi();
+    await joinKeepingIdentity(CODE, "朋友");
+    api.evict();
+    await expect(joinKeepingIdentity(CODE, "朋友")).rejects.toMatchObject({
+      code: "UNAUTHORIZED",
+    });
+    expect(roomToken.get(ROOM)).toBeNull();
+    api.rotate();
+
+    vi.resetModules();
+    const otherTab = await import("./identity");
+    let queue: Promise<unknown> = Promise.resolve();
+    const request = vi.fn((_name: string, enter: () => Promise<unknown>) => {
+      const next = queue.then(enter);
+      queue = next.catch(() => {});
+      return next;
+    });
+    vi.stubGlobal("navigator", { locks: { request } });
+    const before = api.admissions();
+    const [fresh, old] = await Promise.all([
+      otherTab.joinKeepingIdentity(ROTATED, "朋友"),
+      joinKeepingIdentity(ROTATED, "朋友"),
+    ]);
+    expect(request.mock.calls.map(([name]) => name)).toEqual([
+      "room:join",
+      "room:join",
+    ]);
+    expect(fresh.reused).toBe(false);
+    expect(old.reused).toBe(true);
+    expect(api.admissions() - before).toBe(1);
+    expect(api.fetcher.mock.lastCall?.[0]).toBe(`/api/rooms/${ROOM}/ice`);
+    expect(localStorage.getItem(`room:${ROOM}:token`)).toBe(NEW_TOKEN);
+    expect(roomToken.get(ROOM)).toBe(NEW_TOKEN);
+  });
+
+  test("超過名單上限，仍可沿用排列在界外的有效身份", async () => {
+    const ids = Array.from({ length: JOIN_MAX_EXCLUDED_ROOMS }, () =>
+      crypto.randomUUID(),
+    );
+    persistedTokens([
+      ...ids.map((id): [string, string] => [id, NEW_TOKEN]),
+      [ROOM, TOKEN],
+    ]);
+    const api = mockApi();
+    vi.resetModules();
+    const tab = await import("./identity");
+    await expect(tab.joinKeepingIdentity(CODE, "朋友")).resolves.toEqual({
+      roomId: ROOM,
+      reused: true,
+    });
+    expect(api.admissions()).toBe(0);
+    for (const [path, init] of api.fetcher.mock.calls) {
+      if (path === "/api/rooms/join")
+        expect(JSON.parse(String(init?.body))).toHaveProperty("existingRoomId");
+    }
+  });
+
+  test("超限時清除已失效身份，完整排除其餘 16 房後才能配位", async () => {
+    const ids = Array.from({ length: JOIN_MAX_EXCLUDED_ROOMS }, () =>
+      crypto.randomUUID(),
+    );
+    persistedTokens([
+      [ROOM, TOKEN],
+      ...ids.map((id): [string, string] => [id, NEW_TOKEN]),
+    ]);
+    const api = mockApi({ revoked: true });
+    await expect(joinKeepingIdentity(CODE, "朋友")).resolves.toEqual({
+      roomId: ROOM,
+      reused: false,
+    });
+    const joins = api.fetcher.mock.calls.filter(
+      ([path]) => path === "/api/rooms/join",
+    );
+    expect(joins).toHaveLength(1);
+    expect(JSON.parse(String(joins[0]?.[1]?.body)).excludeRoomIds).toEqual(
+      expect.arrayContaining(ids),
+    );
+    expect(JSON.parse(String(joins[0]?.[1]?.body)).excludeRoomIds).toHaveLength(
+      ids.length,
+    );
+    expect(api.admissions()).toBe(1);
+    expect(roomToken.get(ROOM)).toBe(NEW_TOKEN);
+  });
+
+  test("超限且各房身份都有效，加入不同房間時保留全部憑證", async () => {
+    const ids = Array.from({ length: JOIN_MAX_EXCLUDED_ROOMS + 1 }, () =>
+      crypto.randomUUID(),
+    );
+    persistedTokens(ids.map((id) => [id, NEW_TOKEN]));
+    const api = mockApi();
+    await expect(joinKeepingIdentity(CODE, "朋友")).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringContaining("16"),
+    });
+    expect(api.admissions()).toBe(0);
+    expect(ids.every((id) => roomToken.get(id) === NEW_TOKEN)).toBe(true);
   });
 
   test.each([401, 404])(

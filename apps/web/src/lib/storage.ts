@@ -1,6 +1,4 @@
-// 身份先存在分頁記憶體，再嘗試寫入瀏覽器儲存空間；讀取時記憶體優先。
-// localStorage 在無痕模式或封鎖網站資料時可能丟例外或寫不進去，
-// 這時至少同一分頁不會失去身份（重新整理才會遺失）。
+// 瀏覽器禁止儲存時，同一分頁仍可在記憶體保留身份。
 
 type Backend = "local" | "session";
 
@@ -61,27 +59,63 @@ function keys(kind: Backend) {
 const tokenKey = (roomId: string) => `room:${roomId}:token`;
 const inviteKey = (roomId: string) => `room:${roomId}:invite`;
 
+// 比對上次看到的共用值，區分「這次寫入失敗留下的舊值」與「其他分頁之後寫的新值」。
+const lastStoredIdentity = new Map<string, string | null>();
+
+function storedIdentity(key: string) {
+  try {
+    return backend("local")?.getItem(key);
+  } catch {
+    return undefined;
+  }
+}
+
+function readIdentity(key: string) {
+  const stored = storedIdentity(key);
+  if (
+    stored !== undefined &&
+    stored !== (lastStoredIdentity.get(key) ?? null)
+  ) {
+    lastStoredIdentity.set(key, stored);
+    memory.local.set(key, stored);
+  }
+  return memory.local.get(key) ?? null;
+}
+
+function writeIdentity(key: string, value: string | null) {
+  readIdentity(key);
+  const saved = write("local", key, value);
+  if (saved) lastStoredIdentity.set(key, value);
+  return saved;
+}
+
 /** 見 room-and-invite.md「Token」：key 為 room:<roomId>:token。 */
 export const roomToken = {
-  get: (roomId: string) => read("local", tokenKey(roomId)),
+  get: (roomId: string) => readIdentity(tokenKey(roomId)),
   /** 回傳 false 代表只存在本分頁，重新整理後會遺失。 */
   set: (roomId: string, token: string) =>
-    write("local", tokenKey(roomId), token),
+    writeIdentity(tokenKey(roomId), token),
   /** token 是否真的寫進了 localStorage（否則重新整理就會遺失）。 */
   persisted(roomId: string) {
-    const value = read("local", tokenKey(roomId));
-    try {
-      return (
-        value !== null && backend("local")?.getItem(tokenKey(roomId)) === value
-      );
-    } catch {
-      return false;
-    }
+    const value = readIdentity(tokenKey(roomId));
+    return value !== null && storedIdentity(tokenKey(roomId)) === value;
   },
   clear: (roomId: string) => {
-    write("local", tokenKey(roomId), null);
-    write("local", inviteKey(roomId), null);
+    writeIdentity(tokenKey(roomId), null);
+    writeIdentity(inviteKey(roomId), null);
     write("session", liveIntentKey(roomId), null);
+  },
+  clearIfCurrent(roomId: string, token: string) {
+    const key = tokenKey(roomId);
+    if (readIdentity(key) !== token) return;
+    const stored = storedIdentity(key);
+    if (stored && stored !== token) {
+      // 失效的身份只寫進記憶體時，共用儲存裡可能還有另一份憑證。
+      lastStoredIdentity.set(key, stored);
+      memory.local.set(key, stored);
+      return;
+    }
+    roomToken.clear(roomId);
   },
 };
 
@@ -91,11 +125,11 @@ export const roomToken = {
  */
 export const roomInviteCode = {
   set: (roomId: string, inviteCode: string) =>
-    write("local", inviteKey(roomId), inviteCode),
+    writeIdentity(inviteKey(roomId), inviteCode),
   findRoom(inviteCode: string): string | null {
     for (const key of keys("local")) {
       const match = /^room:(.+):invite$/.exec(key);
-      if (match?.[1] && read("local", key) === inviteCode) return match[1];
+      if (match?.[1] && readIdentity(key) === inviteCode) return match[1];
     }
     return null;
   },
@@ -117,6 +151,7 @@ export const savedNickname = {
 
 /** 測試用：清空分頁記憶體。 */
 export function resetMemoryStorage() {
+  lastStoredIdentity.clear();
   memory.local.clear();
   memory.session.clear();
 }
