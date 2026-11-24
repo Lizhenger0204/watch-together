@@ -1,11 +1,16 @@
 import {
   MEMBER_STATUS_INTERVAL_MS,
+  type ServerMessageOf,
   type MemberState,
   type Mode,
   type ServerMessage,
   type SignalData,
 } from "@project/shared";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { SignalClient, type SocketLike } from "../../lib/signal";
+import { createFakePeerConnectionFactory } from "../transport/common/rtc-fake";
+import { createP2PViewerTransport } from "../transport/p2p";
+import { flush, sdp, track, useRtcFakes } from "../transport/p2p/test-fixtures";
 import {
   Emitter,
   TransportError,
@@ -23,7 +28,7 @@ const HOST = "host-1";
 
 function snapshot(
   opts: { live?: boolean; mode?: Mode; role?: "host" | "member" } = {},
-): ServerMessage {
+): ServerMessageOf<"room:snapshot"> {
   return {
     type: "room:snapshot",
     room: {
@@ -38,13 +43,18 @@ function snapshot(
       ? { live: true, title: "電影", startedAt: 1 }
       : { live: false, title: null, startedAt: null },
     you: { memberId: "m1", role: opts.role ?? "member" },
-  } as ServerMessage;
+  };
 }
 
 const live = (on: boolean): ServerMessage =>
   on
     ? { type: "stream:status", live: true, title: "電影", startedAt: 1 }
     : { type: "stream:status", live: false, title: null, startedAt: null };
+
+const modeUpdate = (mode: Mode): ServerMessage => ({
+  type: "room:updated",
+  room: snapshot({ mode }).room,
+});
 
 const offer = (id: string): SignalData => ({
   type: "offer",
@@ -79,10 +89,10 @@ class FakeTransport implements ViewerTransport {
     readonly options: ViewerTransportOptions,
   ) {}
 
-  start() {
+  start = vi.fn(() => {
     this.options.signal.onSignal((message) => this.received.push(message));
     return this.started;
-  }
+  });
   /** 讓 start() resolve，並等 then 回呼跑完。 */
   async ready() {
     this.resolveStart();
@@ -107,6 +117,7 @@ function setup() {
   const handlers = new Set<(m: ServerMessage) => void>();
   const sent: Parameters<ViewerSessionClient["send"]>[0][] = [];
   const client: ViewerSessionClient = {
+    onState: () => () => {},
     onMessage: (h) => {
       handlers.add(h);
       return () => handlers.delete(h);
@@ -214,12 +225,54 @@ describe("建立與拆除傳輸", () => {
   test("直播中切模式：銷毀舊傳輸，依新模式重建", () => {
     const s = setup();
     s.receive(snapshot({ live: true }));
-    s.receive({
-      type: "room:updated",
-      room: { ...(snapshot() as { room: object }).room, mode: "relay" },
-    } as ServerMessage);
+    s.receive(modeUpdate("relay"));
     expect(s.transports[0]!.destroyed).toBe(true);
     expect(s.last().mode).toBe("relay");
+  });
+
+  test.each(["p2p", "relay"] as const)(
+    "停播切到 %s 時建立新傳輸，重開播沿用同一份",
+    async (mode) => {
+      const s = setup();
+      s.receive(
+        snapshot({ live: true, mode: mode === "p2p" ? "relay" : "p2p" }),
+      );
+      const old = s.last();
+      s.receive(live(false));
+      s.receive(modeUpdate(mode));
+      const prepared = s.last();
+      expect(old.destroyed).toBe(true);
+      expect(prepared.mode).toBe(mode);
+      if (mode === "relay") expect(prepared.start).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(FIRST_OFFER_TIMEOUT_MS * 2);
+      expect(s.session.getView().state).toBe("waiting");
+      if (mode === "p2p") s.receive(signal(offer("reopened")));
+      s.receive(live(true));
+      s.receive(live(true));
+      await prepared.ready();
+      expect(s.last()).toBe(prepared);
+      expect(prepared.start).toHaveBeenCalledTimes(1);
+      if (mode === "p2p") {
+        expect(prepared.received.map((m) => m.data)).toEqual([
+          offer("reopened"),
+        ]);
+        vi.advanceTimersByTime(FIRST_OFFER_TIMEOUT_MS);
+        expect(prepared.destroyed).toBe(false);
+      }
+    },
+  );
+
+  test("預建 P2P 後再次停播，先前暫存的 offer 不交給下次直播", async () => {
+    const s = setup();
+    s.receive(snapshot({ mode: "relay" }));
+    s.receive(modeUpdate("p2p"));
+    s.receive(signal(offer("cancelled")));
+    s.receive(live(false));
+    s.receive(live(true));
+    s.receive(signal(offer("next")));
+    const transport = s.last();
+    await transport.ready();
+    expect(transport.received.map((m) => m.data)).toEqual([offer("next")]);
   });
 
   test("建立傳輸失敗（轉發尚未支援）：顯示 failed 與錯誤", () => {
@@ -254,6 +307,43 @@ describe("信令緩衝", () => {
     s.receive(live(true));
     await s.last().ready();
     expect(s.last().received).toEqual([]);
+  });
+
+  test("snapshot 確認未開播、房主或轉發模式時丟棄先到的信令", async () => {
+    for (const opts of [
+      { live: false },
+      { live: true, role: "host" },
+      { live: true, mode: "relay" },
+    ] as const) {
+      const s = setup();
+      s.receive(signal(offer("stale")));
+      s.receive(snapshot(opts));
+      s.receive(live(true));
+      for (const transport of s.transports) {
+        await transport.ready();
+        expect(transport.received).toEqual([]);
+      }
+      s.detach();
+    }
+  });
+
+  test("snapshot 和訂閱前的暫存有上限，滿載後仍可接收新協商", async () => {
+    const s = setup();
+    const ice = signal({ type: "ice", negotiationId: "busy", candidate: null });
+    s.receive(signal(offer("busy")));
+    for (let i = 0; i < 1000; i++) s.receive(ice);
+    s.receive(snapshot({ live: true }));
+    for (let i = 0; i < 1000; i++) s.receive(ice);
+    await s.last().ready();
+    expect(s.last().received[0]?.data).toEqual(offer("busy"));
+    expect(s.last().received.length).toBeLessThanOrEqual(128);
+
+    const fresh = setup();
+    for (let i = 0; i < 1000; i++) fresh.receive(ice);
+    fresh.receive(signal(offer("latest")));
+    fresh.receive(snapshot({ live: true }));
+    await fresh.last().ready();
+    expect(fresh.last().received.at(-1)?.data).toEqual(offer("latest"));
   });
 
   test("停播後舊傳輸的暫存信令作廢", async () => {
@@ -434,5 +524,112 @@ describe("member:status 回報", () => {
     s.receive(snapshot({ live: true }));
     old.events.emit("state", "failed");
     expect(s.session.getView().state).toBe("connecting");
+  });
+});
+
+describe("WebSocket 換代與 P2P 傳輸", () => {
+  useRtcFakes();
+
+  function connect() {
+    const sockets: SocketLike[] = [];
+    const sent = vi.fn();
+    vi.stubGlobal("window", globalThis);
+    const client = new SignalClient({
+      url: "ws://test.invalid",
+      token: "",
+      createSocket: () => {
+        const socket: SocketLike = {
+          readyState: 1,
+          onopen: null,
+          onclose: null,
+          onmessage: null,
+          send: (data) => sent(JSON.parse(data)),
+          close: vi.fn(),
+        };
+        sockets.push(socket);
+        return socket;
+      },
+    });
+    const rtc = createFakePeerConnectionFactory();
+    const session = new ViewerSession({
+      client,
+      token: "",
+      roomId: "r",
+      requestNewSocket: vi.fn(),
+      createTransport: (options) =>
+        createP2PViewerTransport({
+          ...options,
+          createPeerConnection: rtc.factory,
+          fetchIceServers: async () => [],
+        }),
+    });
+    session.attach();
+    client.start();
+    const socket = () => sockets.at(-1)!;
+    const receive = (m: ServerMessage) =>
+      socket().onmessage?.({ data: JSON.stringify(m) });
+    const sendOffer = (id: string) =>
+      receive(signal({ type: "offer", negotiationId: id, sdp: sdp() }));
+    return { session, sent, rtc, socket, receive, sendOffer };
+  }
+
+  test("自動重連的 snapshot 前收到 offer、ICE：只為新 socket 建一條連線並回 answer", async () => {
+    const s = connect();
+    s.sendOffer("old");
+    s.socket().onclose?.({ code: 1006 });
+    await vi.advanceTimersByTimeAsync(1000);
+    s.sendOffer("new");
+    s.receive(signal({ type: "ice", negotiationId: "new", candidate: null }));
+    await flush();
+    expect(s.rtc.connections).toHaveLength(0);
+    s.receive(snapshot({ live: true }));
+    await flush();
+    expect(s.rtc.connections).toHaveLength(1);
+    const pc = s.rtc.connections[0]!;
+    expect(pc.iceCandidateHistory).toEqual([null]);
+    const answers = s.sent.mock.calls
+      .flat()
+      .filter((m) => m.type === "signal" && m.data.type === "answer");
+    expect(answers.map((m) => m.data.negotiationId)).toEqual(["new"]);
+    pc.setIceConnectionState("connected");
+    await vi.advanceTimersByTimeAsync(FIRST_OFFER_TIMEOUT_MS);
+    expect(s.session.getView().state).toBe("playing");
+  });
+
+  test("新 socket 沒有 offer 時不會重播上一條 socket 的暫存，照常在 20 秒逾時", async () => {
+    const s = connect();
+    s.sendOffer("old");
+    s.socket().onclose?.({ code: 1006 });
+    await vi.advanceTimersByTimeAsync(1000);
+    s.receive(snapshot({ live: true }));
+    await vi.advanceTimersByTimeAsync(FIRST_OFFER_TIMEOUT_MS);
+    expect(s.rtc.connections).toHaveLength(0);
+    expect(s.session.getView().state).toBe("failed");
+  });
+
+  test("4000 取代分頁立即關閉 PC、移除兩條 track 並取消取樣與狀態回報", async () => {
+    const s = connect();
+    s.receive(snapshot({ live: true }));
+    s.sendOffer("current");
+    await flush();
+    const pc = s.rtc.connections[0]!;
+    pc.fireTrack(track("audio"));
+    pc.fireTrack(track("video"));
+    pc.setIceConnectionState("connected");
+    const stream = s.session.getView().remoteStream!;
+    expect(stream.getTracks()).toHaveLength(2);
+    const sample = vi.spyOn(pc, "getStats");
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(sample).toHaveBeenCalled();
+    const reports = s.sent.mock.calls.length;
+    sample.mockClear();
+    s.socket().onclose?.({ code: 4000 });
+    expect(pc.closed).toBe(true);
+    expect(stream.getTracks()).toHaveLength(0);
+    expect(s.session.getView().remoteStream).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(6200);
+    expect(sample).not.toHaveBeenCalled();
+    expect(s.sent).toHaveBeenCalledTimes(reports);
   });
 });

@@ -7,6 +7,7 @@ import {
   type ServerMessage,
   type SignalData,
 } from "@project/shared";
+import type { ConnectionState } from "../../lib/signal";
 import {
   createViewerTransport,
   TransportError,
@@ -24,9 +25,12 @@ import {
 /** 確認直播且訂閱就緒後，等房主第一份 offer 的期限（§3，建議 20 秒）。 */
 export const FIRST_OFFER_TIMEOUT_MS = 20_000;
 
+const MAX_BUFFERED_SIGNALS = 128;
+
 type SignalMessage = { from: string; data: SignalData };
 
 export interface ViewerSessionClient {
+  onState(handler: (state: ConnectionState) => void): () => void;
   onMessage(handler: (message: ServerMessage) => void): () => void;
   send(
     message: ClientMessageOf<"signal"> | ClientMessageOf<"member:status">,
@@ -70,6 +74,8 @@ const browserTimers: SessionTimers = {
 };
 
 export class ViewerSession {
+  private awaitingSnapshot = true;
+  private detachClient?: () => void;
   private member = false;
   private mode: Mode = "p2p";
   private live = false;
@@ -105,16 +111,24 @@ export class ViewerSession {
 
   /** 在 SignalClient.start() 之前呼叫，才不會漏掉驗證後馬上到的信令。 */
   attach() {
-    const off = this.options.client.onMessage((message) =>
+    const offMessage = this.options.client.onMessage((message) =>
       this.handle(message),
     );
-    return () => {
-      off();
-      this.destroy();
+    const offState = this.options.client.onState((state) => {
+      if (state.status === "closed") this.destroy();
+      else if (state.status !== "open") this.resetSocket();
+    });
+    this.detachClient = () => {
+      offMessage();
+      offState();
     };
+    return () => this.destroy();
   }
 
   getView = () => this.view;
+
+  /** 播放器取樣時讀當代傳輸最近的接收碼率；尚無統計時只靠媒體本身判斷。 */
+  getReceiveBitrate = () => this.stats?.bitrateKbps;
 
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
@@ -124,8 +138,13 @@ export class ViewerSession {
   };
 
   /** 播放器偵測到 `<video>` 停滯／恢復（§9：buffering 由播放器回報）。 */
-  setBuffering(buffering: boolean) {
-    if (this.buffering === buffering) return;
+  setBuffering(buffering: boolean, stream = this.transport?.remoteStream) {
+    if (
+      !stream ||
+      stream !== this.transport?.remoteStream ||
+      this.buffering === buffering
+    )
+      return;
     this.buffering = buffering;
     this.publish();
   }
@@ -133,46 +152,66 @@ export class ViewerSession {
   /** 收看者按「重新連線」。P2P 換新的 WebSocket；轉發直接重新拉取。 */
   reconnect() {
     if (!this.member || this.destroyed) return;
-    this.teardown();
-    this.transportState = "connecting";
     if (this.mode === "p2p") {
+      this.destroy();
       this.options.requestNewSocket();
     } else if (this.live) {
+      this.teardown();
       this.connect();
+      this.publish();
     }
-    this.publish();
   }
 
   destroy() {
     if (this.destroyed) return;
+    this.detachClient?.();
+    this.detachClient = undefined;
+    this.resetSocket();
+    this.destroyed = true;
+    this.listeners.clear();
+  }
+
+  private resetSocket() {
+    this.member = false;
+    this.live = false;
+    this.awaitingSnapshot = true;
     this.teardown();
     this.timers.clearInterval(this.statusTimer);
     this.statusTimer = null;
-    this.destroyed = true;
-    this.listeners.clear();
+    this.lastReported = null;
+    this.publish();
   }
 
   private handle(message: ServerMessage) {
     if (this.destroyed) return;
     switch (message.type) {
-      case "room:snapshot":
-        // 每次驗證都是新的 WebSocket：舊信令作廢，舊傳輸拆掉重建（§3、§6）。
+      case "room:snapshot": {
+        // 只有本條 socket 在首份 snapshot 前收到的信令能交給新傳輸。
+        const pending = this.awaitingSnapshot ? this.buffer : [];
         this.teardown();
+        this.awaitingSnapshot = false;
         this.member = message.you.role === "member";
         this.mode = message.room.mode;
         this.live = message.stream.live;
         this.lastReported = null;
         if (!this.member) return;
         this.startStatusTimer();
-        if (this.live) this.connect();
+        if (this.live) {
+          if (this.mode === "p2p") this.buffer = pending;
+          this.connect();
+        }
         this.publish();
+        return;
+      }
+      case "room:closed":
+        this.destroy();
         return;
       case "stream:status":
         if (!this.member) return;
         if (message.live && !this.live) {
           this.live = true;
           this.connect();
-        } else if (!message.live && this.live) {
+        } else if (!message.live) {
           this.live = false;
           this.teardown();
         }
@@ -184,10 +223,11 @@ export class ViewerSession {
         this.mode = message.room.mode;
         this.teardown();
         if (this.live) this.connect();
+        else this.prepare();
         this.publish();
         return;
       case "signal":
-        if (this.member)
+        if (this.awaitingSnapshot || (this.mode === "p2p" && this.transport))
           this.deliver({ from: message.from, data: message.data });
         return;
       default:
@@ -195,7 +235,7 @@ export class ViewerSession {
     }
   }
 
-  private connect() {
+  private prepare() {
     const generation = ++this.generation;
     const current = () => generation === this.generation && !this.destroyed;
     const signal: TransportSignal = {
@@ -223,7 +263,6 @@ export class ViewerSession {
       return;
     }
     this.transport = transport;
-    this.transportState = "connecting";
     transport.onState((state) => {
       if (!current()) return;
       this.transportState = state;
@@ -238,13 +277,26 @@ export class ViewerSession {
       this.error = error;
       this.publish();
     });
+    return transport;
+  }
+
+  private connect() {
+    // room:updated 可能已經建立傳輸；開播後沿用它，WHEP 和首份 offer 計時都從這次啟動。
+    const transport = this.transport ?? this.prepare();
+    if (!transport) return;
+    const generation = this.generation;
+    const current = () => generation === this.generation;
+    this.transportState = "connecting";
     transport.start().then(
       () => {
         if (!current()) return;
         this.ready = true;
         const buffered = this.buffer;
         this.buffer = [];
-        for (const message of buffered) this.handler?.(message);
+        for (const message of buffered) {
+          this.deliver(message);
+          if (!current()) return;
+        }
         // 訂閱就緒前已緩衝 offer 就不計時；否則開始等首份 offer（P2P）。
         if (this.mode === "p2p" && !this.offerSeen) {
           this.offerTimer = this.timers.setTimeout(() => {
@@ -265,14 +317,22 @@ export class ViewerSession {
   }
 
   private deliver(message: SignalMessage) {
-    if (!this.transport) return; // 沒有直播中的傳輸：不屬於任何一次接收
+    if (!this.ready) {
+      if (this.buffer.length >= MAX_BUFFERED_SIGNALS) {
+        // 保留已排隊的 offer；一份更新的 offer 可以取代滿載的舊協商。
+        if (message.data.type !== "offer") return;
+        this.buffer = [];
+      }
+      this.buffer.push(message);
+      return;
+    }
+    if (!this.handler) return;
     if (message.data.type === "offer" && !this.offerSeen) {
       this.offerSeen = true;
       this.timers.clearTimeout(this.offerTimer);
       this.offerTimer = null;
     }
-    if (this.ready && this.handler) this.handler(message);
-    else this.buffer.push(message);
+    this.handler(message);
   }
 
   /** 拆掉傳輸並顯示失敗，等收看者按「重新連線」。 */
