@@ -156,16 +156,19 @@ export class RoomDO extends DurableObject<Env> {
    */
   async retainRelayCleanup(resource: RelayResource): Promise<void> {
     await this.exclusive(async () => {
-      await this.ctx.storage.transaction(async (txn) => {
+      this.retry = await this.ctx.storage.transaction(async (txn) => {
         const relay = readRelay(await txn.get<RelayState>(RELAY_KEY));
         relay.orphans[resource.id] = resource;
         await txn.put(RELAY_KEY, relay);
+        const current = await txn.get<Retry>(RETRY_KEY);
+        const retry =
+          current?.at != null
+            ? current
+            : { attempts: 0, at: Date.now() + CLEANUP_RETRY_BASE_MS };
+        await txn.put(RETRY_KEY, retry);
+        await this.writeAlarm(txn, retry);
+        return retry;
       });
-      if (!this.retry || this.retry.at === null) {
-        this.retry = { attempts: 0, at: Date.now() + CLEANUP_RETRY_BASE_MS };
-        await this.ctx.storage.put(RETRY_KEY, this.retry);
-      }
-      await this.scheduleAlarm();
     });
   }
 
@@ -472,6 +475,7 @@ export class RoomDO extends DurableObject<Env> {
         await txn.delete(ROTATION_KEY);
         await txn.put(CLOSING_KEY, closing);
         await txn.put(RETRY_KEY, retry);
+        await txn.setAlarm(retry.at!);
       });
       const online = this.online();
       this.room = null;
@@ -500,42 +504,43 @@ export class RoomDO extends DurableObject<Env> {
       : 0;
 
     if (relayLeft + inviteLeft === 0) {
-      this.retry = null;
       if (!this.room) {
         // 房間已關閉且全部清乾淨：刪掉整個 DO 的資料。
         await this.ctx.storage.deleteAlarm();
         await this.ctx.storage.deleteAll();
         this.closing = null;
+        this.retry = null;
         return;
       }
-      await this.ctx.storage.delete(RETRY_KEY);
-      await this.scheduleAlarm();
+      await this.ctx.storage.transaction(async (txn) => {
+        await txn.delete(RETRY_KEY);
+        await this.writeAlarm(txn, null);
+      });
+      this.retry = null;
       return;
     }
 
     const attempts = (this.retry?.attempts ?? 0) + 1;
-    if (attempts >= CLEANUP_MAX_ATTEMPTS) {
-      this.retry = { attempts, at: null };
-      console.log(
-        JSON.stringify({
-          event: "room.cleanup_gave_up",
-          attempts,
-          inviteLeft,
-          relayLeft,
-        }),
-      );
-    } else {
-      const delay = Math.min(
-        CLEANUP_RETRY_MAX_MS,
-        CLEANUP_RETRY_BASE_MS * 2 ** (attempts - 1),
-      );
-      this.retry = { attempts, at: Date.now() + delay };
-      console.log(
-        JSON.stringify({ event: "room.cleanup_retry", attempts, delay }),
-      );
-    }
-    await this.ctx.storage.put(RETRY_KEY, this.retry);
-    await this.scheduleAlarm();
+    const delay = Math.min(
+      CLEANUP_RETRY_MAX_MS,
+      CLEANUP_RETRY_BASE_MS * 2 ** (attempts - 1),
+    );
+    const retry: Retry = {
+      attempts,
+      at: attempts >= CLEANUP_MAX_ATTEMPTS ? null : Date.now() + delay,
+    };
+    await this.ctx.storage.transaction(async (txn) => {
+      await txn.put(RETRY_KEY, retry);
+      await this.writeAlarm(txn, retry);
+    });
+    this.retry = retry;
+    console.log(
+      JSON.stringify(
+        retry.at === null
+          ? { event: "room.cleanup_gave_up", attempts, inviteLeft, relayLeft }
+          : { event: "room.cleanup_retry", attempts, delay },
+      ),
+    );
   }
 
   /** 先查回未確認的換碼結果，再逐一釋放邀請碼；每完成一步就寫回 closing。 */
@@ -686,6 +691,12 @@ export class RoomDO extends DurableObject<Env> {
   }
 
   private async scheduleAlarm() {
+    await this.ctx.storage.transaction(async (txn) => {
+      await this.writeAlarm(txn, (await txn.get<Retry>(RETRY_KEY)) ?? null);
+    });
+  }
+
+  private async writeAlarm(txn: DurableObjectTransaction, retry: Retry | null) {
     let next = Infinity;
     if (this.room) {
       next = closeAt(this.room, this.config);
@@ -696,9 +707,9 @@ export class RoomDO extends DurableObject<Env> {
         }
       }
     }
-    if (this.retry?.at != null) next = Math.min(next, this.retry.at);
-    if (next === Infinity) await this.ctx.storage.deleteAlarm();
-    else await this.ctx.storage.setAlarm(next);
+    if (retry?.at != null) next = Math.min(next, retry.at);
+    if (next === Infinity) await txn.deleteAlarm();
+    else await txn.setAlarm(next);
   }
 }
 

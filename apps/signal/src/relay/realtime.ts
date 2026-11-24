@@ -36,6 +36,7 @@ const negotiation = z.object({
   sessionDescription: z.object({ type: z.literal("answer"), sdp: identifier }),
   requiresImmediateRenegotiation: z.literal(false).optional(),
 });
+const endedSession = z.object({ errorCode: z.literal("session_error") });
 const closeResult = z.object({
   ...errorFields,
   tracks: z.array(
@@ -55,11 +56,7 @@ export function createRealtime(
   const { REALTIME_APP_ID, REALTIME_APP_TOKEN } = config.data;
   const base = `https://rtc.live.cloudflare.com/v1/apps/${REALTIME_APP_ID}/sessions`;
 
-  async function call(
-    path: string,
-    method: "POST" | "PUT",
-    body?: unknown,
-  ): Promise<unknown> {
+  async function call(path: string, method: "POST" | "PUT", body?: unknown) {
     try {
       const result = await fetchRealtime(base + path, {
         method,
@@ -71,7 +68,8 @@ export function createRealtime(
         redirect: "error",
         signal: AbortSignal.timeout(5000),
       });
-      if (result.ok) return await result.json();
+      const data: unknown = await result.json();
+      return { ok: result.ok, status: result.status, data };
     } catch {
       // Upstream error details may contain credentials or SDP.
     }
@@ -80,13 +78,18 @@ export function createRealtime(
 
   async function closeTracks(sessionId: string, mids: string[]) {
     if (!mids.length) return;
-    const result = closeResult.safeParse(
-      await call(`/${sessionId}/tracks/close`, "PUT", {
-        tracks: mids.map((mid) => ({ mid })),
-        force: true,
-      }),
-    );
+    const response = await call(`/${sessionId}/tracks/close`, "PUT", {
+      tracks: mids.map((mid) => ({ mid })),
+      force: true,
+    });
     if (
+      response.status === 410 &&
+      endedSession.safeParse(response.data).success
+    )
+      return;
+    const result = closeResult.safeParse(response.data);
+    if (
+      !response.ok ||
       !result.success ||
       !mids.every((mid) =>
         result.data.tracks.some((track) => track.mid === mid),
@@ -96,13 +99,19 @@ export function createRealtime(
     }
   }
 
+  async function post(path: string, body?: unknown) {
+    const response = await call(path, "POST", body);
+    if (!response.ok) throw new AppError("RELAY_UNAVAILABLE");
+    return response.data;
+  }
+
   return {
     closeTracks,
     async open(sdp: string, tracks: TrackRequest[]) {
-      const session = newSession.safeParse(await call("/new", "POST"));
+      const session = newSession.safeParse(await post("/new"));
       if (!session.success) throw new AppError("RELAY_UNAVAILABLE");
       const { sessionId } = session.data;
-      const response = await call(`/${sessionId}/tracks/new`, "POST", {
+      const response = await post(`/${sessionId}/tracks/new`, {
         sessionDescription: { type: "offer", sdp },
         tracks,
       });

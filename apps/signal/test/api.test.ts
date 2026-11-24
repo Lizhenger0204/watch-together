@@ -654,6 +654,107 @@ describe("關房清理與休眠", () => {
     vi.unstubAllGlobals();
   });
 
+  test("目錄換碼交易中途失敗會完整回滾，同一 opId 可再試", async () => {
+    const room = await createRoom();
+    const directory = env.INVITE_DIRECTORY.getByName("global");
+    await runInDurableObject(directory, async (instance, state) => {
+      const before = await state.storage.list();
+      const transaction = state.storage.transaction.bind(state.storage);
+      const fault = vi
+        .spyOn(state.storage, "transaction")
+        .mockImplementationOnce((work) =>
+          transaction(async (txn) => {
+            await work(txn);
+            throw new Error("目錄提交失敗");
+          }),
+        );
+      try {
+        await expect(
+          instance.replace(room.inviteCode, room.roomId, "rotate"),
+        ).rejects.toThrow("目錄提交失敗");
+      } finally {
+        fault.mockRestore();
+      }
+      expect(await state.storage.list()).toEqual(before);
+      const code = await instance.replace(
+        room.inviteCode,
+        room.roomId,
+        "rotate",
+      );
+      expect(
+        await instance.replace(room.inviteCode, room.roomId, "rotate"),
+      ).toBe(code);
+      expect(await instance.lookup(room.inviteCode)).toBeNull();
+      expect(await instance.lookup(code)).toBe(room.roomId);
+    });
+  });
+
+  test("清理待辦排 alarm 失敗時，待辦與重試狀態一起回滾；重試保留較早的驗證期限", async () => {
+    const room = await createRoom();
+    const socket = await connect(room.roomId);
+    const stub = env.ROOM.getByName(room.roomId);
+    await runInDurableObject(stub, async (instance, state) => {
+      const deadline = await state.storage.getAlarm();
+      const transaction = state.storage.transaction.bind(state.storage);
+      const fault = vi
+        .spyOn(state.storage, "transaction")
+        .mockImplementationOnce((work) =>
+          transaction(async (txn) => {
+            vi.spyOn(txn, "setAlarm").mockRejectedValueOnce(
+              new Error("無法排 alarm"),
+            );
+            return work(txn);
+          }),
+        );
+      const resource = relayResource("orphan", room.memberId);
+      try {
+        await expect(instance.retainRelayCleanup(resource)).rejects.toThrow(
+          "無法排 alarm",
+        );
+      } finally {
+        fault.mockRestore();
+      }
+      expect(await state.storage.get("relay")).toBeUndefined();
+      expect(await state.storage.get("retry")).toBeUndefined();
+      expect(await state.storage.getAlarm()).toBe(deadline);
+      await instance.retainRelayCleanup(resource);
+      expect(await state.storage.get("relay")).toMatchObject({
+        orphans: { orphan: resource },
+      });
+      expect(await state.storage.get("retry")).toMatchObject({ attempts: 0 });
+      expect(await state.storage.getAlarm()).toBe(deadline);
+    });
+    socket.close();
+  });
+
+  test.each([
+    [410, "session_error", true],
+    [410, "unexpected", false],
+    [503, "session_error", false],
+  ] as const)("清理 SFU %s %s：完成=%s", async (status, errorCode, done) => {
+    const room = await createRoom();
+    const stub = env.ROOM.getByName(room.roomId);
+    await stub.registerRelayResource(relayResource("ended", room.memberId));
+    await runInDurableObject(stub, (instance) => {
+      const target = internals(instance);
+      target.env = { ...target.env, ...REALTIME };
+      target.room!.createdAt = 0;
+    });
+    const upstream = vi.fn(async () =>
+      Response.json({ errorCode }, { status }),
+    );
+    vi.stubGlobal("fetch", upstream);
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(upstream).toHaveBeenCalledTimes(1);
+    const at = await alarmTime(stub);
+    expect(at === null).toBe(done);
+    expect(
+      (await runInDurableObject(stub, (_i, state) =>
+        state.storage.get("relay"),
+      )) === undefined,
+    ).toBe(done);
+  });
+
   test("關房：邀請碼與每個轉發資源各自推進、各自保存進度；失敗的部分由 alarm 重試", async () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     const room = await createRoom();
