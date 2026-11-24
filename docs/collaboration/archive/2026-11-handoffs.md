@@ -405,3 +405,33 @@ T-118 第二輪審查（GPT ultra fast，66a7155）：第一輪 8 項中 6 項�
 
 合併：rebase 到 main（d51dd31）之後，四項檢查全過（啟動器 2 + Vitest 494 = web／shared 374 + signal 120，e2e 4），以 fast-forward 合併。
 
+### T-111（GPT，2026-11-25）— DONE
+1. 做了什麼：
+   - 新增 `e2e/p2p-playback.spec.ts` 與 `e2e/p2p-recovery.spec.ts`，共用的輔助程式放在 `p2p-media.ts`、`p2p-room.ts`、`room-pages.ts`。
+   - 用三個 Chrome context（一位房主、兩位收看者）測 P2P 的 9 個情境：
+     - 開播與觀看：點擊前 `paused` 為 true，點擊後影格、時間、音訊封包與音量都持續增加。
+     - 換片：PC 不重建。
+     - 播完重播：沿用原本的 PC。
+     - 停播與重開。
+     - 踢人。
+     - 房主重新整理。
+     - 收看者重新連線。
+     - 切到轉發再切回：目前斷言 RELAY_UNAVAILABLE。
+     - 390px 長片名。
+   - ICE 攔截成空清單，WHIP／WHEP 一律中斷，不會打到外部服務。
+   - `playwright.config.ts`：chrome 專案改成 workers 1、timeout 60 秒。
+2. 介面變動：無，只改 `e2e/`。
+3. 已知限制：T-122 接上 relay 後，要改寫「切到轉發再切回」這個案例。
+4. 驗證方式：
+   - 四項檢查（啟動器 2、Vitest 494、e2e 6，總計 30.65 秒）。
+   - 兩份新的 spec 用 `--repeat-each=3` 跑，6/6 通過。
+   - 反向實驗：加回 autoPlay、把 replaceTrack 改成重建傳輸，兩項 E2E 都會失敗。
+   - 沒有發現產品 bug。
+
+審查與合併（監工，2026-11-25）：
+- 變更只在 `e2e/` 的 9 個檔案。
+- 沒有固定的 `waitForTimeout`。
+- 監工確認 ICE 與 WHIP／WHEP 都已攔截。
+- 監工重跑四項檢查（e2e 6）全部通過，再用 `--repeat-each=2` 跑 P2P spec 也全部通過；跑完沒有殘留在監聽的 port。
+- 以 fast-forward 合併。
+
