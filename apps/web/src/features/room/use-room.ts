@@ -2,7 +2,8 @@ import { tokenSchema } from "@project/shared";
 import { useEffect, useMemo, useReducer, useState } from "react";
 import { regenerateInviteCode } from "../../lib/api";
 import { SignalClient, signalUrl } from "../../lib/signal";
-import { roomInviteCode, roomToken } from "../../lib/storage";
+import { liveIntent, roomInviteCode, roomToken } from "../../lib/storage";
+import { HostSession } from "./host-session";
 import { checkIdentity } from "./identity";
 import { initialRoomView, roomReducer, type RoomUpdate } from "./room-state";
 import { ViewerSession } from "./viewer-session";
@@ -49,6 +50,22 @@ export function useRoom(roomId: string) {
     [client, roomId, token],
   );
 
+  // 房主的房間層：和 SignalClient 同生同滅，收看者端不做任何事。
+  // 房主的 stream:status（開播、停播、重新驗證後恢復）一律由它送出。
+  const host = useMemo(
+    () =>
+      client && token
+        ? new HostSession({
+            client,
+            roomId,
+            token,
+            initialIntent: liveIntent.get(roomId),
+            onIntentChange: (on) => liveIntent.set(roomId, on),
+          })
+        : null,
+    [client, roomId, token],
+  );
+
   useEffect(() => {
     if (!client) return;
     const offMessage = client.onMessage((message) =>
@@ -59,14 +76,16 @@ export function useRoom(roomId: string) {
     );
     // 在 start() 前掛上，才能緩衝驗證後馬上到的信令。
     const detachViewer = viewer?.attach();
+    const detachHost = host?.attach();
     client.start();
     return () => {
       offMessage();
       offState();
       detachViewer?.();
+      detachHost?.();
       client.stop();
     };
-  }, [client, viewer]);
+  }, [client, viewer, host]);
 
   // 記住房主看到的邀請碼，房主開自己的邀請連結時才認得出是這一房。
   const inviteCode = view.you?.role === "host" ? view.room?.inviteCode : null;
@@ -80,8 +99,6 @@ export function useRoom(roomId: string) {
         client?.request({ type: "room:update", ...patch }),
       kick: (memberId: string) =>
         client?.request({ type: "room:kick", memberId }),
-      setStream: (live: boolean, title: string | null) =>
-        client?.request({ type: "stream:status", live, title }),
       async regenerateInviteCode() {
         if (!token) throw new Error("no token");
         const result = await regenerateInviteCode(roomId, token);
@@ -94,5 +111,13 @@ export function useRoom(roomId: string) {
     [client, roomId, token],
   );
 
-  return { hasToken: token !== null, corrupted, view, actions, client, viewer };
+  return {
+    hasToken: token !== null,
+    corrupted,
+    view,
+    actions,
+    client,
+    viewer,
+    host,
+  };
 }

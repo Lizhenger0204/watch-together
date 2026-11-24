@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { Layout } from "../components/Layout";
 import { Button, Card, Notice } from "../components/ui";
 import { ViewerPlayer } from "../features/player";
@@ -9,16 +9,17 @@ import {
   StreamSettings,
   useRoom,
 } from "../features/room";
+import type { HostPhase } from "../features/room/host-session";
 import {
-  afterStreamCommandFailed,
-  nextStreamCommand,
-  type SentCommand,
-} from "../features/room/live-intent";
-import { roomExit, type RoomView } from "../features/room/room-state";
+  formatMbps,
+  roomExit,
+  uploadHint,
+  type RoomView,
+} from "../features/room/room-state";
 import { ApiError } from "../lib/api";
 import { navigate } from "../lib/router";
-import { SignalDisconnectedError, type ConnectionState } from "../lib/signal";
-import { liveIntent, roomToken } from "../lib/storage";
+import type { ConnectionState } from "../lib/signal";
+import { roomToken } from "../lib/storage";
 
 type Room = ReturnType<typeof useRoom>;
 
@@ -67,122 +68,138 @@ function useActionError() {
   return { error, run, clear: () => setError("") };
 }
 
-/**
- * 房主的開播意圖：按「開始直播」成立、按「停止直播」才清除，存在這個分頁的 sessionStorage。
- * 重新驗證（伺服器把直播改成未開播）或換片檢查期間，依意圖與片源狀態自動補送 stream:status。
- */
-function useLiveIntent(
-  room: Room,
-  roomId: string,
-  ready: boolean,
-  title: string,
-) {
-  const { view, actions } = room;
-  const [intent, setIntentState] = useState(() => liveIntent.get(roomId));
-  const [error, setError] = useState("");
-  const lastSent = useRef<SentCommand | null>(null);
-  const connected = view.connection.status === "open";
-  const { session, stream } = view;
-
-  useEffect(() => {
-    const command = nextStreamCommand({
-      intent,
-      connected,
-      session,
-      stream,
-      source: { ready, title },
-      lastSent: lastSent.current,
-    });
-    if (!command) return;
-    const sent = { session, command };
-    lastSent.current = sent;
-    setError("");
-    actions.setStream(command.live, command.title)?.catch((e: unknown) => {
-      // 較舊的請求失敗：之後已送出新的，不動紀錄、意圖，也不顯示錯誤。
-      if (lastSent.current !== sent) return;
-      const disconnected = e instanceof SignalDisconnectedError;
-      const next = afterStreamCommandFailed(
-        lastSent.current,
-        sent,
-        disconnected ? "disconnected" : "rejected",
-      );
-      lastSent.current = next.lastSent;
-      if (next.cancelIntent) {
-        liveIntent.set(roomId, false);
-        setIntentState(false);
-      }
-      // 連線中斷由連線狀態提示，重新連線後會自動再送。
-      if (!disconnected)
-        setError(e instanceof ApiError ? e.message : "操作失敗，請稍後再試。");
-    });
-  }, [intent, connected, session, stream, ready, title, actions, roomId]);
-
-  const setIntent = (on: boolean) => {
-    liveIntent.set(roomId, on);
-    setIntentState(on);
-    setError("");
-  };
-  return { intent, setIntent, error };
+function hostTitle(phase: HostPhase, liveTitle: string | null) {
+  switch (phase) {
+    case "live":
+      return `直播中：${liveTitle ?? ""}`;
+    case "starting":
+      return "開播中…";
+    case "stopping":
+      return "停止直播中…";
+    case "switching":
+      return "切換中…";
+    case "waiting":
+      return "直播暫停中";
+    default:
+      return "選擇要播放的影片";
+  }
 }
 
-function HostView({ room, roomId }: { room: Room; roomId: string }) {
+/**
+ * 房主畫面。開播、停播、換片、切模式與重新驗證後恢復直播都交給 HostSession
+ *（features/room/host-session.ts）；這裡只把片源與按鈕接上去。
+ */
+function HostView({
+  room,
+  host,
+}: {
+  room: Room;
+  host: NonNullable<Room["host"]>;
+}) {
   const { view, actions } = room;
-  const source = useLocalSource();
+  const session = useSyncExternalStore(host.subscribe, host.getView);
+  // addtrack／removetrack 時 stream 物件不變，靠 onStreamChange 通知（streaming.md §1）。
+  // 回呼由 useEffectEvent 包住，呼叫時拿到的是最新一次 render 的 source。
+  const source = useLocalSource((stream) =>
+    host.setSource({
+      stream,
+      status: source.check.status,
+      title: source.title,
+    }),
+  );
   const { error, run } = useActionError();
-  const { stream } = view;
-  const ready = source.check.status === "ready";
+  const { stream: sourceStream, title: sourceTitle } = source;
+  const sourceStatus = source.check.status;
+  // 換檔、檢查狀態或片名改變（含第一次通過檢查）。
+  useEffect(() => {
+    host.setSource({
+      stream: sourceStream,
+      status: sourceStatus,
+      title: sourceTitle,
+    });
+  }, [host, sourceStream, sourceStatus, sourceTitle]);
+
+  const ready = sourceStatus === "ready";
   const online = view.connection.status === "open";
-  const live = useLiveIntent(room, roomId, ready, source.title);
   const viewers = view.members.filter(
     (m) => m.role === "member" && m.online,
   ).length;
-  const paused = live.intent && !stream.live;
+  const { phase } = session;
+  const busy =
+    phase === "starting" || phase === "stopping" || phase === "switching";
+  const upload = view.room
+    ? uploadHint(view.room.mode, view.room.quality, viewers)
+    : null;
 
   return (
     <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
       <div className="grid content-start gap-4">
         <Card
-          title={
-            stream.live
-              ? `直播中：${stream.title ?? ""}`
-              : paused
-                ? "直播暫停中"
-                : "選擇要播放的影片"
-          }
+          title={hostTitle(phase, view.stream.title)}
           action={
-            live.intent ? (
-              <Button variant="danger" onClick={() => live.setIntent(false)}>
+            session.intent ? (
+              <Button
+                variant="danger"
+                disabled={phase === "stopping"}
+                onClick={() => host.setIntent(false)}
+              >
                 停止直播
               </Button>
             ) : (
               <Button
-                disabled={!ready || !online}
-                onClick={() => live.setIntent(true)}
+                disabled={!ready || !online || busy}
+                onClick={() => host.setIntent(true)}
               >
-                開始直播
+                {phase === "stopping" ? "停止中…" : "開始直播"}
               </Button>
             )
           }
         >
-          {paused && (
+          {phase === "waiting" && (
             <div className="mb-3">
               <Notice tone="warning">
                 {!online
                   ? "連線中斷，重新連上後會自動恢復直播。"
-                  : source.check.status === "idle"
+                  : sourceStatus === "idle"
                     ? "重新整理後要重新選擇影片。選好並通過檢查後，會自動恢復直播。"
                     : "影片還不能播放（檢查中或需要確認）。可以播放後會自動恢復直播。"}
               </Notice>
             </div>
           )}
+          {phase === "switching" && (
+            <div className="mb-3">
+              <Notice>正在切換傳送方式，收看者會短暫中斷。</Notice>
+            </div>
+          )}
+          {(phase === "idle" || phase === "waiting") && upload?.warn && (
+            <div className="mb-3">
+              <Notice tone="warning">
+                預估上傳 {formatMbps(upload.total)}，超過 60
+                Mbps，建議改用「流暢」畫質或「轉發」模式。
+              </Notice>
+            </div>
+          )}
           <HostSourcePlayer source={source} />
-          {!live.intent && (
+          {!session.intent && (
             <p className="mt-3 text-sm text-zinc-500">
               選好影片並通過檢查後，按「開始直播」。直播期間可以隨時暫停、拖動進度或換片，朋友會看到一樣的畫面。
             </p>
           )}
         </Card>
-        {live.error && <Notice tone="error">{live.error}</Notice>}
+        {session.error && (
+          <Notice tone="error">
+            <div className="flex items-start justify-between gap-3">
+              <span className="min-w-0 wrap-anywhere">{session.error}</span>
+              <button
+                type="button"
+                className="shrink-0 text-rose-200 underline-offset-2 hover:underline"
+                onClick={() => host.clearError()}
+              >
+                關閉
+              </button>
+            </div>
+          </Notice>
+        )}
         {error && <Notice tone="error">{error}</Notice>}
       </div>
       <aside className="grid content-start gap-4">
@@ -196,7 +213,10 @@ function HostView({ room, roomId }: { room: Room; roomId: string }) {
           <StreamSettings
             room={view.room}
             viewers={viewers}
-            onChange={(patch) => run(actions.updateRoom(patch))}
+            busy={busy}
+            onModeChange={(mode) => host.setMode(mode)}
+            onQualityChange={(quality) => host.setQuality(quality)}
+            onLockedChange={(locked) => run(actions.updateRoom({ locked }))}
           />
         )}
         <MemberList
@@ -301,8 +321,8 @@ export function RoomPage({ roomId }: { roomId: string }) {
           </Notice>
         )}
       </div>
-      {view.you?.role === "host" ? (
-        <HostView room={room} roomId={roomId} />
+      {view.you?.role === "host" && room.host ? (
+        <HostView room={room} host={room.host} />
       ) : view.you ? (
         <ViewerView room={room} />
       ) : null}

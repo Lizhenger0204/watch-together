@@ -1,9 +1,8 @@
 import {
-  P2P_TOTAL_BITRATE_WARNING,
-  QUALITY_PRESETS,
   type ClientMessageOf,
   type Member,
   type MemberStatus,
+  type Mode,
   type Quality,
   type RoomInfo,
   type ServerMessage,
@@ -11,6 +10,10 @@ import {
   type StreamInfo,
 } from "@project/shared";
 import type { ConnectionState } from "../../lib/signal";
+import {
+  estimateTotalUploadBitrate,
+  shouldWarnTotalUpload,
+} from "../transport";
 
 /** 房主可以改的房間設定（room:update 去掉 type、reqId）。 */
 export type RoomUpdate = Omit<ClientMessageOf<"room:update">, "type" | "reqId">;
@@ -125,10 +128,16 @@ export function roomExit(view: RoomView): RoomExit | null {
   return null;
 }
 
-/** P2P 模式下房主要上傳的總量（bps）與是否該提醒（streaming.md §2）。 */
-export function estimateP2pUpload(quality: Quality, viewers: number) {
-  const total = QUALITY_PRESETS[quality].maxBitrate * viewers;
-  return { total, warn: total > P2P_TOTAL_BITRATE_WARNING };
+/**
+ * P2P 模式下房主要上傳的總量（bps）與是否該提醒（streaming.md §2「P2P 總頻寬保護」）。
+ * 轉發只上傳一份、沒有收看者時不需要提示，回 null。
+ */
+export function uploadHint(mode: Mode, quality: Quality, viewers: number) {
+  if (mode !== "p2p" || viewers <= 0) return null;
+  return {
+    total: estimateTotalUploadBitrate(quality, viewers),
+    warn: shouldWarnTotalUpload(quality, viewers),
+  };
 }
 
 export const formatMbps = (bps: number) =>

@@ -5,7 +5,7 @@ import {
   type RoomInfo,
 } from "@project/shared";
 import { Card, Notice, Segmented } from "../../components/ui";
-import { estimateP2pUpload, formatMbps, type RoomUpdate } from "./room-state";
+import { formatMbps, uploadHint } from "./room-state";
 
 const MODE_OPTIONS: { value: Mode; label: string; description: string }[] = [
   {
@@ -33,13 +33,20 @@ const QUALITY_OPTIONS = (Object.keys(QUALITY_PRESETS) as Quality[]).map(
 export function StreamSettings({
   room,
   viewers,
-  onChange,
+  busy = false,
+  onModeChange,
+  onQualityChange,
+  onLockedChange,
 }: {
   room: RoomInfo;
   viewers: number;
-  onChange: (patch: RoomUpdate) => void;
+  /** 開播、停播或切換傳送方式進行中：暫時不能改傳送方式與畫質。 */
+  busy?: boolean;
+  onModeChange: (mode: Mode) => void;
+  onQualityChange: (quality: Quality) => void;
+  onLockedChange: (locked: boolean) => void;
 }) {
-  const upload = estimateP2pUpload(room.quality, viewers);
+  const upload = uploadHint(room.mode, room.quality, viewers);
   return (
     <Card title="播放設定">
       <div className="grid gap-5">
@@ -47,15 +54,21 @@ export function StreamSettings({
           label="傳送方式"
           value={room.mode}
           options={MODE_OPTIONS}
-          onChange={(mode) => onChange({ mode })}
+          disabled={busy}
+          onChange={(mode) => {
+            if (mode !== room.mode) onModeChange(mode);
+          }}
         />
         <Segmented
           label="畫質"
           value={room.quality}
           options={QUALITY_OPTIONS}
-          onChange={(quality) => onChange({ quality })}
+          disabled={busy}
+          onChange={(quality) => {
+            if (quality !== room.quality) onQualityChange(quality);
+          }}
         />
-        {room.mode === "p2p" && viewers > 0 && (
+        {upload && (
           <Notice tone={upload.warn ? "warning" : "info"}>
             {viewers} 位收看者，預估你要上傳 {formatMbps(upload.total)}。
             {upload.warn &&
@@ -73,9 +86,7 @@ export function StreamSettings({
             type="checkbox"
             className="size-5 accent-violet-500"
             checked={room.locked}
-            onChange={(event) =>
-              onChange({ locked: event.currentTarget.checked })
-            }
+            onChange={(event) => onLockedChange(event.currentTarget.checked)}
           />
         </label>
       </div>
