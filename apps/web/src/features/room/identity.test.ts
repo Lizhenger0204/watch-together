@@ -80,6 +80,39 @@ describe("joinKeepingIdentity（房主開自己的邀請連結）", () => {
   });
 });
 
+describe("joinKeepingIdentity（收看者重複點邀請連結）", () => {
+  test("第一次加入後記住對照，再點同一個邀請連結不再呼叫加入", async () => {
+    const d = deps({ [NEW_TOKEN]: true });
+    await joinKeepingIdentity("ABCDEFGH", "小明", d);
+    expect(roomInviteCode.findRoom("ABCDEFGH")).toBe(ROOM);
+
+    await expect(joinKeepingIdentity("ABCDEFGH", "小明", d)).resolves.toEqual({
+      roomId: ROOM,
+      reused: true,
+    });
+    expect(d.join).toHaveBeenCalledTimes(1);
+    expect(roomToken.get(ROOM)).toBe(NEW_TOKEN);
+  });
+
+  test("沿用既有身份時也記住新的邀請碼（房主重產後收看者點新連結）", async () => {
+    roomToken.set(ROOM, HOST_TOKEN);
+    const d = deps({ [HOST_TOKEN]: true });
+    await joinKeepingIdentity("NEWCODE2", "小明", d);
+    expect(roomInviteCode.findRoom("NEWCODE2")).toBe(ROOM);
+
+    await joinKeepingIdentity("NEWCODE2", "小明", d);
+    expect(d.join).toHaveBeenCalledTimes(1);
+  });
+
+  test("記住的身份已失效：重新加入並換成新 token", async () => {
+    const d = deps({});
+    await joinKeepingIdentity("ABCDEFGH", "小明", d);
+    await joinKeepingIdentity("ABCDEFGH", "小明", d);
+    expect(d.join).toHaveBeenCalledTimes(2);
+    expect(roomToken.get(ROOM)).toBe(NEW_TOKEN);
+  });
+});
+
 describe("checkIdentity", () => {
   test.each([
     [null, "valid"],

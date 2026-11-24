@@ -29,6 +29,8 @@ type JoinDeps = {
 /**
  * 用邀請碼加入，但不覆寫同一房已經有效的身份（例如房主開了自己的邀請連結）。
  * 只有確認舊 token 已失效，才換成新拿到的 token。
+ * 加入成功後記住邀請碼與房間的對照：之後再點同一個邀請連結就直接回房，
+ * 不再 `POST /join`（否則每點一次就在伺服器多一個離線成員，很快 `ROOM_FULL`）。
  */
 export async function joinKeepingIdentity(
   inviteCode: string,
@@ -44,6 +46,7 @@ export async function joinKeepingIdentity(
   }
 
   const joined = await deps.join(inviteCode, nickname);
+  roomInviteCode.set(joined.roomId, inviteCode);
   const existing = roomToken.get(joined.roomId);
   if (existing && existing !== joined.memberToken) {
     const result = await deps.check(joined.roomId, existing);
