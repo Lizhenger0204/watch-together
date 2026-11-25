@@ -42,8 +42,8 @@
 | T-122 | 轉發整合第二步（第一步 bb6af68 已合併）：**接上 dispatcher 後，轉發在開播 ACK 抵達前失敗，房主仍顯示「直播中」，也沒送停播或 DELETE**（`host-session-base.ts` 的 `starting` 階段忽略了傳輸錯誤；要區分「傳輸啟動中」和「已就緒、等開播確認」，後者收到終止錯誤時取消意圖、銷毀傳輸、撤回已送出的開播，晚到的 ACK 不能恢復舊世代）；把 a8d94d9（dispatcher 接上 relay、E2E 改成攔截後回 503）rebase 上來，並改寫 `host-session.test.ts:82`（注入假的 fetch／ICE，WHIP 回 503 時顯示 RELAY_UNAVAILABLE 並取消意圖）；`postOffer()` 驗證標頭後就登記 Location，讓停止可以立刻清理；空 SDP 改回 `RELAY_FAILED`（在 relay 讀本機 offer 的邊界轉換）；E2E 收緊為「WHIP 恰好 1 次、WHEP 0 次」 | Claude | T-121 | DONE |
 | T-123 | 工具鏈：`apps/signal` 的 `dev` script 用 `${SIGNAL_PORT:-8787}`，Windows cmd.exe 無法展開，Windows 上 `pnpm dev` 起不來。改成跨平台寫法（例如 node 包裝腳本讀環境變數再啟動 wrangler），並確認 `pnpm dev`、`pnpm e2e` 在 macOS 與 Windows 都能用 `WEB_PORT`／`SIGNAL_PORT` 錯開 port | GPT | — | DONE |
 | T-124 | 介面改善計畫（SPEC／文件）：截圖檢查現有所有頁面，提出改善計畫給使用者挑選，同意後再實作；建議最先做，決定 T-125 的視覺方向。**由 Gemini 對話「登記播放器與聊天室功能需求」直接與使用者討論並完成實作**（含 `DESIGN.md` 與全站藍白扁平改版） | Gemini | — | DONE |
-| T-125 | 播放器圖示化控制列（Gemini 主導，含 `features/source` 例外；暫不派工）：參考使用者提供的截圖，控制列改用圖示按鈕（播放／暫停、時間、音量、彈幕開關、畫質、劇院模式、全螢幕），每個按鈕都要有提示文字與 `aria-label`。做成共用的控制列元件，房主播放器（`features/source`，原本是 GPT 的 UI）與收看端播放器（`features/player`）共用。收看端只有音量、全螢幕、彈幕、聊天，不能暫停或拖進度。若要新增圖示套件，要確認沒有被標成 deprecated，並且符合冷卻期 | Gemini | T-124 | TODO |
-| T-126 | 細緻畫質調整（Gemini 先改 spec，實作分工待定；暫不派工）：取代固定的畫質預設。房主在播放器的畫質面板用三條分段滑桿即時調整：解析度 720P～1080P（不超過片源）；位元率 8／10／15 Mbps／原片位元率；FPS 檔位待定（暫定 24／30／60／原片）。這是契約變更：先改 streaming.md §2、protocol.md、packages/shared 的 `QUALITY_PRESETS` 與 quality 型別，再改 `common/encoding`（`setQuality` 即時套用）與 UI。P2P 60 Mbps 總上傳量提示保留，但不強制 | Gemini | T-125 | TODO |
+| T-125 | 播放器圖示化控制列（Gemini 主導，含 `features/source` 例外）：參考使用者提供的截圖，控制列改用圖示按鈕（播放／暫停、時間、音量、彈幕開關、畫質、劇院模式、全螢幕），每個按鈕都要有提示文字與 `aria-label`。做成共用的控制列元件，房主播放器（`features/source`，原本是 GPT 的 UI）與收看端播放器（`features/player`）共用。收看端只有音量、全螢幕、彈幕、聊天，不能暫停或拖進度。若要新增圖示套件，要確認沒有被標成 deprecated，並且符合冷卻期 | Gemini | T-124 | DOING |
+| T-126 | 細緻畫質調整（Gemini 先改 spec，實作分工待定）：取代固定的畫質預設。房主在播放器的畫質面板用三條分段滑桿即時調整：解析度 720P～1080P（不超過片源）；位元率 8／10／15 Mbps／原片位元率；FPS 檔位待定（暫定 24／30／60／原片）。這是契約變更：先改 streaming.md §2、protocol.md、packages/shared 的 `QUALITY_PRESETS` 與 quality 型別，再改 `common/encoding`（`setQuality` 即時套用）與 UI。P2P 60 Mbps 總上傳量提示保留，但不強制 | Gemini | T-125 | DOING |
 | T-127 | 聊天室與彈幕（Gemini 先改 spec，實作分工待定；暫不派工）：新增聊天訊息（protocol.md 與 shared schema）。不保留歷史紀錄，加入後只看得到之後的訊息；房主不需要禁言或刪訊息。伺服器仍要檢查成員身份、被踢的人不能發言、限流、長度上限，並以純文字顯示。房主與收看者都能發言。彈幕從右往左，有開關與密度設定，全螢幕時仍會顯示（全螢幕的對象改成播放器容器） | Gemini | T-125 | TODO |
 | T-128 | 切模式第 2 步等待 `room:updated` 逾時（結果不明）的處理（T-121 第 11 項，與 streaming.md §6 現行條文衝突）：先改 §6，區分兩種情況——**被拒**（`ack ok:false`）時照原模式重建；**逾時**時不要重建，維持「直播暫停中」。再由 `SignalClient` 提供重新驗證的方法（例如 `resync()`），拿到新的 snapshot 後依 snapshot 的模式重建 | Gemini | T-121, T-122 | DONE |
 | T-129 | **RoomDO 產品競態**（從不穩定測試查出）：加入與踢人都從記憶體的 `this.room` 算出新成員清單後才交給 `saveTransition()`，提交後才更新 `this.room`。兩個操作讀到同一份舊清單時，後寫的會蓋掉先前已成功加入的席位（新成員拿到 200，卻立刻驗證失敗）。`relay-lifecycle.test.ts:440` 50 輪中失敗 2 輪。要把會改寫房間狀態的操作序列化，範圍從讀取最新狀態、計算變更，一直到提交交易、更新記憶體，並補上能穩定重現的回歸測試 | GPT | T-120 | DONE |
@@ -109,3 +109,8 @@
 > - **T-124** 已由 Gemini 對話「登記播放器與聊天室功能需求」與使用者定案並完成合併（`DONE`）；**T-125～T-127** 維持 `TODO`，待使用者指示再開工。
 > - T-125 的 `features/source` 例外同樣由 Gemini 主導；跨模組契約與實作仍依既有流程交由 GPT 審查。
 
+
+### T-125、T-126（GPT 監工初審，2026-11-25）
+
+- T-125（`bda04ab`）：請修正音量拉到 0 後取消靜音跳到 100% 的回歸、窄視窗裁切畫質面板、按 Escape 關閉時未將焦點還給畫質按鈕。
+- T-126（`76ec120`，依賴 T-125）：Chrome 元件測試已重現延遲房間廣播時最後一次畫質選擇遺失，以及 1000P 片源無法由預設直接選 900P。請補上請求失敗後的面板校正與這兩種情境的回歸驗收。
