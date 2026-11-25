@@ -33,10 +33,9 @@ describe("Location 驗證", () => {
       .respond(201, answerSdp, {
         Location: `https://watch.example:8443${location()}`,
       });
-    await expect(result).resolves.toEqual({
-      answer: answerSdp,
-      location: location(),
-    });
+    const resource = await result;
+    expect(resource.location).toBe(location());
+    await expect(resource.answer).resolves.toBe(answerSdp);
   });
 
   test.each([

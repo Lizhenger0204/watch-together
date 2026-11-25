@@ -4,6 +4,7 @@ import { DELETE_RETRY_DELAYS_MS } from "./http";
 import {
   answerSdp,
   created,
+  createdSlowBody,
   flush,
   gather,
   location,
@@ -142,6 +143,23 @@ describe("停止與清理", () => {
         .map((r) => r.url),
     ).toEqual([location()]);
     expect(states).toEqual(["connecting", "waiting"]);
+  });
+
+  test("201 標頭已到、本文還沒讀完時停止：立刻 DELETE，本文晚到也不再套用", async () => {
+    const { viewer, pc, states } = await posting();
+    const body = createdSlowBody(http().lastPost());
+    await flush();
+    viewer.stop();
+    expect(
+      http()
+        .deletes()
+        .map((r) => r.url),
+    ).toEqual([location()]);
+    body.finish();
+    await flush();
+    expect(pc.remoteDescription).toBeNull();
+    expect(http().deletes()).toHaveLength(1);
+    expect(states.at(-1)).toBe("waiting");
   });
 
   test("套用 answer 失敗：DELETE 已建立的資源，failed", async () => {

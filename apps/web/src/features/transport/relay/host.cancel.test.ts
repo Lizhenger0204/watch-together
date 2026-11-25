@@ -2,7 +2,7 @@
  * WHIP 停止時依 POST 進度取消（T-122，docs/specs/streaming.md §4）：
  * - POST 送出前：立刻釋放輪次，不等已關閉連線上的原生操作。
  * - POST 在途：保留輪次，等晚到的回應再清理。
- * - 已取得 Location：立刻送冪等的 DELETE。
+ * - 已取得 Location（201 標頭已驗證，本文可能還在讀）：立刻送冪等的 DELETE。
  */
 import { describe, expect, test, vi } from "vitest";
 import {
@@ -12,6 +12,7 @@ import {
 import { ICE_GATHERING_TIMEOUT_MS } from "./http";
 import {
   created,
+  createdSlowBody,
   flush,
   gather,
   location,
@@ -119,5 +120,34 @@ describe("停止時依 POST 進度取消", () => {
     await gather(second.connections);
     expect(http().deletes()).toHaveLength(0);
     expect(http().posts()).toHaveLength(2);
+  });
+
+  test("201 標頭已到、本文還沒讀完時停止：立刻 DELETE，start() 結束，下一次可發布", async () => {
+    const first = makeHost();
+    const started = settle(first.host.start());
+    await gather(first.connections);
+    const body = createdSlowBody(http().lastPost());
+    await flush();
+
+    first.host.stop();
+    await flush();
+    expect(started.done).toBe(true);
+    expect(
+      http()
+        .deletes()
+        .map((r) => r.url),
+    ).toEqual([location()]);
+
+    http().deletes()[0]!.respond(200);
+    const second = makeHost();
+    void settle(second.host.start());
+    await gather(second.connections);
+    expect(http().posts()).toHaveLength(2);
+
+    // 本文晚到：不再套用 answer，也不重複 DELETE。
+    body.finish();
+    await flush();
+    expect(first.connections[0]!.remoteDescription).toBeNull();
+    expect(http().deletes()).toHaveLength(1);
   });
 });

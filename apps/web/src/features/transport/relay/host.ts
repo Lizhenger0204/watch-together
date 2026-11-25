@@ -5,8 +5,8 @@
  * - 首次 offer 一律保留 video、audio 各一個 sendonly transceiver（缺軌時 track 為 null），
  *   之後換片或補軌都用同一個 sender 的 replaceTrack，不必重新協商。
  * - 同一房間的 WHIP 建立與刪除透過 PublishQueue 依序完成。停止時依 POST 進度取消：
- *   還沒送 POST 就立刻釋放輪次；POST 在途就等回應再清理；已取得 Location 就立刻
- *   送冪等的 DELETE。`start()` 在停止時立刻結束，不等已關閉連線上的原生操作。
+ *   還沒送 POST 就立刻釋放輪次；POST 在途就等回應標頭再清理；已取得 Location
+ *   （本文可能還在讀）就立刻送冪等的 DELETE。`start()` 在停止時立刻結束，不等已關閉連線上的原生操作。
  * - `removePeer` 在轉發模式是 no-op：收看者各自向 SFU 拉流，房主端沒有逐人的連線。
  */
 import { QUALITY_PRESETS, type Quality } from "@project/shared";
@@ -205,11 +205,13 @@ export const createRelayHostTransport: CreateHostTransport = (options) => {
       } finally {
         current.posting = false;
       }
-      // 取得 Location 後一律記下，停止或失敗時都依它 DELETE。
+      // 標頭驗證過就記下 Location：之後停止或失敗都依它 DELETE，不等本文讀完。
       current.location = resource.location;
       if (signal.aborted) return abandon(current);
+      const answer = await resource.answer;
+      if (signal.aborted) return abandon(current);
 
-      await pc.setRemoteDescription({ type: "answer", sdp: resource.answer });
+      await pc.setRemoteDescription({ type: "answer", sdp: answer });
       if (signal.aborted) return abandon(current);
       sampleStats(pc, "send", signal, (stats) => {
         if (!destroyed && isIceConnected(pc)) events.emit("stats", stats);

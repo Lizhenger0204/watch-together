@@ -18,7 +18,11 @@ export const ICE_GATHERING_TIMEOUT_MS = 2_000;
 /** DELETE 失敗時的重試間隔：第一次立即送，之後依序等待。 */
 export const DELETE_RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
 
-export type RelayResource = { answer: string; location: string };
+/**
+ * `201` 的標頭驗證過就交出：`location` 立刻可用來清理，`answer` 是還在讀取的本文
+ * （讀取失敗得到空字串，交給套用 answer 的步驟回報）。
+ */
+export type RelayResource = { location: string; answer: Promise<string> };
 
 export function relayUrl(roomId: string, role: RelayRole) {
   return `/api/rooms/${encodeURIComponent(roomId)}/${role}`;
@@ -100,6 +104,7 @@ function postError(role: RelayRole, status: number) {
 /**
  * 送出單次 HTTP offer。不接受 AbortSignal：送出後一定等回應，
  * 拿到 `201` 才知道要 DELETE 哪個資源（§4：停止時若 POST 仍在途要等回應）。
+ * 驗證完狀態碼與 `Location` 就 resolve，不等本文：停止時可以立刻 DELETE。
  */
 export async function postOffer(
   roomId: string,
@@ -125,11 +130,11 @@ export async function postOffer(
   }
   if (response.status !== 201) throw postError(role, response.status);
   const location = resourcePath(roomId, role, response.headers.get("Location"));
-  const answer = await response.text().catch(() => "");
   if (!location) {
+    void response.body?.cancel().catch(() => {});
     throw new TransportError("RELAY_FAILED", "轉發服務的回應缺少資源位置");
   }
-  return { answer, location };
+  return { location, answer: response.text().catch(() => "") };
 }
 
 export type DeleteOutcome =

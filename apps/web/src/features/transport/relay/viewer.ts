@@ -113,12 +113,15 @@ export const createRelayViewerTransport: CreateViewerTransport = (options) => {
       options.token,
       sdp,
     );
+    // 標頭驗證過就記下 Location：停止時立刻 DELETE，不等本文讀完。
     current.location = resource.location;
     if (signal.aborted) {
       release(current);
       return;
     }
-    await pc.setRemoteDescription({ type: "answer", sdp: resource.answer });
+    const answer = await resource.answer;
+    if (signal.aborted) return;
+    await pc.setRemoteDescription({ type: "answer", sdp: answer });
     if (signal.aborted) return;
     sampleStats(pc, "receive", signal, (stats) => {
       if (!destroyed && isIceConnected(pc)) events.emit("stats", stats);

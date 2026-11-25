@@ -25,7 +25,7 @@ export interface PendingRequest {
   keepalive: boolean | undefined;
   respond(
     status: number,
-    body?: string,
+    body?: string | ReadableStream<Uint8Array>,
     headers?: Record<string, string>,
   ): void;
   fail(error?: unknown): void;
@@ -74,6 +74,26 @@ export function created(request: PendingRequest, id?: string) {
     "Content-Type": "application/sdp",
     Location: location(id),
   });
+}
+
+/** 回 201：標頭（含 Location）先到，本文等測試呼叫 `finish()` 才送完。 */
+export function createdSlowBody(request: PendingRequest, id?: string) {
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const body = new ReadableStream<Uint8Array>({
+    start: (c) => {
+      controller = c;
+    },
+  });
+  request.respond(201, body, {
+    "Content-Type": "application/sdp",
+    Location: location(id),
+  });
+  return {
+    finish() {
+      controller.enqueue(new TextEncoder().encode(answerSdp));
+      controller.close();
+    },
+  };
 }
 
 export function useRelayFakes() {
