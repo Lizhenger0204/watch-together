@@ -109,9 +109,9 @@ export function removeResource(storage: DurableObjectStorage, id: string) {
 }
 
 export async function closeResources(
-  storage: DurableObjectStorage,
   env: RelayEnv,
   targets: RelayResource[],
+  remove: (id: string) => Promise<void>,
 ) {
   if (!targets.length) return 0;
   let realtime: ReturnType<typeof createRealtime>;
@@ -131,7 +131,7 @@ export async function closeResources(
       left += 1;
       continue;
     }
-    await removeResource(storage, resource.id);
+    await remove(resource.id);
   }
   return left;
 }
