@@ -108,15 +108,67 @@ describe("roomReducer：連線品質與重新驗證", () => {
     expect(view.memberStatus).toEqual({});
   });
 
-  test("重產邀請碼的 REST 回應直接更新邀請碼；之後的廣播仍以最後收到的為準", () => {
+  test("重產邀請碼的 REST 回應：期間沒有新的房間狀態就直接更新", () => {
     let view = roomReducer(initialRoomView, {
       kind: "message",
       message: snapshot,
     });
-    view = roomReducer(view, { kind: "invite-code", inviteCode: "BBBBBBBB" });
+    view = roomReducer(view, { kind: "invite-requested", id: 1 });
+    view = roomReducer(view, {
+      kind: "invite-code",
+      id: 1,
+      inviteCode: "BBBBBBBB",
+    });
     expect(view.room?.inviteCode).toBe("BBBBBBBB");
-    view = roomReducer(view, { kind: "invite-code", inviteCode: "CCCCCCCC" });
+    view = roomReducer(view, { kind: "invite-requested", id: 2 });
+    view = roomReducer(view, {
+      kind: "invite-code",
+      id: 2,
+      inviteCode: "CCCCCCCC",
+    });
     expect(view.room?.inviteCode).toBe("CCCCCCCC");
+  });
+
+  test.each([
+    [
+      "room:updated",
+      {
+        type: "room:updated" as const,
+        room: { ...snapshot.room, inviteCode: "CCCCCCCC" },
+      },
+    ],
+    [
+      "room:snapshot",
+      { ...snapshot, room: { ...snapshot.room, inviteCode: "CCCCCCCC" } },
+    ],
+  ])("重產的 REST 回應晚於 %s：忽略，保留較新的碼", (_name, newer) => {
+    let view = roomReducer(initialRoomView, {
+      kind: "message",
+      message: snapshot,
+    });
+    view = roomReducer(view, { kind: "invite-requested", id: 7 });
+    view = roomReducer(view, { kind: "message", message: newer });
+    view = roomReducer(view, {
+      kind: "invite-code",
+      id: 7,
+      inviteCode: "BBBBBBBB",
+    });
+    expect(view.room?.inviteCode).toBe("CCCCCCCC");
+  });
+
+  test("不是最後一次送出的重產回應也忽略", () => {
+    let view = roomReducer(initialRoomView, {
+      kind: "message",
+      message: snapshot,
+    });
+    view = roomReducer(view, { kind: "invite-requested", id: 1 });
+    view = roomReducer(view, { kind: "invite-requested", id: 2 });
+    view = roomReducer(view, {
+      kind: "invite-code",
+      id: 1,
+      inviteCode: "BBBBBBBB",
+    });
+    expect(view.room?.inviteCode).toBe("AAAAAAAA");
   });
 });
 

@@ -26,6 +26,10 @@ export type RoomView = {
   you: ServerMessageOf<"room:snapshot">["you"] | null;
   /** 第幾次收到 room:snapshot（每次重新驗證加一）。 */
   session: number;
+  /** 每收到 room:snapshot 或 room:updated 加一，用來判斷 REST 回應是否已經過時。 */
+  roomVersion: number;
+  /** 最後一次送出的重產邀請碼請求，與送出當時的 roomVersion。 */
+  inviteRequest: { id: number; version: number } | null;
   /** 只有房主會收到（收看者回報的連線品質）。只保留在線成員的。 */
   memberStatus: Record<string, MemberStatus>;
   closedBy: ServerMessageOf<"room:closed">["reason"] | null;
@@ -35,8 +39,13 @@ export type RoomView = {
 export type RoomEvent =
   | { kind: "connection"; state: ConnectionState }
   | { kind: "message"; message: ServerMessage }
-  /** 重新產生邀請碼的 REST 回應（WebSocket 斷線時也能更新畫面）。 */
-  | { kind: "invite-code"; inviteCode: string }
+  /** 送出重新產生邀請碼的 REST 請求（記下當時的 roomVersion）。 */
+  | { kind: "invite-requested"; id: number }
+  /**
+   * 重新產生邀請碼的 REST 回應（WebSocket 斷線時也能更新畫面）。
+   * 送出後已收到較新的廣播或 snapshot 就忽略，以伺服器推送的為準。
+   */
+  | { kind: "invite-code"; id: number; inviteCode: string }
   | { kind: "clear-error" };
 
 export const initialRoomView: RoomView = {
@@ -46,6 +55,8 @@ export const initialRoomView: RoomView = {
   stream: { live: false, title: null, startedAt: null },
   you: null,
   session: 0,
+  roomVersion: 0,
+  inviteRequest: null,
   memberStatus: {},
   closedBy: null,
   lastError: null,
@@ -54,10 +65,22 @@ export const initialRoomView: RoomView = {
 export function roomReducer(state: RoomView, event: RoomEvent): RoomView {
   if (event.kind === "connection") return { ...state, connection: event.state };
   if (event.kind === "clear-error") return { ...state, lastError: null };
+  if (event.kind === "invite-requested") {
+    return {
+      ...state,
+      inviteRequest: { id: event.id, version: state.roomVersion },
+    };
+  }
   if (event.kind === "invite-code") {
-    return state.room
-      ? { ...state, room: { ...state.room, inviteCode: event.inviteCode } }
-      : state;
+    const request = state.inviteRequest;
+    if (request?.id !== event.id) return state;
+    // 送出後已收到較新的房間狀態：那份已含最新的碼（或之後又換過），不要蓋回去。
+    const room = request.version === state.roomVersion ? state.room : null;
+    return {
+      ...state,
+      inviteRequest: null,
+      room: room ? { ...room, inviteCode: event.inviteCode } : state.room,
+    };
   }
 
   const message = event.message;
@@ -70,6 +93,7 @@ export function roomReducer(state: RoomView, event: RoomEvent): RoomView {
         stream: message.stream,
         you: message.you,
         session: state.session + 1,
+        roomVersion: state.roomVersion + 1,
         // 上一條連線期間的統計已經過時，等收看者重新回報。
         memberStatus: {},
       };
@@ -83,7 +107,11 @@ export function roomReducer(state: RoomView, event: RoomEvent): RoomView {
       return { ...state, members: message.members, memberStatus };
     }
     case "room:updated":
-      return { ...state, room: message.room };
+      return {
+        ...state,
+        room: message.room,
+        roomVersion: state.roomVersion + 1,
+      };
     case "stream:status": {
       const { live, title, startedAt } = message;
       return { ...state, stream: { live, title, startedAt } };

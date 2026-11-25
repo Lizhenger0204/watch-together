@@ -8,6 +8,9 @@ import { checkIdentity } from "./identity";
 import { initialRoomView, roomReducer, type RoomUpdate } from "./room-state";
 import { ViewerSession } from "./viewer-session";
 
+/** 重產邀請碼請求的流水號（讓 reducer 認出最後一次送出的請求）。 */
+let inviteRequests = 0;
+
 /** 本機的 token 格式壞掉（例如被截短）：連了也只會被 4400 拒絕，當成沒有身份（由頁面清掉）。 */
 function loadToken(roomId: string) {
   const token = roomToken.get(roomId);
@@ -101,9 +104,12 @@ export function useRoom(roomId: string) {
         client?.request({ type: "room:kick", memberId }),
       async regenerateInviteCode() {
         if (!token) throw new Error("no token");
+        const id = ++inviteRequests;
+        dispatch({ kind: "invite-requested", id });
         const result = await regenerateInviteCode(roomId, token);
-        // WebSocket 斷線時收不到 room:updated，直接用 REST 回應更新。
-        dispatch({ kind: "invite-code", inviteCode: result.inviteCode });
+        // WebSocket 斷線時收不到 room:updated，直接用 REST 回應更新；
+        // 回應晚於之後的廣播或 snapshot 時由 reducer 忽略。
+        dispatch({ kind: "invite-code", id, inviteCode: result.inviteCode });
         return result;
       },
       clearError: () => dispatch({ kind: "clear-error" }),
