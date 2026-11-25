@@ -27,10 +27,13 @@ export type RoomView = {
   you: ServerMessageOf<"room:snapshot">["you"] | null;
   /** 第幾次收到 room:snapshot（每次重新驗證加一）。 */
   session: number;
-  /** 每收到 room:snapshot 或 room:updated 加一，用來判斷 REST 回應是否已經過時。 */
-  roomVersion: number;
-  /** 最後一次送出的重產邀請碼請求，與送出當時的 roomVersion。 */
-  inviteRequest: { id: number; version: number } | null;
+  /** 最後一次送出的重產邀請碼請求，與送出當時畫面上的邀請碼。 */
+  inviteRequest: { id: number; from: string | null } | null;
+  /**
+   * 重產成功後已失效的舊碼。重產前送出、重產後才到的廣播或 snapshot 仍帶著它，
+   * 不可把畫面蓋回去（伺服器提交新碼後不會再送出舊碼）。
+   */
+  retiredInviteCode: string | null;
   /** 只有房主會收到（收看者回報的連線品質）。只保留在線成員的。 */
   memberStatus: Record<string, MemberStatus>;
   closedBy: ServerMessageOf<"room:closed">["reason"] | null;
@@ -40,11 +43,12 @@ export type RoomView = {
 export type RoomEvent =
   | { kind: "connection"; state: ConnectionState }
   | { kind: "message"; message: ServerMessage }
-  /** 送出重新產生邀請碼的 REST 請求（記下當時的 roomVersion）。 */
+  /** 送出重新產生邀請碼的 REST 請求（記下當時畫面上的邀請碼）。 */
   | { kind: "invite-requested"; id: number }
   /**
    * 重新產生邀請碼的 REST 回應（WebSocket 斷線時也能更新畫面）。
-   * 送出後已收到較新的廣播或 snapshot 就忽略，以伺服器推送的為準。
+   * 只有畫面上的碼已被伺服器推送更新，或之後又送出了重產請求時才忽略；
+   * 期間收到仍帶舊碼的廣播（例如鎖房、畫質）不影響。
    */
   | { kind: "invite-code"; id: number; inviteCode: string }
   | { kind: "clear-error" };
@@ -56,12 +60,22 @@ export const initialRoomView: RoomView = {
   stream: { live: false, title: null, startedAt: null },
   you: null,
   session: 0,
-  roomVersion: 0,
   inviteRequest: null,
+  retiredInviteCode: null,
   memberStatus: {},
   closedBy: null,
   lastError: null,
 };
+
+/** 帶著已失效舊碼的晚到房間狀態：保留畫面上的有效碼，其餘欄位照常更新。 */
+function keepCurrentCode(state: RoomView, room: RoomInfo): RoomInfo {
+  const current = state.room?.inviteCode;
+  return current &&
+    room.inviteCode !== undefined &&
+    room.inviteCode === state.retiredInviteCode
+    ? { ...room, inviteCode: current }
+    : room;
+}
 
 export function roomReducer(state: RoomView, event: RoomEvent): RoomView {
   if (event.kind === "connection") return { ...state, connection: event.state };
@@ -69,17 +83,18 @@ export function roomReducer(state: RoomView, event: RoomEvent): RoomView {
   if (event.kind === "invite-requested") {
     return {
       ...state,
-      inviteRequest: { id: event.id, version: state.roomVersion },
+      inviteRequest: { id: event.id, from: state.room?.inviteCode ?? null },
     };
   }
   if (event.kind === "invite-code") {
     const request = state.inviteRequest;
     if (request?.id !== event.id) return state;
-    // 送出後已收到較新的房間狀態：那份已含最新的碼（或之後又換過），不要蓋回去。
-    const room = request.version === state.roomVersion ? state.room : null;
+    // 畫面上的碼已被伺服器推送換掉：那份就是這次（或之後又換過）的碼，不要蓋回去。
+    const room = state.room?.inviteCode === request.from ? state.room : null;
     return {
       ...state,
       inviteRequest: null,
+      retiredInviteCode: request.from,
       room: room ? { ...room, inviteCode: event.inviteCode } : state.room,
     };
   }
@@ -89,12 +104,11 @@ export function roomReducer(state: RoomView, event: RoomEvent): RoomView {
     case "room:snapshot":
       return {
         ...state,
-        room: message.room,
+        room: keepCurrentCode(state, message.room),
         members: message.members,
         stream: message.stream,
         you: message.you,
         session: state.session + 1,
-        roomVersion: state.roomVersion + 1,
         // 上一條連線期間的統計已經過時，等收看者重新回報。
         memberStatus: {},
       };
@@ -108,11 +122,7 @@ export function roomReducer(state: RoomView, event: RoomEvent): RoomView {
       return { ...state, members: message.members, memberStatus };
     }
     case "room:updated":
-      return {
-        ...state,
-        room: message.room,
-        roomVersion: state.roomVersion + 1,
-      };
+      return { ...state, room: keepCurrentCode(state, message.room) };
     case "stream:status": {
       const { live, title, startedAt } = message;
       return { ...state, stream: { live, title, startedAt } };

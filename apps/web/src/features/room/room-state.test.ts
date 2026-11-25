@@ -158,6 +158,55 @@ describe("roomReducer：連線品質與重新驗證", () => {
     expect(view.room?.inviteCode).toBe("CCCCCCCC");
   });
 
+  test("重產期間收到仍帶舊碼的鎖房廣播後斷線：仍採用 REST 的新碼", () => {
+    let view = roomReducer(initialRoomView, {
+      kind: "message",
+      message: snapshot,
+    });
+    view = roomReducer(view, { kind: "invite-requested", id: 3 });
+    view = roomReducer(view, {
+      kind: "message",
+      message: {
+        type: "room:updated",
+        room: { ...snapshot.room, locked: true },
+      },
+    });
+    view = roomReducer(view, {
+      kind: "connection",
+      state: { status: "reconnecting", attempt: 1 },
+    });
+    view = roomReducer(view, {
+      kind: "invite-code",
+      id: 3,
+      inviteCode: "BBBBBBBB",
+    });
+    expect(view.room).toMatchObject({ locked: true, inviteCode: "BBBBBBBB" });
+  });
+
+  test("REST 新碼生效後，晚到的舊碼廣播不會把畫面蓋回舊碼", () => {
+    let view = roomReducer(initialRoomView, {
+      kind: "message",
+      message: snapshot,
+    });
+    view = roomReducer(view, { kind: "invite-requested", id: 4 });
+    view = roomReducer(view, {
+      kind: "invite-code",
+      id: 4,
+      inviteCode: "BBBBBBBB",
+    });
+    view = roomReducer(view, {
+      kind: "message",
+      message: {
+        type: "room:updated",
+        room: { ...snapshot.room, quality: "high" },
+      },
+    });
+    expect(view.room).toMatchObject({
+      quality: "high",
+      inviteCode: "BBBBBBBB",
+    });
+  });
+
   test("不是最後一次送出的重產回應也忽略", () => {
     let view = roomReducer(initialRoomView, {
       kind: "message",
