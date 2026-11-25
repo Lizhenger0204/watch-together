@@ -32,6 +32,10 @@ declare global {
 }
 
 export interface RelaySfuStats {
+  /** 在 POST 入口記錄的實際請求次數（含 409 等非 201 回應）。 */
+  whipRequests: number;
+  whepRequests: number;
+  /** 成功建立（201）的資源 Location 清單，用來逐一比對 DELETE。 */
   whip: string[];
   whep: string[];
   deleted: string[];
@@ -63,6 +67,8 @@ export async function createRelaySfu(browser: Browser): Promise<RelaySfu> {
     let seq = 0;
     const publications = new Map<string, SfuPublication>();
     const resources = new Map<string, SfuResource>();
+    // 獨立保留所有建立過的 PC 參照，確保 remove() 若漏掉 pc.close() 會被 openPeers() 抓出。
+    const allPeers: RTCPeerConnection[] = [];
 
     function waitForIceGathering(pc: RTCPeerConnection, timeoutMs: number) {
       if (pc.iceGatheringState === "complete") return Promise.resolve();
@@ -96,6 +102,7 @@ export async function createRelaySfu(browser: Browser): Promise<RelaySfu> {
         }
 
         const pc = new RTCPeerConnection({ iceServers: [] });
+        allPeers.push(pc);
         const id = `whip-${++seq}`;
         const tracks: Partial<Record<"video" | "audio", MediaStreamTrack>> = {};
         const inbound = new MediaStream();
@@ -141,6 +148,7 @@ export async function createRelaySfu(browser: Browser): Promise<RelaySfu> {
         if (!pub) return null;
 
         const pc = new RTCPeerConnection({ iceServers: [] });
+        allPeers.push(pc);
         const id = `whep-${++seq}`;
         await pc.setRemoteDescription({ type: "offer", sdp: offerSdp });
         for (const transceiver of pc.getTransceivers()) {
@@ -179,14 +187,14 @@ export async function createRelaySfu(browser: Browser): Promise<RelaySfu> {
 
       openPeers() {
         let count = 0;
-        for (const { pc } of resources.values()) {
+        for (const pc of allPeers) {
           if (pc.signalingState !== "closed") count += 1;
         }
         return count;
       },
 
       closeAll() {
-        for (const { pc } of resources.values()) pc.close();
+        for (const pc of allPeers) pc.close();
         resources.clear();
         for (const [roomId, pub] of [...publications.entries()]) {
           disposePublication(roomId, pub);
@@ -196,6 +204,8 @@ export async function createRelaySfu(browser: Browser): Promise<RelaySfu> {
   });
 
   const recorded: RelaySfuStats = {
+    whipRequests: 0,
+    whepRequests: 0,
     whip: [],
     whep: [],
     deleted: [],
@@ -237,8 +247,13 @@ export async function createRelaySfu(browser: Browser): Promise<RelaySfu> {
             recorded.badContentType += 1;
             return route.fulfill({ status: 400 });
           }
-          if (endpoint === "whip" && role !== "host") recorded.viewerWhip += 1;
-          if (endpoint === "whep" && role !== "viewer") recorded.hostWhep += 1;
+          if (endpoint === "whip") {
+            recorded.whipRequests += 1;
+            if (role !== "host") recorded.viewerWhip += 1;
+          } else {
+            recorded.whepRequests += 1;
+            if (role !== "viewer") recorded.hostWhep += 1;
+          }
 
           const offerSdp = request.postData() ?? "";
           const answer = await sfuPage.evaluate(

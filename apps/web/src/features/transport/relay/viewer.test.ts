@@ -286,4 +286,106 @@ describe("start() 途中已回報連線中斷", () => {
     expect(getStats).not.toHaveBeenCalled();
     expect(stats).toEqual([]);
   });
+
+  test("最後 check() 前 pc.connectionState 已為 failed（未先觸發事件）：start() 拒絕 RELAY_FAILED、關閉 PC、DELETE 且不啟動 stats", async () => {
+    const { viewer, pc, started, states, errors } = await posting();
+    const stats: unknown[] = [];
+    viewer.onStats((s) => stats.push(s));
+    const getStats = vi.spyOn(pc, "getStats");
+    vi.spyOn(pc, "setRemoteDescription").mockImplementation(async () => {
+      // 模擬瀏覽器狀態已轉成 failed，但尚未先觸發 onconnectionstatechange。
+      pc.connectionState = "failed";
+    });
+
+    created(http().lastPost());
+    await flush();
+
+    expect(started.done).toBe(true);
+    expect((started.error as { code: string }).code).toBe("RELAY_FAILED");
+    expect(pc.closed).toBe(true);
+    expect(
+      http()
+        .deletes()
+        .map((r) => r.url),
+    ).toEqual([location()]);
+    expect(states.at(-1)).toBe("failed");
+    expect(states).not.toContain("playing");
+    expect(errors).toEqual(["RELAY_FAILED"]);
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(getStats).not.toHaveBeenCalled();
+    expect(stats).toEqual([]);
+  });
+
+  test("WHEP POST 在途時 pc 進入 failed：立刻結束當次 start()、關閉 PC、允許重新 start()，晚到 201 仍補刪", async () => {
+    const { viewer, pc, connections, started, states, errors } =
+      await posting();
+    const stalePost = http().lastPost();
+
+    pc.setIceConnectionState("failed");
+    await flush();
+
+    expect(started.done).toBe(true);
+    expect((started.error as { code: string }).code).toBe("RELAY_FAILED");
+    expect(pc.closed).toBe(true);
+    expect(states.at(-1)).toBe("failed");
+    expect(errors).toEqual(["RELAY_FAILED"]);
+
+    // 下一次 start() 不會沿用舊 Promise，會建新連線並送出新的 POST。
+    const retry = settle(viewer.start());
+    await gather(connections);
+    expect(connections).toHaveLength(2);
+    expect(http().posts()).toHaveLength(2);
+
+    // 舊 POST 晚到 201：補刪舊 Location，且不影響新連線狀態。
+    const staleId = "11111111-1111-4111-8111-111111111111";
+    created(stalePost, staleId);
+    await flush();
+    expect(
+      http()
+        .deletes()
+        .map((r) => r.url),
+    ).toEqual([location(staleId)]);
+    expect(retry.done).toBe(false);
+    expect(states.at(-1)).toBe("connecting");
+  });
+
+  test("ICE 收集期間 pc 進入 failed：不送 POST、立刻拒絕並關閉 PC，可立即重新 start()", async () => {
+    const { viewer, connections } = makeViewer();
+    const states: string[] = [];
+    const errors: string[] = [];
+    viewer.onState((s) => states.push(s));
+    viewer.onError((e) => errors.push(e.code));
+
+    const started = settle(viewer.start());
+    await flush();
+    const pc = connections[0] as FakeRtcPeerConnection;
+    pc.setIceConnectionState("failed");
+    await gather(connections);
+
+    expect(http().posts()).toHaveLength(0);
+    expect(started.done).toBe(true);
+    expect((started.error as { code: string }).code).toBe("RELAY_FAILED");
+    expect(pc.closed).toBe(true);
+    expect(states.at(-1)).toBe("failed");
+    expect(errors).toEqual(["RELAY_FAILED"]);
+
+    void settle(viewer.start());
+    await gather(connections);
+    expect(connections).toHaveLength(2);
+    expect(http().posts()).toHaveLength(1);
+  });
+
+  test("POST 在途時已觸發 failed，隨後 POST 回 409：維持 failed 與 RELAY_FAILED，不被 409 蓋成 waiting", async () => {
+    const { pc, started, states, errors } = await posting();
+    const post = http().lastPost();
+
+    pc.setIceConnectionState("failed");
+    post.respond(409);
+    await flush();
+
+    expect(started.done).toBe(true);
+    expect((started.error as { code: string }).code).toBe("RELAY_FAILED");
+    expect(states.at(-1)).toBe("failed");
+    expect(errors).toEqual(["RELAY_FAILED"]);
+  });
 });

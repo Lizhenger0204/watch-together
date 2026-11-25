@@ -28,6 +28,8 @@ test("轉發模式透過 SFU 替身播放影音，切回 P2P 後清理資源並�
       await expect.poll(() => sfu.stats().whip.length).toBe(1);
       await expect.poll(() => sfu.stats().whep.length).toBe(2);
       expect(sfu.stats()).toMatchObject({
+        whipRequests: 1,
+        whepRequests: 2,
         viewerWhip: 0,
         hostWhep: 0,
         missingAuth: 0,
@@ -56,6 +58,10 @@ test("轉發模式透過 SFU 替身播放影音，切回 P2P 後清理資源並�
         .poll(() => [...sfu.stats().deleted].sort())
         .toEqual([...created].sort());
       await expect.poll(() => sfu.openPeers()).toBe(0);
+      expect(sfu.stats()).toMatchObject({
+        whipRequests: 1,
+        whepRequests: 2,
+      });
       expect(sfu.stats().whip).toHaveLength(1);
       expect(sfu.stats().whep).toHaveLength(2);
 
