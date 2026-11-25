@@ -252,6 +252,7 @@ describe("直播中切模式", () => {
     t.connect(snapshot({ mode: "relay" }));
     expect(t.log.slice(5)).toEqual(["create relay", "start"]);
     expect(t.session.getView()).toEqual({
+      pendingQuality: null,
       intent: true,
       phase: "starting",
       error: null,
@@ -261,6 +262,7 @@ describe("直播中切模式", () => {
     await flush();
     await t.client.ack("stream:status live 新片");
     expect(t.session.getView()).toEqual({
+      pendingQuality: null,
       intent: true,
       phase: "live",
       error: null,
@@ -327,6 +329,7 @@ describe("直播中切模式", () => {
     expect(t.log).not.toContain("resync");
     expect(t.transports).toHaveLength(1);
     expect(t.session.getView()).toEqual({
+      pendingQuality: null,
       intent: true,
       phase: "waiting",
       error: null,
@@ -354,6 +357,7 @@ describe("直播中切模式", () => {
     t.connect(snapshot({ mode: "relay" }));
     expect(t.transports).toHaveLength(1);
     expect(t.session.getView()).toEqual({
+      pendingQuality: null,
       intent: false,
       phase: "idle",
       error: null,
@@ -372,6 +376,7 @@ describe("直播中切模式", () => {
     t.session.setIntent(true);
     expect(t.transports).toHaveLength(1);
     expect(t.session.getView()).toEqual({
+      pendingQuality: null,
       intent: true,
       phase: "waiting",
       error: null,
@@ -398,6 +403,7 @@ describe("直播中切模式", () => {
     t.connect(snapshot({ mode: "relay" }));
     expect(t.transports).toHaveLength(1);
     expect(t.session.getView()).toEqual({
+      pendingQuality: null,
       intent: true,
       phase: "waiting",
       error: null,

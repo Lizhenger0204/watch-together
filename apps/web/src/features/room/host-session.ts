@@ -1,7 +1,6 @@
 import {
   DEFAULT_QUALITY,
   sameEncodingTarget,
-  sameQuality,
   type EncodingTarget,
   type Mode,
   type Quality,
@@ -18,6 +17,7 @@ import {
   type TransportSignal,
 } from "../transport";
 import { HostSessionFlows } from "./host-session-flows";
+import { QualityRequests } from "./host-session-quality";
 import { TitleSync } from "./host-session-title";
 import {
   KINDS,
@@ -70,6 +70,7 @@ export class HostSession extends HostSessionFlows {
   /** 伺服器目前的直播狀態（snapshot、stream:status 廣播、自己 live:true 的 ack）。 */
   protected serverLive = false;
   protected readonly titles: TitleSync;
+  private readonly qualityRequests: QualityRequests;
   private viewers = new Set<string>();
   protected transport: HostTransport | null = null;
   /** 最後一次交給傳輸的各 kind track。 */
@@ -115,7 +116,20 @@ export class HostSession extends HostSessionFlows {
       confirmed: () => this.publish(),
       rejected: (error) => this.showError(error),
     });
-    this.view = { intent: this.intent, phase: this.phase(), error: null };
+    this.qualityRequests = new QualityRequests({
+      send: (quality) =>
+        options.client.request({ type: "room:update", quality }),
+      current: () => this.quality,
+      changed: () => this.publish(),
+      rejected: (error) => this.showError(error),
+      timers: this.timers,
+    });
+    this.view = {
+      intent: this.intent,
+      phase: this.phase(),
+      error: null,
+      pendingQuality: null,
+    };
   }
 
   /** 在 SignalClient.start() 之前呼叫；回傳的函式解除監聽並 destroy()。 */
@@ -185,13 +199,14 @@ export class HostSession extends HostSessionFlows {
     this.publish();
   }
 
-  /** 切換畫質：送 room:update，收到 room:updated 後對現有傳輸 setQuality。 */
+  /**
+   * 切換畫質：送 room:update，收到 room:updated 後對現有傳輸 setQuality。
+   * 連續調整以「最後的選擇」為準（host-session-quality.ts），畫面顯示 view.pendingQuality。
+   */
   setQuality(quality: Quality): void {
-    if (!this.usable() || sameQuality(quality, this.quality)) return;
+    if (!this.usable()) return;
     this.error = null;
-    this.options.client
-      .request({ type: "room:update", quality })
-      .catch((error: unknown) => this.showError(error));
+    this.qualityRequests.request(quality);
     this.publish();
   }
 
@@ -206,6 +221,7 @@ export class HostSession extends HostSessionFlows {
     this.op = null;
     this.stopWaiter = null;
     this.clearModeWaiter();
+    this.qualityRequests.invalidate();
     this.resyncTarget = null;
     this.destroyed = true;
     this.listeners.clear();
@@ -223,6 +239,7 @@ export class HostSession extends HostSessionFlows {
       this.op = null;
       this.stopWaiter = null;
       this.clearModeWaiter(new SignalDisconnectedError());
+      this.qualityRequests.invalidate();
       this.resyncTarget = null;
       // 被取代的舊分頁之後重新整理，不可自動開播把接手的分頁擠掉。
       if (state.reason === "replaced") this.cancelIntent();
@@ -279,6 +296,7 @@ export class HostSession extends HostSessionFlows {
     this.op = null;
     this.stopWaiter = null;
     this.clearModeWaiter();
+    this.qualityRequests.invalidate();
     this.host = message.you.role === "host";
     if (!this.host) {
       this.connected = false;
@@ -322,6 +340,7 @@ export class HostSession extends HostSessionFlows {
 
   private handleRoomUpdated(mode: Mode, quality: Quality) {
     this.quality = quality;
+    this.qualityRequests.observe();
     this.applyEncoding();
     if (mode !== this.mode) {
       this.mode = mode;
@@ -506,12 +525,14 @@ export class HostSession extends HostSessionFlows {
       intent: this.intent,
       phase: this.phase(),
       error: this.error,
+      pendingQuality: this.qualityRequests.pending,
     };
     const prev = this.view;
     if (
       prev.intent === next.intent &&
       prev.phase === next.phase &&
-      prev.error === next.error
+      prev.error === next.error &&
+      prev.pendingQuality === next.pendingQuality
     ) {
       return;
     }

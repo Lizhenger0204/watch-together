@@ -1,4 +1,4 @@
-import { sameQuality, type Quality } from "@project/shared";
+import type { Quality } from "@project/shared";
 import { useState } from "react";
 import {
   QUALITY_STEPS,
@@ -18,27 +18,33 @@ const FIELDS: { field: QualityField; label: string }[] = [
 
 /**
  * 播放器控制列「畫質」彈出面板（房主，streaming.md §2）：三條分段滑桿。
- * 拖曳時只改畫面上的草稿，放開（或鍵盤調整後放開按鍵）才送出；
- * 送出後草稿保留到伺服器廣播的畫質追上為止，避免滑桿跳回舊值。
+ * 拖曳時只改畫面上的草稿，放開（或鍵盤調整後放開按鍵、失去焦點）才送出。
+ * 送出後由房間層追蹤「最後的選擇」（`pending`），面板顯示它直到房間廣播追上為止；
+ * 請求被拒或逾時時 `pending` 會清掉，面板自動回到房間真實的畫質，不需要重開面板。
  */
 export function QualityPanel({
   quality,
+  pending,
   source,
   onChange,
 }: {
+  /** 房間目前的畫質（最近一次廣播）。 */
   quality: Quality;
+  /** 房主最後一次選擇、尚未被廣播追上的畫質。 */
+  pending: Quality | null;
   /** 片源高度與估計位元率；還沒選片時為 null。 */
   source: { height: number; bitrate: number | null } | null;
   onChange: (quality: Quality) => void;
 }) {
-  const [draft, setDraft] = useState<Quality | null>(null);
-  // 伺服器已採用草稿：清掉草稿（render 中依 props 調整 state，不需要 effect）。
-  if (draft && sameQuality(draft, quality)) setDraft(null);
-  const shown = draft ?? quality;
+  // 只在拖曳／按鍵調整到放開之前存在。
+  const [drag, setDrag] = useState<Quality | null>(null);
+  const shown = drag ?? pending ?? quality;
   const sourceHeight = source?.height ?? null;
 
   function commit() {
-    if (draft && !sameQuality(draft, quality)) onChange(draft);
+    if (!drag) return;
+    setDrag(null);
+    onChange(drag);
   }
 
   return (
@@ -46,9 +52,14 @@ export function QualityPanel({
       {FIELDS.map(({ field, label }) => {
         const steps = QUALITY_STEPS[field] as readonly Quality[QualityField][];
         const max = maxStepIndex(field, sourceHeight);
-        const index = stepIndex(field, shown, sourceHeight);
+        const index = stepIndex(field, shown);
         const value = steps[index]!;
-        const valueText = stepValueText(field, value, source?.bitrate ?? null);
+        const valueText = stepValueText(
+          field,
+          value,
+          source?.bitrate ?? null,
+          sourceHeight,
+        );
         const id = `quality-${field}`;
         return (
           <div key={field} className="grid gap-1.5">
@@ -71,7 +82,7 @@ export function QualityPanel({
               disabled={max < 0}
               aria-valuetext={valueText}
               onChange={(event) =>
-                setDraft(
+                setDrag(
                   withStep(
                     shown,
                     field,
@@ -82,6 +93,7 @@ export function QualityPanel({
               }
               onPointerUp={commit}
               onKeyUp={commit}
+              onBlur={commit}
             />
             <div
               aria-hidden
@@ -104,6 +116,7 @@ export function QualityPanel({
       {sourceHeight !== null && (
         <p className="text-xs text-white/60">
           片源 {sourceHeight}P，解析度不會超過片源。
+          {shown.height > sourceHeight ? "目前依片源高度送出。" : ""}
         </p>
       )}
     </div>

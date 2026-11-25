@@ -180,6 +180,7 @@ function HostView({
                   panel: (
                     <QualityPanel
                       quality={view.room.quality}
+                      pending={session.pendingQuality}
                       source={sourceInfo}
                       onChange={(quality) => host.setQuality(quality)}
                     />

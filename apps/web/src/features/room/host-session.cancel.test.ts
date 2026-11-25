@@ -19,7 +19,12 @@ import { flush, readySource, setup, snapshot } from "./host-session.fixtures";
 // 開播途中房主明確停止（streaming.md §9；取代原本「start 完成後才拆掉」的行為）：立刻作廢這次開播、銷毀傳輸、離開 starting，
 // live:true 已送出就撤回；之後晚到的結果不可再改狀態或顯示開播失敗。
 
-const idle = { intent: false, phase: "idle", error: null };
+const idle = {
+  intent: false,
+  phase: "idle",
+  error: null,
+  pendingQuality: null,
+};
 
 describe("開播途中按停止（假傳輸）", () => {
   test("start() 還沒完成：立刻銷毀並回到 idle；之後 start 完成也不送 live:true", async () => {

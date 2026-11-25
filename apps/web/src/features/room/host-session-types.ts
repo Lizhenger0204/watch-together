@@ -1,4 +1,9 @@
-import type { ClientMessageOf, Member, ServerMessage } from "@project/shared";
+import type {
+  ClientMessageOf,
+  Member,
+  Quality,
+  ServerMessage,
+} from "@project/shared";
 import { ApiError } from "../../lib/api";
 import {
   SignalDisconnectedError,
@@ -37,6 +42,8 @@ export type HostSessionView = {
   phase: HostPhase;
   /** 給房主看的可讀錯誤（開播失敗、轉發不可用、切換失敗、畫質套用失敗）。 */
   error: string | null;
+  /** 房主最後一次選的畫質檔位，還沒被房間廣播追上（畫質面板顯示它而不是舊廣播值）；沒有為 null。 */
+  pendingQuality: Quality | null;
 };
 
 export type HostRequest =

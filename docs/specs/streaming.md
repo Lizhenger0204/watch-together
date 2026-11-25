@@ -59,6 +59,9 @@
 - 房間只記住**檔位**（protocol.md 的 `Quality`）。實際編碼參數由房主端 `resolveQuality(quality, sourceBitrate)` 算出 `EncodingTarget { targetHeight, maxBitrate, maxFramerate | null }` 再交給傳輸層。
 - **原片位元率**：選檔後以 `檔案大小 × 8 ÷ 片長` 估計（含音軌，`estimateSourceBitrate`）。量不到時用 15 Mbps（`SOURCE_BITRATE_FALLBACK`），最高 50 Mbps（`SOURCE_BITRATE_MAX`）。檔位是「原片」時換片會依新片重新估計並套用。
 - 調整時房主送 `room:update { quality }`，收到 `room:updated` 後對現有傳輸 `setQuality(encodingTarget)`（`setParameters`，不重建連線）。開播、停播、切換傳送方式或斷線同步中暫時停用畫質面板。
+- **連續調整以「最後的選擇」為準**（`host-session-quality.ts`）：每次放開滑桿都與「最後的選擇」比較（不是與廣播來的舊值比較）後送出；面板顯示最後的選擇，直到房間廣播追上（收到的 `room:updated` 數 ≥ 被接受的請求數）才改回房間的畫質，中間延遲到達的舊廣播不會把滑桿拉回去。最後一筆被拒絕或逾時就立刻回到房間真實的畫質並顯示錯誤；重新驗證、斷線或超過 10 秒仍無廣播也一樣。
+- **滑桿位置就是房間設定的檔位，不因片源而被夾住。** 房間設定不因片源而被改寫：片源 1000P、設定 1080P 時，解析度滑桿停在 1080P、右上角顯示實際送出的「1000P（片源）」，可選檔位只有 720P／900P，往左拉到 900P 就是一次可提交的變更；高於片源的檔位淡化且拉過去會被夾回。片源只有 720P 以上、900P 以下時只有 720P 可選，一樣能從 1080P 設定直接選到 720P。
+- 位元率滑桿的「原片」顯示的估計值與實際送出的上限一致（最高 50 Mbps）。
 - 收看者不顯示畫質控制。
 - **4K 片源要縮放**：`scaleResolutionDownBy = max(1, videoHeight / 目標高度)`，否則會以 4K 編碼。
 - `videoTrack.contentHint = 'motion'`；`degradationPreference = 'maintain-framerate'`。

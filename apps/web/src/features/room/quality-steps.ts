@@ -2,6 +2,7 @@ import {
   BITRATE_STEPS,
   FRAMERATE_STEPS,
   RESOLUTION_STEPS,
+  sourceBitrateOrFallback,
   type Quality,
 } from "@project/shared";
 import { formatMbps } from "./room-state";
@@ -29,18 +30,28 @@ export function stepLabel<F extends QualityField>(
   return String(step);
 }
 
-/** 滑桿右上角的目前值。原片位元率附上估計值。 */
+/**
+ * 滑桿右上角的目前值。原片位元率附上估計值（與實際送出的上限一致，最高 50 Mbps）。
+ * 解析度的設定高於片源時顯示實際送出的片源高度，和可選的檔位區分開來
+ * （例如設定 1080P、片源 1000P：顯示「1000P（片源）」，可選檔位只有 720P／900P）。
+ */
 export function stepValueText<F extends QualityField>(
   field: F,
   step: Step<F>,
   sourceBitrate: number | null,
+  sourceHeight: number | null = null,
 ): string {
   if (field === "bitrate") {
     if (step !== "source") return formatMbps(step as number);
-    return sourceBitrate ? `原片（約 ${formatMbps(sourceBitrate)}）` : "原片";
+    return sourceBitrate
+      ? `原片（約 ${formatMbps(sourceBitrateOrFallback(sourceBitrate))}）`
+      : "原片";
   }
   if (field === "fps") return step === "source" ? "原片" : `${step} FPS`;
-  return `${step}P`;
+  const height = step as number;
+  return sourceHeight && sourceHeight < height
+    ? `${sourceHeight}P（片源）`
+    : `${height}P`;
 }
 
 /**
@@ -60,16 +71,15 @@ export function maxStepIndex(
   return index;
 }
 
-/** 目前檔位在滑桿上的位置：超出可選範圍時顯示在最高可選檔位。 */
-export function stepIndex(
-  field: QualityField,
-  quality: Quality,
-  sourceHeight: number | null,
-): number {
+/**
+ * 設定值在滑桿上的位置。**不夾到可選範圍**：房間設定可以高於片源
+ * （例如設定 1080P、片源 1000P），此時滑桿停在 1080P，使用者往左拉到 900P 才有「變更」可以提交。
+ */
+export function stepIndex(field: QualityField, quality: Quality): number {
   const index = (QUALITY_STEPS[field] as readonly unknown[]).indexOf(
     quality[field],
   );
-  return Math.max(0, Math.min(index, maxStepIndex(field, sourceHeight)));
+  return Math.max(0, index);
 }
 
 /** 把滑桿位置換成新的畫質（超出可選範圍時夾到最高可選檔位）。 */

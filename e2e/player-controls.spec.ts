@@ -49,12 +49,21 @@ for (const viewport of [
     expect(panelBox.y + panelBox.height).toBeLessThanOrEqual(
       playerBox.y + playerBox.height + 0.5,
     );
-    // 面板內的選項在窄視窗仍可點選。
-    await panel.getByRole("button").first().scrollIntoViewIfNeeded();
-    await expect(panel.getByRole("button").first()).toBeVisible();
-
-    // 開啟後焦點進面板；Esc 關閉並還給畫質按鈕。
+    // 開啟後焦點先進面板。
     await expect(panel).toBeFocused();
+
+    // 面板比播放器高時在面板內捲動；最下面的 FPS 滑桿捲進來後仍落在播放器內、可用鍵盤操作。
+    const fps = panel.getByLabel("FPS");
+    await fps.scrollIntoViewIfNeeded();
+    const fpsBox = (await fps.boundingBox())!;
+    expect(fpsBox.y).toBeGreaterThanOrEqual(playerBox.y);
+    expect(fpsBox.y + fpsBox.height).toBeLessThanOrEqual(
+      playerBox.y + playerBox.height + 0.5,
+    );
+    await fps.press("End");
+    await expect(fps).toHaveAttribute("aria-valuetext", "原片");
+
+    // 從面板內的滑桿按 Esc 關閉，焦點還給畫質按鈕。
     await host.keyboard.press("Escape");
     await expect(panel).toBeHidden();
     await expect(trigger).toBeFocused();
