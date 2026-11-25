@@ -117,9 +117,19 @@ export function roomExit(view: RoomView): RoomExit | null {
   if (view.closedBy === "kicked" || reason === "kicked") {
     return { notice: "你已被房主請出房間。如果是誤會，請向房主要新的邀請碼。" };
   }
-  if (view.closedBy || reason === "room_closed") {
+  if (view.closedBy === "host_closed") {
+    return { notice: "房主已關閉房間。" };
+  }
+  if (view.closedBy === "expired") {
     return {
-      notice: "房間已關閉（閒置太久或已超過 24 小時）。請房主重新建立房間。",
+      notice: "房間已到期（閒置太久或已超過 24 小時）。請房主重新建立房間。",
+    };
+  }
+  if (reason === "room_closed") {
+    // 只有 4001、沒收到 room:closed（例如連到已關閉的房間）：不知道是哪一種。
+    return {
+      notice:
+        "房間已關閉（房主關閉，或閒置太久、已超過 24 小時）。請向房主確認。",
     };
   }
   if (reason === "unauthorized") {

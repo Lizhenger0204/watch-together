@@ -143,10 +143,29 @@ describe("roomExit", () => {
   test("收到 room:closed 就離開（不必等關閉碼）", () => {
     expect(
       roomExit({ ...initialRoomView, closedBy: "expired" })?.notice,
-    ).toContain("房間已關閉");
+    ).toContain("房間已到期");
     expect(
       roomExit({ ...initialRoomView, closedBy: "kicked" })?.notice,
     ).toContain("請出房間");
+  });
+
+  test("依 closedBy 區分房主關閉與到期", () => {
+    const hostClosed = roomExit({
+      ...initialRoomView,
+      closedBy: "host_closed",
+    })?.notice;
+    expect(hostClosed).toContain("房主已關閉房間");
+    expect(hostClosed).not.toContain("24 小時");
+    const expired = roomExit({
+      ...initialRoomView,
+      closedBy: "expired",
+    })?.notice;
+    expect(expired).toContain("24 小時");
+    expect(expired).not.toContain("房主已關閉");
+    // 沒收到 room:closed、只有 4001：不知道原因，兩種都提到。
+    const unknown = roomExit(closed("room_closed"))?.notice;
+    expect(unknown).toContain("房主關閉");
+    expect(unknown).toContain("24 小時");
   });
 });
 

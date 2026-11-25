@@ -327,7 +327,7 @@ class TransportError extends Error { code; message; memberId?; cause? }
 
 - **收到不是自己要求的 `stream:status { live: false }` 廣播**、手上又有傳輸時：拆掉傳輸，依開播意圖重新開播（伺服器可能是被另一分頁接手或主動改為未開播）。
 - **傳輸 `onState` 為 `error`**（整體無法繼續）：取消開播意圖並送 `stream:status { live: false }`，讓收看者停止舊連線；顯示可讀錯誤。
-- **個別收看者的 `PEER_FAILED` 不顯示給房主**：由傳輸自己 `removePeer` 清理，房主只在成員列表看到該收看者離線。
+- **個別收看者的 `PEER_FAILED` 不顯示給房主**：由傳輸自己 `removePeer` 清理。個別失敗不影響 `room:members` 的 `online`。
 
 ### 匯出位置（p2p/ 與 relay/ 的交付）
 
