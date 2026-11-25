@@ -21,7 +21,7 @@ import {
 import { ApiError } from "../lib/api";
 import { navigate } from "../lib/router";
 import type { ConnectionState } from "../lib/signal";
-import { roomToken } from "../lib/storage";
+import { liveIntent, roomToken } from "../lib/storage";
 
 type Room = ReturnType<typeof useRoom>;
 
@@ -342,8 +342,12 @@ export function RoomPage({ roomId }: { roomId: string }) {
 
   const closed = closedMessage(view);
   if (closed) {
+    const leaveClosed = () => {
+      liveIntent.set(roomId, false);
+      navigate("/");
+    };
     return (
-      <Layout>
+      <Layout onBrandClick={leaveClosed}>
         <div className="mx-auto max-w-sm border-t border-zinc-200 pt-6">
           <h1 className="mb-2 text-xl font-bold text-zinc-900">
             {closed.title}
@@ -351,7 +355,7 @@ export function RoomPage({ roomId }: { roomId: string }) {
           <p className="mb-6 text-sm text-zinc-500">{closed.detail}</p>
           <div className="flex gap-2">
             <Button onClick={() => location.reload()}>重新整理</Button>
-            <Button variant="secondary" onClick={() => navigate("/")}>
+            <Button variant="secondary" onClick={leaveClosed}>
               回首頁
             </Button>
           </div>
@@ -374,10 +378,10 @@ export function RoomPage({ roomId }: { roomId: string }) {
     ) {
       return;
     }
-    if (view.you?.role === "host") {
-      // 房主確認離開房間時撤銷開播意圖，但保留房主憑證，避免返回選片時自動對外開播。
-      room.host?.setIntent(false);
-    }
+    // 不論快照是否已送達（view.you 可能尚未建立），主動離房都撤銷本分頁已保存的開播意圖，
+    // 但保留房主憑證；收看者原本 intent 為 false，呼叫 setIntent(false) 為 no-op。
+    room.host?.setIntent(false);
+    liveIntent.set(roomId, false);
     navigate("/");
   }
 

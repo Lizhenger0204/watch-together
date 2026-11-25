@@ -151,4 +151,41 @@ test("房主選片前顯示片名，確認離開房間後返回再選片須手�
   // 手動點擊開始直播後才對外恢復播放。
   await startLive(host, "h264-aac");
   await expectPlaying(viewer);
+
+  // 直播中重新整理，在首則 room:snapshot 抵達前（仍顯示「連線中…」）按離開房間，
+  // 返回再選片也須撤銷開播意圖，不得自動對外開播。
+  let holdSnapshot = true;
+  await host.routeWebSocket(/\/ws$/, (ws) => {
+    const server = ws.connectToServer();
+    ws.onMessage((message) => server.send(message));
+    server.onMessage((message) => {
+      if (
+        holdSnapshot &&
+        typeof message === "string" &&
+        message.includes('"room:snapshot"')
+      ) {
+        return;
+      }
+      ws.send(message);
+    });
+  });
+  await host.reload();
+  await expect(host.getByText("連線中…", { exact: true })).toBeVisible();
+  await host.getByRole("button", { name: "離開房間", exact: true }).click();
+  await expect(host).toHaveURL("/");
+
+  holdSnapshot = false;
+  await host.goBack();
+  await expect(host).toHaveURL(/\/rooms\//);
+  await expect(
+    host.getByRole("heading", { name: "選擇要播放的影片", exact: true }),
+  ).toBeVisible();
+  await playMovie(host, "h264-aac");
+  await expect(
+    host.getByRole("heading", { name: "h264-aac", exact: true }),
+  ).toBeVisible();
+  await expect(
+    host.getByRole("button", { name: "開始直播", exact: true }),
+  ).toBeEnabled();
+  await expectWaiting(viewer);
 });
