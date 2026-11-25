@@ -628,3 +628,18 @@ T-118 第二輪審查（GPT ultra fast，66a7155）：第一輪 8 項中 6 項�
    - 第三輪複驗（GPT，`dab4961`）：重複 DELETE 403 通過；退回 1 項應修（缺授權回 401 的 DELETE 在記次前提前返回，會漏計）。
    - 第四輪複驗（GPT，`f83f777`）：**通過（可合併）**。授權檢查前記次與反向實驗（各送一次無授權 401 DELETE 再正常刪除，實送 6 筆如預期失敗）均通過；四項固定檢查全綠（Node 2、Vitest 519、Signal 134、E2E 7/7 耗時 36.0 秒，合計 662 項通過）；7 個變更檔介於 1,124～13,985 bytes，全部低於 20,000 bytes。
    - 以 fast-forward 合併進 `main`（`18c6010..f83f777`）。
+
+### T-124（Gemini 對話「登記播放器與聊天室功能需求」+ 監工審查修訂，2026-11-25）— DONE
+1. 做了什麼：
+   - **設計規範 `DESIGN.md`（`270d077`）**：建立藍白基本色（`#FFFFFF`／`#F5F6F7`／高對比主藍 `#0072B2`，懸停 `#005A8D`，對白底 5.19∶1、淺灰底 4.79∶1、淺藍底 4.86∶1 符合 WCAG AA ≥ 4.5∶1）、扁平低圓角（影片 0px 直角、按鈕與輸入框上限 4px）、片名統一置於影片正下方、最多 4 種字號（最小 12px）、全站唯一使用 `lucide-react`（統一 `strokeWidth={1.75}`）與桌面成員列表限高獨立捲動規範。
+   - **依賴新增**：於 `apps/web` 安裝 runtime 依賴 `lucide-react@1.78.0`（通過 pnpm 供應鏈與 deprecated 檢查，取代文字按鈕、Unicode 符號與手寫 SVG，供 T-124 與後續 T-125 共用控制列使用）。
+   - **全站藍白扁平改版（`style.css`、`Layout.tsx`、`ui.tsx`、`HomePage.tsx`、`JoinForm.tsx`、`RoomPage.tsx`、`InviteCodeCard.tsx`、`MemberList.tsx`、`StreamSettings.tsx`、`HostSourcePlayer.tsx`、`ViewerPlayer.tsx`）**：取消暗黑霓虹紫與大圓角卡片套娃，改以純白與 1px 細線分隔；片名移至影片正下方且待播時顯示本地片名；房主與收看端播放器改用無底框 Lucide 圖示控制列並置於全螢幕容器內；桌面端 `MemberList` 加上 `lg:max-h-40 lg:overflow-y-auto` 確保滿房 8 人時所有播放設定（含鎖定房間）於 1366×768 首屏可見；頂部新增防誤觸「離開房間」與品牌連結 `onBrandClick`，離房僅撤銷本分頁 `liveIntent`（不寫入跨分頁停播標記、保留房主憑證），跨分頁停播標記專留給「停止直播」；完整保留 T-128 `busy={busy || !online}` 與同步提示文案，以及 T-130 `inviteCodeVersion` 換碼確認邏輯。
+   - **回歸測試（`e2e/p2p-recovery.spec.ts`）**：新增實機 Chrome 測試涵蓋待播顯示本地片名、直播中取消／確認離房、雙分頁同步中離房不影響原直播分頁重整恢復、以及單分頁同步中離房返回選片須手動開播。
+2. 介面變動：無 REST／WebSocket／`packages/shared` 契約變動；`HostSourcePlayer` 新增選填 `belowTitle`／`belowAction`，`InviteCodeCard` 新增選填 `hostName`／`onlineCount`，`Layout` 新增選填 `onBrandClick`。
+3. 已知限制：共用控制列元件、劇院模式、細緻畫質與聊天彈幕依規劃留待 T-125～T-127 執行。
+4. 審查與驗證：
+   - 第一輪審查（GPT，`ae07d5e`）：退回修正（阻擋 1 項：確認離房未撤銷開播意圖，返回選片會自動開播。應修 3 項：開播前看不到本地片名；`#0095D9` 藍白對比 3.33∶1 不足 4.5∶1；滿房 8 人時 1366×768 首屏看不到鎖定房間。建議 1 項：空狀態 `Film` `strokeWidth` 改為 `1.75`）。
+   - 第二輪複驗（GPT，`fec5293`）：片名、高對比藍（5.19∶1）、滿房首屏（播放設定底緣 704px／鎖定房間 690px）、圖示與 T-128 整合均通過；退回 1 項阻擋（重整同步中尚未收到快照就離房，因 `view.you` 尚未建立而漏清開播意圖）。
+   - 第三輪複驗（GPT，`62c4bc7`）：單分頁同步中離房通過；退回 1 項阻擋（同步中的第二房主分頁離房呼叫 `setIntent(false)` 觸發 `onExplicitStop` 寫入跨分頁停播標記，導致原直播分頁重整後不再自動恢復）。
+   - 第四輪複驗（GPT，`fbdd292`，已 rebase 至含 T-128 與 T-131 之 `main 9011660`）：**通過（可合併）**。雙分頁離房、單分頁直播中／連線中離房、單純重整恢復與明確停播全部通過實測；四項固定檢查與建置全綠（Node 2、Vitest 519、Signal 134，合計 655 項測試；web／signal build 成功；E2E 8/8 耗時 49.7 秒）；扣除 `pnpm-lock.yaml` 後 14 個變更檔均低於 20,000 bytes（最大 `RoomPage.tsx` 14,338 bytes、`p2p-recovery.spec.ts` 8,511 bytes）。
+   - 以 fast-forward 合併進 `main`（`9011660..fbdd292`）。
