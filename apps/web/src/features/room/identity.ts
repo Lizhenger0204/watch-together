@@ -10,12 +10,18 @@ import {
 import { ApiError, joinRoom } from "../../lib/api";
 import type { IdentityCheck } from "../../lib/signal";
 import { roomInviteCode, roomToken } from "../../lib/storage";
+import { withTabLock } from "../../lib/tab-lock";
 
 export type { IdentityCheck };
 
 const pendingChecks = new Map<string, Promise<IdentityCheck>>();
-// 僅記房號。即使瀏覽器封鎖 localStorage，本分頁也能為曾加入的房間比對新邀請碼。
-const rememberedRooms = new Set<string>();
+/**
+ * 邀請碼 → 已確認「不是這個碼的房間」的身份（房號＋憑證）。遇到加入限流時，
+ * 下一個時窗從尚未比對的房號接著比，全部比完就直接回傳原本的滿房或超限提示。
+ * 只存在分頁記憶體；邀請碼對應的房間不會改變，憑證換了就重新比對。
+ */
+const comparedRooms = new Map<string, Set<string>>();
+const comparedKey = (roomId: string, token: string) => `${roomId}\0${token}`;
 
 async function fetchIdentityIce(roomId: string, token: string) {
   const response = await fetch(`/api/rooms/${roomId}/ice`, {
@@ -50,25 +56,13 @@ export function checkIdentity(
   return check;
 }
 
+/** 持有憑證的房號（共用儲存與本分頁記憶體，例如存不進去的房主憑證）。 */
 function roomsWithTokens() {
-  try {
-    const store = globalThis.localStorage;
-    for (let i = 0; store && i < store.length; i++) {
-      const roomId = /^room:(.+):token$/.exec(store.key(i) ?? "")?.[1];
-      if (
-        roomId &&
-        joinRoomRequestSchema.shape.existingRoomId.safeParse(roomId).success
-      ) {
-        rememberedRooms.add(roomId);
-      }
-    }
-  } catch {
-    // 瀏覽器可能禁止讀取 localStorage，仍使用分頁記憶體中的房號。
-  }
-  for (const id of rememberedRooms) {
-    if (!roomToken.get(id)) rememberedRooms.delete(id);
-  }
-  return [...rememberedRooms];
+  return roomToken
+    .rooms()
+    .filter(
+      (id) => joinRoomRequestSchema.shape.existingRoomId.safeParse(id).success,
+    );
 }
 
 async function verifyStoredIdentity(roomId: string, token: string) {
@@ -122,7 +116,6 @@ async function joinNew(body: JoinRoomRequest, roomIds: string[]) {
         await conditionalJoin({ ...body, excludeRoomIds: roomIds }),
       )
     : await joinRoom(body.inviteCode, body.nickname);
-  rememberedRooms.add(joined.roomId);
   // 新身份可能在請求途中由另一分頁寫入。先保住房主或既有成員的憑證。
   let current = roomToken.get(joined.roomId);
   while (current && current !== joined.memberToken) {
@@ -149,10 +142,7 @@ async function join(inviteCode: string, nickname: string) {
   const token = known && roomToken.get(known);
   if (known && token) {
     const check = await verifyStoredIdentity(known, token);
-    if (check === "valid") {
-      rememberedRooms.add(known);
-      return { roomId: known, reused: true };
-    }
+    if (check === "valid") return { roomId: known, reused: true };
     if (check === "unknown") throw new ApiError("INTERNAL");
     throw new ApiError(
       check === "unauthorized" ? "UNAUTHORIZED" : "ROOM_NOT_FOUND",
@@ -177,9 +167,11 @@ async function join(inviteCode: string, nickname: string) {
 
   // 鎖房、滿房或名單超過上限時，已有的席位仍可沿用。
   let identityExpired = false;
+  const compared = comparedRooms.get(inviteCode) ?? new Set<string>();
+  comparedRooms.set(inviteCode, compared);
   for (const roomId of roomIds) {
     const existing = roomToken.get(roomId);
-    if (!existing) continue;
+    if (!existing || compared.has(comparedKey(roomId, existing))) continue;
     try {
       const reused = reuseRoomResponseSchema.parse(
         await conditionalJoin({ ...body, existingRoomId: roomId }, existing),
@@ -193,9 +185,8 @@ async function join(inviteCode: string, nickname: string) {
       const check = await verifyStoredIdentity(roomId, existing);
       if (check === "unauthorized" || check === "room_closed")
         identityExpired = true;
-      // 若中途達到 IP 限流，下次重試會先檢查尚未比對的房號。
-      rememberedRooms.delete(roomId);
-      rememberedRooms.add(roomId);
+      // 確認仍有效才記下：若中途達到 IP 限流，下次重試只比對尚未比對的房號。
+      else if (check === "valid") compared.add(comparedKey(roomId, existing));
     }
   }
   if (identityExpired && admissionError?.code === "ROOM_NOT_FOUND") {
@@ -216,11 +207,16 @@ const pendingJoins = new Map<string, ReturnType<typeof join>>();
 export function joinKeepingIdentity(inviteCode: string, nickname: string) {
   const pending = pendingJoins.get(inviteCode);
   if (pending) return pending;
-  const enter = () => join(inviteCode, nickname);
-  const next = globalThis.navigator?.locks
-    ? navigator.locks.request("room:join", enter)
-    : enter();
-  const result = next.finally(() => pendingJoins.delete(inviteCode));
+  // 跨分頁依序：沒有 Web Locks 時以 IndexedDB 租約協調（lib/tab-lock.ts）。
+  // 進入後 join() 才讀身份，因此會看到前一個分頁剛存好的憑證。
+  const result = withTabLock("room:join", () =>
+    join(inviteCode, nickname),
+  ).finally(() => pendingJoins.delete(inviteCode));
   pendingJoins.set(inviteCode, result);
   return result;
+}
+
+/** 測試用：清空分頁記憶體中已比對過的房間。 */
+export function resetComparedRooms() {
+  comparedRooms.clear();
 }
