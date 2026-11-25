@@ -12,7 +12,8 @@
 | mkv | Chrome / Edge 非正式支援，多數 H.264/HEVC + AAC 可播 | 允許選擇，但以下方檢查為準；失敗時提示改用 mp4 |
 | 其他 | 不支援 | 檔案選擇器不列出 |
 
-- HEVC 需要房主電腦有硬體解碼，Windows 上的 Chrome / Edge 才能播放。
+- HEVC 是否能原生播放取決於作業系統、瀏覽器、可用的 HEVC 解碼器與檔案格式，必須以房主電腦的實際試播確認；不可只依平台名稱或 `canPlayType()` 宣告支援。房主仍限桌面 Chrome / Edge，並須能以 `captureStream()` 擷取影音。
+- 能力依據：[Chromium 影音支援說明](https://new.chromium.org/audio-video/) 列出 HEVC 的硬體支援條件；[Microsoft Edge 播放排查](https://learn.microsoft.com/en-us/troubleshoot/microsoft-edge/development/video-playback-issues) 說明 Windows Edge 的 HEVC 延伸模組及解碼器路徑限制。這不保證所有 HEVC profile、位元深度與容器都能播放。
 - 檔案選擇器 `accept`：`video/mp4,video/quicktime,.mp4,.m4v,.mov,.mkv`。
 
 ### 開播前檢查（全部通過才允許開播）
