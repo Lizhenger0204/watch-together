@@ -80,6 +80,10 @@ const snapshot = {
   you: { memberId: "m", role: "host" },
 };
 
+async function flushMicrotasks() {
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+}
+
 function setup(options: Partial<SignalClientOptions> = {}) {
   const sockets: FakeSocket[] = [];
   const { timers, advance } = fakeTimers();
@@ -311,8 +315,12 @@ describe("SignalClient", () => {
     }
     current().open();
     current().receive(snapshot);
+    const closed = states.length;
     resolve("unauthorized");
-    await Promise.resolve();
+    // 等 verify().catch().then() 整條鏈跑完再斷言，否則還沒處理就先通過。
+    await flushMicrotasks();
+    expect(verifyIdentity).toHaveBeenCalledTimes(1);
+    expect(states.slice(closed)).toEqual([]);
     expect(states.at(-1)).toBe("open");
   });
 
