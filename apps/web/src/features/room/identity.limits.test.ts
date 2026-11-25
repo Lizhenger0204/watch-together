@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { JOIN_MAX_EXCLUDED_ROOMS } from "@project/shared";
 import { resetMemoryStorage, roomToken } from "../../lib/storage";
 import { FakeIndexedDB } from "../../lib/tab-lock.fixtures";
+import { comparedRooms } from "./compared-rooms";
 import { joinKeepingIdentity, resetComparedRooms } from "./identity";
 import { CODE, ROTATED, mockApi, persistedTokens } from "./identity.fixtures";
 
@@ -125,5 +126,50 @@ describe("沒有 Web Locks 的跨分頁加入", () => {
     ]);
     expect(api.admissions()).toBe(1);
     expect(joined.map((j) => j.reused).sort()).toEqual([false, true]);
+  });
+});
+
+describe("比對紀錄的淘汰", () => {
+  test("確認失效而清除的身份，從比對紀錄淘汰", async () => {
+    const ids = Array.from({ length: 3 }, () => crypto.randomUUID());
+    persistedTokens(ids.map((id) => [id, crypto.randomUUID()]));
+    let expired: string | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (path, init) => {
+        if (String(path).endsWith("/ice")) {
+          return expired && String(path).includes(expired)
+            ? Response.json(
+                { error: { code: "UNAUTHORIZED", message: "" } },
+                { status: 401 },
+              )
+            : Response.json({ iceServers: [] });
+        }
+        const body = JSON.parse(String(init?.body));
+        return body.existingRoomId
+          ? Response.json(
+              { error: { code: "ROOM_NOT_FOUND", message: "" } },
+              { status: 404 },
+            )
+          : Response.json(
+              { error: { code: "ROOM_FULL", message: "" } },
+              { status: 409 },
+            );
+      }),
+    );
+    await expect(joinKeepingIdentity(CODE, "朋友")).rejects.toMatchObject({
+      code: "ROOM_FULL",
+    });
+    expect(comparedRooms.entries()).toEqual([[CODE, ids]]);
+    // 另一個邀請碼比對時發現 ids[0] 失效：清除身份，也從 CODE 的紀錄淘汰。
+    expired = ids[0]!;
+    await expect(joinKeepingIdentity(ROTATED, "朋友")).rejects.toMatchObject({
+      code: "ROOM_FULL",
+    });
+    expect(roomToken.get(ids[0]!)).toBeNull();
+    expect(comparedRooms.entries()).toEqual([
+      [CODE, ids.slice(1)],
+      [ROTATED, ids.slice(1)],
+    ]);
   });
 });

@@ -11,17 +11,11 @@ import { ApiError, joinRoom } from "../../lib/api";
 import type { IdentityCheck } from "../../lib/signal";
 import { roomInviteCode, roomToken } from "../../lib/storage";
 import { withTabLock } from "../../lib/tab-lock";
+import { comparedRooms } from "./compared-rooms";
 
 export type { IdentityCheck };
 
 const pendingChecks = new Map<string, Promise<IdentityCheck>>();
-/**
- * 邀請碼 → 已確認「不是這個碼的房間」的身份（房號＋憑證）。遇到加入限流時，
- * 下一個時窗從尚未比對的房號接著比，全部比完就直接回傳原本的滿房或超限提示。
- * 只存在分頁記憶體；邀請碼對應的房間不會改變，憑證換了就重新比對。
- */
-const comparedRooms = new Map<string, Set<string>>();
-const comparedKey = (roomId: string, token: string) => `${roomId}\0${token}`;
 
 async function fetchIdentityIce(roomId: string, token: string) {
   const response = await fetch(`/api/rooms/${roomId}/ice`, {
@@ -69,6 +63,7 @@ async function verifyStoredIdentity(roomId: string, token: string) {
   const check = await checkIdentity(roomId, token);
   if (check === "unauthorized" || check === "room_closed") {
     roomToken.clearIfCurrent(roomId, token);
+    if (roomToken.get(roomId) !== token) comparedRooms.forget(roomId);
   }
   return check;
 }
@@ -167,11 +162,10 @@ async function join(inviteCode: string, nickname: string) {
 
   // 鎖房、滿房或名單超過上限時，已有的席位仍可沿用。
   let identityExpired = false;
-  const compared = comparedRooms.get(inviteCode) ?? new Set<string>();
-  comparedRooms.set(inviteCode, compared);
+  const compared = comparedRooms.forCode(inviteCode, (id) => roomToken.get(id));
   for (const roomId of roomIds) {
     const existing = roomToken.get(roomId);
-    if (!existing || compared.has(comparedKey(roomId, existing))) continue;
+    if (!existing || compared.has(roomId, existing)) continue;
     try {
       const reused = reuseRoomResponseSchema.parse(
         await conditionalJoin({ ...body, existingRoomId: roomId }, existing),
@@ -186,7 +180,7 @@ async function join(inviteCode: string, nickname: string) {
       if (check === "unauthorized" || check === "room_closed")
         identityExpired = true;
       // 確認仍有效才記下：若中途達到 IP 限流，下次重試只比對尚未比對的房號。
-      else if (check === "valid") compared.add(comparedKey(roomId, existing));
+      else if (check === "valid") compared.add(roomId, existing);
     }
   }
   if (identityExpired && admissionError?.code === "ROOM_NOT_FOUND") {
