@@ -602,3 +602,15 @@ T-118 第二輪審查（GPT ultra fast，66a7155）：第一輪 8 項中 6 項�
    - 第三輪複驗（GPT，`a7bd3e6`）：第二輪兩項應修在真實 Chrome 通過；另抓到阻擋項（晚到的身份沿用回應透過無版本 `set()` 覆寫請求期間他頁寫入的新版對照）與兩處測試保密細節。
    - 第四輪複驗（GPT，`f89a73c`）：**通過（可合併）**。真實 Chrome 雙分頁與跨裝置情境、5 項合成保密反例、四項固定檢查全綠（啟動器 2、shared 69、web 421、signal 134、E2E 6，合計 632 測試；所有非豁免變更檔低於 20,000 bytes，`room-do.ts` 由 24,469 縮至 24,142 bytes）。
    - 以 fast-forward 合併進 `main`（`89926ce..f89a73c`）。
+
+### T-128（Gemini 子對話 + 監工修訂，2026-11-25）— DONE
+1. 做了什麼：
+   - **規格更新（契約先行，`4fc3e1c`）**：更新 `docs/specs/streaming.md` §6「切模式失敗的保守處理」，明確區分 `room:update` 明確被拒（依意圖原模式重建）、等待 `room:updated` 或 `room:update` 請求逾時（結果不明，維持 `waiting` 並以 `SignalClient.resync()` 重新驗證，依新 `room:snapshot` 模式重建）、以及連線中斷（`SignalDisconnectedError`，等自動重連 snapshot 重建）。
+   - **`SignalClient.resync()` 與 `SignalTimeoutError`（`apps/web/src/lib/signal.ts`、`signal.test.ts`）**：新增 `SignalTimeoutError extends ApiError` 區分本機逾時與伺服器明確回傳 `ack ok:false (INTERNAL)`；實作 `resync()`（尚未 `start()`、已 `stop()` 或終止關閉碼時 no-op；先 `teardown()` 再 `close(1000, "resync")`、清退避計時器、歸零 `attempt`、遞增 `session` 使舊 `verifyIdentity()` 查詢過期並立即開新連線），且重複 `start()` 不多開 socket。
+   - **`HostSession` 與房間 UI（`host-session-types.ts`、`host-session-base.ts`、`host-session-flows.ts`、`host-session.ts`、`RoomPage.tsx`、`StreamSettings.tsx`）**：`confirmMode()` 逾時 reject `SignalTimeoutError`，連線離開 `open` 或 `closed` 時 `clearModeWaiter(new SignalDisconnectedError())` 立即取消廣播計時器避免打斷自動重連；逾時期間以 `resyncTarget` 鎖定重建與舊連線非 snapshot 訊息，待新 `room:snapshot` 依伺服器模式重建並更新／清除提示；同步／斷線期間 `StreamSettings` 傳入 `busy={busy || !online}` 停用模式與畫質選項，保留「停止直播」可操作；`RoomPage` 區分連線同步與片源未就緒提示。
+2. 介面變動：對外 REST／WebSocket 協定與 `packages/shared` 無變動；`SignalClient` 新增 `resync()` 與 `SignalTimeoutError`、`HostSessionClient` 新增 `resync()`。
+3. 已知限制：非直播中呼叫 `setMode()` 若 `room:update` 逾時的規範與狀態機超出 §6 直播中切模式範圍，留待後續評估。
+4. 審查與驗證：
+   - 第一輪審查（GPT，`eae797f`）：退回修正（阻擋 2 項：`ack ok:true` 後在 `room:updated` 前 `1006` 斷線，10 秒舊計時器誤打斷自動重連；舊連線驗證前 `4400` 查詢晚到誤殺 `resync()` 新連線。應修 2 項：同步期間模式／畫質選項仍可點；首次 `start()` 前呼叫 `resync()` 留兩條 socket）。
+   - 第二輪複驗（GPT，`809f386`）：**通過（可合併）**。第一輪 4 項全過實測與真實 Chrome 截圖複驗；四項固定檢查全綠（Node 2、Vitest 512、Workers 134，合計 648 測試；E2E 6/6，33.8 秒；額外 Chrome 複驗 2 項通過）；所有 11 個非豁免變更檔低於 20,000 bytes（最大 `signal.test.ts` 19,002 bytes、`host-session.ts` 17,285 bytes）。
+   - 以 fast-forward 合併進 `main`（`8aed6ea..809f386`）。
