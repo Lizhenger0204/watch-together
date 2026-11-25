@@ -86,6 +86,8 @@ export class ViewerSession {
   private ready = false;
   private buffer: SignalMessage[] = [];
   private offerSeen = false;
+  /** 當代 WHEP 回 409（STREAM_NOT_LIVE）：維持 waiting，下一個開播廣播再拉一次。 */
+  private retryOnLive = false;
   private offerTimer: unknown = null;
   private statusTimer: unknown = null;
   private transportState: MemberState = "waiting";
@@ -208,7 +210,7 @@ export class ViewerSession {
         return;
       case "stream:status":
         if (!this.member) return;
-        if (message.live && !this.live) {
+        if (message.live && (!this.live || this.retryOnLive)) {
           this.live = true;
           this.connect();
         } else if (!message.live) {
@@ -286,6 +288,7 @@ export class ViewerSession {
     if (!transport) return;
     const generation = this.generation;
     const current = () => generation === this.generation;
+    this.retryOnLive = false;
     this.transportState = "connecting";
     transport.start().then(
       () => {
@@ -311,7 +314,18 @@ export class ViewerSession {
         }
       },
       (error: unknown) => {
-        if (current()) this.fail(error);
+        if (!current()) return;
+        // 轉發尚未有可收看的發布（§9）：不是失敗，保留傳輸等下一個開播廣播。
+        if (
+          error instanceof TransportError &&
+          error.code === "STREAM_NOT_LIVE"
+        ) {
+          this.retryOnLive = true;
+          this.transportState = "waiting";
+          this.publish();
+          return;
+        }
+        this.fail(error);
       },
     );
   }
@@ -356,6 +370,7 @@ export class ViewerSession {
     this.ready = false;
     this.buffer = [];
     this.offerSeen = false;
+    this.retryOnLive = false;
     this.transportState = "waiting";
     this.stats = null;
     this.error = null;

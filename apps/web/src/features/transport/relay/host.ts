@@ -4,7 +4,9 @@
  * - 單一上傳：一條 RTCPeerConnection 送到 Cloudflare Realtime，收看者由 SFU 轉發。
  * - 首次 offer 一律保留 video、audio 各一個 sendonly transceiver（缺軌時 track 為 null），
  *   之後換片或補軌都用同一個 sender 的 replaceTrack，不必重新協商。
- * - 同一房間的 WHIP 建立與刪除透過 PublishQueue 依序完成。
+ * - 同一房間的 WHIP 建立與刪除透過 PublishQueue 依序完成。停止時依 POST 進度取消：
+ *   還沒送 POST 就立刻釋放輪次；POST 在途就等回應再清理；已取得 Location 就立刻
+ *   送冪等的 DELETE。`start()` 在停止時立刻結束，不等已關閉連線上的原生操作。
  * - `removePeer` 在轉發模式是 no-op：收看者各自向 SFU 拉流，房主端沒有逐人的連線。
  */
 import { QUALITY_PRESETS, type Quality } from "@project/shared";
@@ -28,6 +30,7 @@ import {
   openPeerConnection,
   relayError,
   sampleStats,
+  untilStopped,
 } from "./connection";
 import { postOffer } from "./http";
 import { publishQueue } from "./publish-queue";
@@ -44,8 +47,10 @@ interface Run {
   /** 同一條連線上的 sender 操作依序執行（setParameters 不可並行）。 */
   pending: Promise<void>;
   cleanup?: Promise<void>;
-  /** publish() 已經跑完（成功開播）。還沒跑完時由 publish() 在下一個檢查點自行清理。 */
-  published?: boolean;
+  /** POST 已送出、回應還沒處理完：停止時不能先釋放輪次，交給 publish() 收尾。 */
+  posting?: boolean;
+  /** 已經回報過連線中斷；同一次斷線不再重複回報。 */
+  failed?: boolean;
 }
 
 export const createRelayHostTransport: CreateHostTransport = (options) => {
@@ -114,7 +119,10 @@ export const createRelayHostTransport: CreateHostTransport = (options) => {
     return result;
   }
 
-  /** 釋放這一輪：有資源就 DELETE（含重試），之後才讓下一次 WHIP POST。 */
+  /**
+   * 釋放這一輪：有資源就 DELETE（含重試），之後才讓下一次 WHIP POST。
+   * 只執行一次，停止與 publish() 的檢查點重複呼叫也只刪一次。
+   */
   function cleanup(current: Run) {
     current.cleanup ??= (async () => {
       try {
@@ -134,11 +142,13 @@ export const createRelayHostTransport: CreateHostTransport = (options) => {
 
   function watch(current: Run, pc: RtcPeerConnection) {
     const check = () => {
-      if (current.abort.signal.aborted || run !== current) return;
+      if (current.abort.signal.aborted || run !== current || current.failed)
+        return;
       if (
         pc.connectionState === "failed" ||
         pc.iceConnectionState === "failed"
       ) {
+        current.failed = true;
         setState("error");
         emitError(new TransportError("RELAY_FAILED", "轉發連線中斷"));
       }
@@ -149,8 +159,10 @@ export const createRelayHostTransport: CreateHostTransport = (options) => {
 
   async function publish(current: Run) {
     const { signal } = current.abort;
-    current.release = await queue.turn();
-    if (signal.aborted) return abandon(current);
+    const release = await queue.turn();
+    current.release = release;
+    // 排隊時就停止：還沒有資源，直接讓出輪次（stop() 當時還拿不到 release）。
+    if (signal.aborted) return release();
     try {
       await queue.flushLeftovers(options.token);
       if (signal.aborted) return abandon(current);
@@ -182,16 +194,17 @@ export const createRelayHostTransport: CreateHostTransport = (options) => {
         await applyMedia(current, "audio");
       });
 
+      // 已取消回 null，不送 POST；沒有有效 offer 會丟 RELAY_FAILED。
       const sdp = await gatheredOffer(pc, signal);
-      // 已取消或沒有有效 offer：不送 POST。
-      if (!sdp) return abandon(current);
+      if (!sdp || signal.aborted) return abandon(current);
 
-      const resource = await postOffer(
-        options.roomId,
-        "whip",
-        options.token,
-        sdp,
-      );
+      current.posting = true;
+      let resource;
+      try {
+        resource = await postOffer(options.roomId, "whip", options.token, sdp);
+      } finally {
+        current.posting = false;
+      }
       // 取得 Location 後一律記下，停止或失敗時都依它 DELETE。
       current.location = resource.location;
       if (signal.aborted) return abandon(current);
@@ -201,7 +214,6 @@ export const createRelayHostTransport: CreateHostTransport = (options) => {
       sampleStats(pc, "send", signal, (stats) => {
         if (!destroyed && isIceConnected(pc)) events.emit("stats", stats);
       });
-      current.published = true;
       setState("live");
     } catch (error) {
       void cleanup(current);
@@ -216,9 +228,10 @@ export const createRelayHostTransport: CreateHostTransport = (options) => {
     starting = undefined;
     current.abort.abort();
     closePeerConnection(current.pc);
-    // 發布還沒跑完（含 POST 在途）時，publish() 在下一個檢查點自己 cleanup，
-    // 不能在這裡先釋放輪次，否則下一次 WHIP 可能比舊 POST 的回應先到。
-    if (current.published) void cleanup(current);
+    // POST 在途時由 publish() 等回應後自己 cleanup，不能在這裡先釋放輪次，
+    // 否則下一次 WHIP 可能比舊 POST 的回應先到。其餘情況立刻清理：還沒送 POST
+    // 就讓出輪次，已取得 Location 就送 DELETE，不等已關閉連線上的原生操作。
+    if (!current.posting) void cleanup(current);
     setState("idle");
   }
 
@@ -245,7 +258,8 @@ export const createRelayHostTransport: CreateHostTransport = (options) => {
         pending: Promise.resolve(),
       };
       run = current;
-      starting = publish(current).then(
+      // 停止時 start() 立刻結束；publish() 在背景跑到下一個檢查點收尾。
+      starting = untilStopped(publish(current), current.abort.signal).then(
         () => {
           if (current.abort.signal.aborted)
             throw new TransportError("RELAY_FAILED", "轉發已停止");

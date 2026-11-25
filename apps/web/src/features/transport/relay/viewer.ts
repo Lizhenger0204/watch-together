@@ -21,6 +21,7 @@ import {
   openPeerConnection,
   relayError,
   sampleStats,
+  untilStopped,
 } from "./connection";
 import { deleteResource, postOffer } from "./http";
 
@@ -29,6 +30,8 @@ interface Run {
   pc?: RtcPeerConnection;
   location?: string;
   deleted?: boolean;
+  /** 已經進入 failed；同一次斷線不再重複回報。 */
+  failed?: boolean;
 }
 
 export const createRelayViewerTransport: CreateViewerTransport = (options) => {
@@ -63,11 +66,14 @@ export const createRelayViewerTransport: CreateViewerTransport = (options) => {
 
   function watch(current: Run, pc: RtcPeerConnection) {
     const check = () => {
-      if (current.abort.signal.aborted || run !== current) return;
+      if (current.abort.signal.aborted || run !== current || current.failed)
+        return;
       if (
         pc.connectionState === "failed" ||
         pc.iceConnectionState === "failed"
       ) {
+        // 沒有 ICE restart：進入 failed 後等房間層重新 start()。
+        current.failed = true;
         setState("failed");
         if (!destroyed)
           events.emit(
@@ -98,8 +104,9 @@ export const createRelayViewerTransport: CreateViewerTransport = (options) => {
     pc.addTransceiver("video", { direction: "recvonly" });
     pc.addTransceiver("audio", { direction: "recvonly" });
 
+    // 已取消回 null；沒有有效 offer 會丟 RELAY_FAILED。
     const sdp = await gatheredOffer(pc, signal);
-    if (!sdp) return;
+    if (!sdp || signal.aborted) return;
     const resource = await postOffer(
       options.roomId,
       "whep",
@@ -141,7 +148,8 @@ export const createRelayViewerTransport: CreateViewerTransport = (options) => {
       const current: Run = { abort: new AbortController() };
       run = current;
       setState("connecting");
-      starting = pull(current).then(
+      // 停止時 start() 立刻結束；pull() 在背景跑到下一個檢查點收尾。
+      starting = untilStopped(pull(current), current.abort.signal).then(
         () => {
           if (current.abort.signal.aborted)
             throw new TransportError("RELAY_FAILED", "轉發已停止");

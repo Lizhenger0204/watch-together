@@ -24,17 +24,35 @@ export function relayUrl(roomId: string, role: RelayRole) {
   return `/api/rooms/${encodeURIComponent(roomId)}/${role}`;
 }
 
+/** 單次 DELETE 的期限；逾時視為失敗，沿用重試與待清理機制。 */
+export const DELETE_TIMEOUT_MS = 5_000;
+
+/** 沒有頁面位址（單元測試）時用來解析相對路徑的 origin。 */
+const FALLBACK_BASE = "http://same-origin.invalid/";
+
+/** 實際送出請求的網址：相對路徑依目前頁面解析。 */
+function requestUrl(roomId: string, role: RelayRole) {
+  const page = (globalThis as { location?: { href?: string } }).location?.href;
+  return new URL(relayUrl(roomId, role), page ?? FALLBACK_BASE);
+}
+
 /**
  * 只接受同一房間的資源路徑。Location 來自伺服器回應，若不檢查就照著 DELETE，
- * 被竄改的回應可能讓 token 被送到別的網址。
+ * 被竄改的回應可能讓 token 被送到別的網址。相對與同源的絕對網址都依實際請求的
+ * origin 解析，回傳的一律是路徑。
  */
-function resourcePath(roomId: string, location: string | null) {
+function resourcePath(
+  roomId: string,
+  role: RelayRole,
+  location: string | null,
+) {
   if (!location) return null;
   const prefix = `/api/rooms/${encodeURIComponent(roomId)}/relay/`;
   let path: string;
   try {
-    const url = new URL(location, "http://same-origin.invalid");
-    if (url.origin !== "http://same-origin.invalid") return null;
+    const request = requestUrl(roomId, role);
+    const url = new URL(location, request);
+    if (url.origin !== request.origin) return null;
     path = url.pathname;
   } catch {
     return null;
@@ -44,14 +62,33 @@ function resourcePath(roomId: string, location: string | null) {
     : null;
 }
 
+/**
+ * 錯誤碼對應（protocol.md REST、T-120）：
+ * - 409：WHIP 是房間還在 P2P（提示先切換），WHEP 是尚未開播，收看者維持 waiting。
+ * - 401／403：WHEP 是被踢、被淘汰或登記時已被移除；WHIP 是房主身份失效或不是房主。
+ */
 function postError(role: RelayRole, status: number) {
   if (status === 409)
-    return new TransportError("STREAM_NOT_LIVE", "房主尚未開播");
+    return new TransportError(
+      "STREAM_NOT_LIVE",
+      role === "whip"
+        ? "請先切換到轉發模式再發布。"
+        : "目前沒有可收看的轉發直播",
+    );
   if (status === 503)
     return new TransportError(
       "RELAY_UNAVAILABLE",
       "轉發模式目前無法使用，請房主改用「P2P 直連」。",
     );
+  if (status === 401 || status === 403) {
+    const message =
+      role === "whep"
+        ? "你已不在房間內，無法接收轉發。"
+        : status === 401
+          ? "房主身份已失效，請重新進入房間。"
+          : "只有房主可以開始轉發。";
+    return new TransportError("RELAY_FAILED", message);
+  }
   return new TransportError(
     "RELAY_FAILED",
     role === "whip"
@@ -87,7 +124,7 @@ export async function postOffer(
     });
   }
   if (response.status !== 201) throw postError(role, response.status);
-  const location = resourcePath(roomId, response.headers.get("Location"));
+  const location = resourcePath(roomId, role, response.headers.get("Location"));
   const answer = await response.text().catch(() => "");
   if (!location) {
     throw new TransportError("RELAY_FAILED", "轉發服務的回應缺少資源位置");
@@ -107,19 +144,36 @@ async function deleteOnce(
   location: string,
   token: string,
 ): Promise<DeleteOutcome> {
+  const abort = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // 不依賴 fetch 是否理會 abort：期限一到就結束這次嘗試。
+  const timeout = new Promise<"failed">((resolve) => {
+    timer = setTimeout(() => {
+      abort.abort();
+      resolve("failed");
+    }, DELETE_TIMEOUT_MS);
+  });
+  const attempt = (async (): Promise<DeleteOutcome> => {
+    try {
+      const response = await fetch(location, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+        // 關分頁時 destroy() 送出的 DELETE 也要送得到。
+        keepalive: true,
+        signal: abort.signal,
+      });
+      if (response.ok || response.status === 403 || response.status === 404)
+        return "deleted";
+      if (response.status === 401) return "abandoned";
+      return "failed";
+    } catch {
+      return "failed";
+    }
+  })();
   try {
-    const response = await fetch(location, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${token}` },
-      // 關分頁時 destroy() 送出的 DELETE 也要送得到。
-      keepalive: true,
-    });
-    if (response.ok || response.status === 403 || response.status === 404)
-      return "deleted";
-    if (response.status === 401) return "abandoned";
-    return "failed";
-  } catch {
-    return "failed";
+    return await Promise.race([attempt, timeout]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 

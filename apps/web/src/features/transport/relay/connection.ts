@@ -32,7 +32,8 @@ export async function openPeerConnection(
 
 /**
  * §4：先 setLocalDescription(offer)，再有界等 ICE 收集，重新讀取 localDescription，
- * 整份 SDP（含已收集的 candidates）作為 POST body。已取消或沒有有效 offer 回 null。
+ * 整份 SDP（含已收集的 candidates）作為 POST body。
+ * 已取消回 null（呼叫端安靜結束）；沒有有效 offer 丟 RELAY_FAILED（呼叫端清理並回報）。
  */
 export async function gatheredOffer(
   pc: RtcPeerConnection,
@@ -45,7 +46,9 @@ export async function gatheredOffer(
   await pc.waitForIceGatheringComplete(ICE_GATHERING_TIMEOUT_MS);
   if (signal.aborted) return null;
   const local = pc.localDescription;
-  return local?.type === "offer" ? local.sdp : null;
+  if (local?.type !== "offer" || !local.sdp)
+    throw new TransportError("RELAY_FAILED", "無法產生連線提議（offer）");
+  return local.sdp;
 }
 
 /** 每 2 秒取樣一次，直到 signal 中止。取樣失敗略過這一次。 */
@@ -80,6 +83,20 @@ export function closePeerConnection(pc: RtcPeerConnection | undefined) {
   pc.oniceconnectionstatechange = null;
   pc.onconnectionstatechange = null;
   pc.close();
+}
+
+/**
+ * 停止時讓 start() 立刻結束：不等已關閉連線上的原生 RTC 操作（可能永遠不 resolve）。
+ * 背景的 work 照常跑到下一個檢查點自行收尾，它之後的結果不再影響 start()。
+ */
+export function untilStopped<T>(work: Promise<T>, signal: AbortSignal) {
+  const stopped = new Promise<never>((_, reject) => {
+    const abort = () =>
+      reject(new TransportError("RELAY_FAILED", "轉發已停止"));
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
+  });
+  return Promise.race([work, stopped]);
 }
 
 export function relayError(cause: unknown, message: string) {
