@@ -91,6 +91,17 @@ export class SignalDisconnectedError extends ApiError {
   }
 }
 
+/**
+ * 請求在期限內沒收到回應（ack 或預期的廣播）：伺服器可能已處理也可能沒處理，
+ * 結果不明。呼叫端不可假設伺服器仍在原狀態，必要時以 resync() 重新同步。
+ */
+export class SignalTimeoutError extends ApiError {
+  constructor() {
+    super("INTERNAL");
+    this.name = "SignalTimeoutError";
+  }
+}
+
 export class SignalClient {
   private socket: SocketLike | null = null;
   private state: ConnectionState = { status: "connecting" };
@@ -147,9 +158,26 @@ export class SignalClient {
   stop() {
     this.stopped = true;
     this.timers.clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
     this.socket?.close(1000, "bye");
     this.teardown();
     this.setState({ status: "closed", reason: "stopped" });
+  }
+
+  /**
+   * 關閉目前連線並立即開啟新連線重新驗證，以取得最新 room:snapshot。
+   * 已手動停止或因終止關閉碼結束時不做任何事。
+   */
+  resync() {
+    if (this.stopped || this.state.status === "closed") return;
+    this.timers.clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    const socket = this.socket;
+    // 先解除舊 socket 的事件與在途請求再關閉，避免同步觸發 onclose 誤排重連。
+    this.teardown();
+    socket?.close(1000, "resync");
+    this.attempt = 0;
+    this.open();
   }
 
   /** 不需要回應的訊息（signal、member:status、ping）。未連線時丟棄。 */
@@ -161,7 +189,7 @@ export class SignalClient {
     return false;
   }
 
-  /** 需要 ack 的請求。失敗時以 ApiError 拒絕。 */
+  /** 需要 ack 的請求。失敗時以 ApiError（斷線為 SignalDisconnectedError、逾時為 SignalTimeoutError）拒絕。 */
   request(message: DistributiveOmit<Requestable, "reqId">): Promise<void> {
     const reqId = String(this.nextReqId++);
     return new Promise((resolve, reject) => {
@@ -171,7 +199,7 @@ export class SignalClient {
       }
       const timer = this.timers.setTimeout(() => {
         this.pending.delete(reqId);
-        reject(new ApiError("INTERNAL"));
+        reject(new SignalTimeoutError());
       }, this.requestTimeoutMs);
       this.pending.set(reqId, { resolve, reject, timer });
     });

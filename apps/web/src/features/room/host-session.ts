@@ -73,6 +73,8 @@ export class HostSession extends HostSessionFlows {
   protected modeWaiter: { mode: Mode; resolve: () => void } | null = null;
   /** modeWaiter 的等待廣播期限計時器。 */
   protected modeTimer: unknown = null;
+  /** 切模式第 2 步逾時後的目標模式；非 null 代表正在等 resync() 的 room:snapshot，期間不重建也不再切換。 */
+  protected resyncTarget: Mode | null = null;
   protected error: string | null = null;
   private view: HostSessionView;
   private readonly listeners = new Set<() => void>();
@@ -181,6 +183,7 @@ export class HostSession extends HostSessionFlows {
     this.op = null;
     this.stopWaiter = null;
     this.clearModeWaiter();
+    this.resyncTarget = null;
     this.destroyed = true;
     this.listeners.clear();
   }
@@ -195,6 +198,9 @@ export class HostSession extends HostSessionFlows {
       this.connected = false;
       this.dropTransport();
       this.op = null;
+      this.stopWaiter = null;
+      this.clearModeWaiter();
+      this.resyncTarget = null;
       // 被取代的舊分頁之後重新整理，不可自動開播把接手的分頁擠掉。
       if (state.reason === "replaced") this.cancelIntent();
       this.publish();
@@ -211,7 +217,7 @@ export class HostSession extends HostSessionFlows {
       this.handleSnapshot(message);
       return;
     }
-    if (!this.host) return;
+    if (!this.host || this.resyncTarget !== null) return;
     switch (message.type) {
       case "room:members": {
         const next = onlineViewers(message.members);
@@ -240,6 +246,8 @@ export class HostSession extends HostSessionFlows {
 
   private handleSnapshot(message: ServerMessage & { type: "room:snapshot" }) {
     // 每次驗證都是新的直播工作階段：拆掉舊傳輸，依意圖與最新片源重建（§6「房主重新連線」）。
+    const resyncTarget = this.resyncTarget;
+    this.resyncTarget = null;
     this.dropTransport();
     this.op = null;
     this.stopWaiter = null;
@@ -251,6 +259,12 @@ export class HostSession extends HostSessionFlows {
       return;
     }
     this.connected = true;
+    if (resyncTarget !== null) {
+      this.error =
+        message.room.mode === resyncTarget
+          ? null
+          : "切換傳送方式失敗：等待伺服器確認逾時，仍維持原本的傳送方式。";
+    }
     if (this.intent && this.options.intentStillValid?.() === false) {
       // 斷線期間另一分頁接手並明確停播：這個分頁記得的意圖已過時。
       this.cancelIntent();
@@ -305,7 +319,13 @@ export class HostSession extends HostSessionFlows {
   // ── 協調 ───────────────────────────────────────────────
 
   private usable() {
-    return !this.destroyed && !this.closed && this.host && this.connected;
+    return (
+      !this.destroyed &&
+      !this.closed &&
+      this.host &&
+      this.connected &&
+      this.resyncTarget === null
+    );
   }
 
   protected sourceReady() {
@@ -326,8 +346,8 @@ export class HostSession extends HostSessionFlows {
     if (this.destroyed || this.closed || !this.host) return;
     // 開播途中按停止：不等 start()，立刻作廢這次開播（含斷線中）。
     if (this.op === "starting" && !this.intent) this.abortStart();
-    if (!this.connected) {
-      // 斷線中按停止：不能送請求，直接拆掉；重新驗證時伺服器會改為未開播。
+    if (!this.connected || this.resyncTarget !== null) {
+      // 斷線或等重新同步期間按停止：不能送請求，直接拆掉；重新驗證時伺服器會改為未開播。
       if (this.transport && !this.intent && !this.op) this.dropTransport();
       return;
     }
@@ -431,7 +451,14 @@ export class HostSession extends HostSessionFlows {
 
   private phase(): HostPhase {
     if (this.op) return this.op;
-    if (this.transport && this.serverLive && this.connected) return "live";
+    if (
+      this.transport &&
+      this.serverLive &&
+      this.connected &&
+      this.resyncTarget === null
+    ) {
+      return "live";
+    }
     return this.intent ? "waiting" : "idle";
   }
 

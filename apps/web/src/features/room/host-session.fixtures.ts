@@ -78,6 +78,9 @@ export class FakeClient implements HostSessionClient {
       this.requests.push({ message, resolve, reject });
     });
   }
+  resync() {
+    this.log.push("resync");
+  }
 
   /** 回第一筆符合的請求（測試同名請求的先後）。 */
   async ackFirst(match: string, error?: unknown) {

@@ -1,5 +1,5 @@
 import type { Mode, Quality } from "@project/shared";
-import { ApiError } from "../../lib/api";
+import { SignalTimeoutError } from "../../lib/signal";
 import {
   type CreateHostTransport,
   type HostTransport,
@@ -82,7 +82,7 @@ export abstract class HostSessionBase {
     });
   }
 
-  /** 送 room:update { mode }，收到該模式的 room:updated 才 resolve；超過期限就 reject。 */
+  /** 送 room:update { mode }，收到該模式的 room:updated 才 resolve；超過期限以 SignalTimeoutError reject。 */
   protected confirmMode(target: Mode): Promise<void> {
     return new Promise((resolve, reject) => {
       const waiter = { mode: target, resolve };
@@ -90,7 +90,8 @@ export abstract class HostSessionBase {
       this.modeTimer = this.timers.setTimeout(() => {
         if (this.modeWaiter !== waiter) return;
         this.modeWaiter = null;
-        reject(new ApiError("INTERNAL"));
+        this.modeTimer = null;
+        reject(new SignalTimeoutError());
       }, MODE_UPDATED_TIMEOUT_MS);
       this.options.client
         .request({ type: "room:update", mode: target })
@@ -98,6 +99,7 @@ export abstract class HostSessionBase {
           if (this.modeWaiter !== waiter) return;
           this.modeWaiter = null;
           this.timers.clearTimeout(this.modeTimer);
+          this.modeTimer = null;
           reject(error);
         });
     });

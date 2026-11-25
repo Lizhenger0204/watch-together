@@ -2,6 +2,7 @@ import type { ClientMessageOf, Member, ServerMessage } from "@project/shared";
 import { ApiError } from "../../lib/api";
 import {
   SignalDisconnectedError,
+  SignalTimeoutError,
   type ConnectionState,
 } from "../../lib/signal";
 import { TransportError, type CreateHostTransport } from "../transport";
@@ -18,7 +19,7 @@ export type HostSource = {
 export type HostPhase =
   /** 沒有開播意圖。 */
   | "idle"
-  /** 有開播意圖，但暫時不能開播（未連線、片源未就緒）。UI 顯示「直播暫停中」。 */
+  /** 有開播意圖，但暫時不能開播（未連線、等待重新同步、片源未就緒）。UI 顯示「直播暫停中」。 */
   | "waiting"
   /** 建立傳輸、await start()、送 live:true 中。 */
   | "starting"
@@ -45,8 +46,10 @@ export interface HostSessionClient {
   onMessage(handler: (message: ServerMessage) => void): () => void;
   onState(handler: (state: ConnectionState) => void): () => void;
   send(message: ClientMessageOf<"signal">): boolean;
-  /** 等同一 reqId 的 ack；失敗以 ApiError（連線中斷為 SignalDisconnectedError）reject。 */
+  /** 等同一 reqId 的 ack；失敗以 ApiError（斷線為 SignalDisconnectedError、逾時為 SignalTimeoutError）reject。 */
   request(message: HostRequest): Promise<void>;
+  /** 關閉目前連線並建立新連線重新驗證，以取得最新 room:snapshot。 */
+  resync(): void;
 }
 
 export type HostSessionOptions = {
@@ -95,6 +98,8 @@ export function onlineViewers(members: Member[]) {
 
 export const disconnected = (error: unknown) =>
   error instanceof SignalDisconnectedError;
+
+export const timedOut = (error: unknown) => error instanceof SignalTimeoutError;
 
 export function readable(error: unknown): string {
   if (error instanceof TransportError || error instanceof ApiError) {

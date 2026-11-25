@@ -4,6 +4,7 @@ import { HostSessionBase } from "./host-session-base";
 import {
   disconnected,
   readable,
+  timedOut,
   tracksOf,
   type Tracks,
 } from "./host-session-types";
@@ -19,6 +20,8 @@ export abstract class HostSessionFlows extends HostSessionBase {
   protected abstract transport: HostTransport | null;
   protected abstract applied: Tracks;
   protected abstract error: string | null;
+  /** 切模式第 2 步逾時後的目標模式；非 null 代表正在等 resync() 的 room:snapshot。 */
+  protected abstract resyncTarget: Mode | null;
 
   protected abstract reconcile(): void;
   protected abstract dropTransport(): void;
@@ -202,10 +205,22 @@ export abstract class HostSessionFlows extends HostSessionBase {
         if (gen !== this.generation) return;
         this.dropTransport();
         this.op = null;
-        if (!disconnected(error)) {
-          this.error = `切換傳送方式失敗：${readable(error)}`;
+        if (timedOut(error)) {
+          // 結果不明（伺服器可能已切換也可能未切換）：不可直接重建，維持直播暫停中並重新同步（§6）。
+          this.resyncTarget = target;
+          this.error =
+            "切換傳送方式失敗：等待伺服器確認逾時，正在重新連線確認目前模式。";
+          this.options.client.resync();
+          this.publish();
+          return;
         }
-        // 伺服器仍是舊模式：依意圖用舊模式重新開播。
+        if (disconnected(error)) {
+          // 連線中斷：保留意圖，等自動重連收到新 room:snapshot 後依 snapshot 模式重建。
+          this.publish();
+          return;
+        }
+        // 伺服器明確拒絕（ack ok:false）：伺服器確定仍在原模式，依意圖用原模式重建。
+        this.error = `切換傳送方式失敗：${readable(error)}`;
         this.reconcile();
         this.publish();
         return;
