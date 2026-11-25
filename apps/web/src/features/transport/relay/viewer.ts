@@ -88,6 +88,12 @@ export const createRelayViewerTransport: CreateViewerTransport = (options) => {
     return check;
   }
 
+  /** 拉流途中 watch() 已回報連線中斷：這一輪不可再繼續，交給 start() 的 reject 清理。 */
+  function ensureNotFailed(current: Run) {
+    if (current.failed)
+      throw new TransportError("RELAY_FAILED", "轉發連線中斷");
+  }
+
   async function pull(current: Run) {
     const { signal } = current.abort;
     const pc = await openPeerConnection(options, signal);
@@ -121,8 +127,10 @@ export const createRelayViewerTransport: CreateViewerTransport = (options) => {
     }
     const answer = await resource.answer;
     if (signal.aborted) return;
+    ensureNotFailed(current);
     await pc.setRemoteDescription({ type: "answer", sdp: answer });
     if (signal.aborted) return;
+    ensureNotFailed(current);
     sampleStats(pc, "receive", signal, (stats) => {
       if (!destroyed && isIceConnected(pc)) events.emit("stats", stats);
     });
@@ -169,7 +177,8 @@ export const createRelayViewerTransport: CreateViewerTransport = (options) => {
             clearTracks();
             // 房主尚未開播（409）不是致命錯誤：回到 waiting，等開播廣播再拉。
             setState(failure.code === "STREAM_NOT_LIVE" ? "waiting" : "failed");
-            if (!destroyed) events.emit("error", failure);
+            // watch() 已經回報過這次中斷：不重複發錯誤。
+            if (!destroyed && !current.failed) events.emit("error", failure);
           }
           throw failure;
         },

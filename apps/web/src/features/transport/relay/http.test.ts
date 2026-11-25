@@ -111,7 +111,11 @@ describe("DELETE 逾時", () => {
 });
 
 describe("answer 本文期限", () => {
-  test("201 標頭後本文一直沒讀完：期限到才以 RELAY_FAILED 結束，並中止讀取", async () => {
+  test("ANSWER_TIMEOUT_MS 固定為 10,000 ms", () => {
+    expect(ANSWER_TIMEOUT_MS).toBe(10_000);
+  });
+
+  test("201 標頭後本文一直沒讀完：9,999 ms 仍在等待，滿 10,000 ms 即以 RELAY_FAILED 結束並中止讀取", async () => {
     const result = postOffer(ROOM, "whip", TOKEN, "v=0");
     await vi.advanceTimersByTimeAsync(0);
     createdSlowBody(http().lastPost());
@@ -122,7 +126,7 @@ describe("answer 本文期限", () => {
       (value) => (outcome = value),
       (error: unknown) => (outcome = error),
     );
-    await vi.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS - 1);
+    await vi.advanceTimersByTimeAsync(9_999);
     expect(outcome).toBe("pending");
     const init = http().fetch.mock.calls[0]![1] as RequestInit;
     expect(init.signal?.aborted).toBe(false);
@@ -136,9 +140,9 @@ describe("answer 本文期限", () => {
     await vi.advanceTimersByTimeAsync(0);
     const body = createdSlowBody(http().lastPost());
     const resource = await result;
-    await vi.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS - 1);
+    await vi.advanceTimersByTimeAsync(9_999);
     body.finish();
     await expect(resource.answer).resolves.toBe(answerSdp);
-    await vi.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(10_000);
   });
 });

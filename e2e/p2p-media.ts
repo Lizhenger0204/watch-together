@@ -87,6 +87,32 @@ function receivedAudio(page: Page) {
   });
 }
 
+export async function expectAudioPlaying(...pages: Page[]) {
+  await Promise.all(
+    pages.map(async (page) => {
+      await expect
+        .poll(async () => (await receivedAudio(page))?.packets ?? 0)
+        .toBeGreaterThan(0);
+      const before = await receivedAudio(page);
+      expect(before).not.toBeNull();
+      await expect
+        .poll(
+          async () => {
+            const now = await receivedAudio(page);
+            return (
+              !!now &&
+              !!before &&
+              now.packets > before.packets &&
+              now.energy > before.energy
+            );
+          },
+          { message: "播放器的音軌持續收到含聲音的 RTP 封包" },
+        )
+        .toBe(true);
+    }),
+  );
+}
+
 export async function beginWatching(page: Page) {
   const start = page.getByRole("button", { name: /點擊開始觀看/ });
   await expect(start).toBeVisible();
@@ -98,20 +124,5 @@ export async function beginWatching(page: Page) {
   await expect(video).toHaveJSProperty("paused", true);
   await start.click();
   await expect(video).toHaveJSProperty("muted", false);
-  const before = await receivedAudio(page);
-  expect(before).not.toBeNull();
-  await expect
-    .poll(
-      async () => {
-        const now = await receivedAudio(page);
-        return (
-          !!now &&
-          !!before &&
-          now.packets > before.packets &&
-          now.energy > before.energy
-        );
-      },
-      { message: "播放器的音軌持續收到含聲音的 RTP 封包" },
-    )
-    .toBe(true);
+  await expectAudioPlaying(page);
 }

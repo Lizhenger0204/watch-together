@@ -212,3 +212,78 @@ describe("停止與清理", () => {
     expect(http().posts()).toHaveLength(0);
   });
 });
+
+describe("start() 途中已回報連線中斷", () => {
+  test("讀 answer 期間 pc 進入 failed：不呼叫 setRemoteDescription、start() 拒絕 RELAY_FAILED、DELETE 且不重複報錯也不送 stats", async () => {
+    const { viewer, pc, started, states, errors } = await posting();
+    const stats: unknown[] = [];
+    viewer.onStats((s) => stats.push(s));
+    const setRemote = vi.spyOn(pc, "setRemoteDescription");
+    const getStats = vi.spyOn(pc, "getStats");
+    const body = createdSlowBody(http().lastPost());
+    await flush();
+
+    pc.setIceConnectionState("failed");
+    expect(errors).toEqual(["RELAY_FAILED"]);
+    body.finish();
+    await flush();
+
+    expect(setRemote).not.toHaveBeenCalled();
+    expect(started.done).toBe(true);
+    expect((started.error as { code: string }).code).toBe("RELAY_FAILED");
+    expect(
+      http()
+        .deletes()
+        .map((r) => r.url),
+    ).toEqual([location()]);
+    expect(pc.closed).toBe(true);
+    expect(states.at(-1)).toBe("failed");
+    expect(states).not.toContain("playing");
+    expect(errors).toEqual(["RELAY_FAILED"]);
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(getStats).not.toHaveBeenCalled();
+    expect(stats).toEqual([]);
+  });
+
+  test("setRemoteDescription 進行中 pc 進入 failed：start() 拒絕 RELAY_FAILED、DELETE、清 track 且不重複報錯也不送 stats", async () => {
+    const { viewer, pc, started, states, errors } = await posting();
+    const stats: unknown[] = [];
+    viewer.onStats((s) => stats.push(s));
+    const getStats = vi.spyOn(pc, "getStats");
+    let resolveRemote!: () => void;
+    const setRemote = vi.spyOn(pc, "setRemoteDescription").mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveRemote = resolve;
+        }),
+    );
+    created(http().lastPost());
+    await flush();
+    expect(setRemote).toHaveBeenCalledTimes(1);
+
+    pc.fireTrack(track("video"));
+    pc.fireTrack(track("audio"));
+    expect(viewer.remoteStream.getTracks()).toHaveLength(2);
+
+    pc.setIceConnectionState("failed");
+    expect(errors).toEqual(["RELAY_FAILED"]);
+    resolveRemote();
+    await flush();
+
+    expect(started.done).toBe(true);
+    expect((started.error as { code: string }).code).toBe("RELAY_FAILED");
+    expect(
+      http()
+        .deletes()
+        .map((r) => r.url),
+    ).toEqual([location()]);
+    expect(pc.closed).toBe(true);
+    expect(viewer.remoteStream.getTracks()).toEqual([]);
+    expect(states.at(-1)).toBe("failed");
+    expect(states).not.toContain("playing");
+    expect(errors).toEqual(["RELAY_FAILED"]);
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(getStats).not.toHaveBeenCalled();
+    expect(stats).toEqual([]);
+  });
+});
