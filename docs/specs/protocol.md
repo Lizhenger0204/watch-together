@@ -91,6 +91,7 @@ WHIP 只需房間已切到 relay 即可發布。P2P 模式下，WHIP 的 409 訊
 | `stream:status` | `{ live: boolean, title: string \| null }` | host |
 | `signal` | `{ to: memberId, data: SignalData }` | host 可送給任何收看者；收看者只能送給 host |
 | `member:status` | `MemberStatus` | member |
+| `chat:send` | `{ text }`（可帶 `reqId`） | 任何已驗證成員（host / member） |
 | `ping` | `{}` | 任何人 |
 
 ### 伺服器 → 客戶端
@@ -105,6 +106,7 @@ WHIP 只需房間已切到 relay 即可發布。P2P 模式下，WHIP 的 409 訊
 | `peer:request` | `{ memberId }` | host（P2P 模式下有收看者需要連線時） |
 | `signal` | `{ from: memberId, data: SignalData }` | 指定對象 |
 | `member:status` | `{ memberId, status: MemberStatus }` | host |
+| `chat:message` | `ChatMessage` | 全房在線成員（含發送者） |
 | `ack` / `error` / `pong` | 見上 | 發送者 |
 
 ### 型別
@@ -137,9 +139,25 @@ type MemberStatus = {
   rttMs?: number;
   packetLoss?: number; // 0–1
 };
+type ChatMessage = {
+  id: string;
+  memberId: string;
+  nickname: string;
+  role: 'host' | 'member';
+  text: string;
+  sentAt: number;
+};
 ```
 
 `title` 只用檔名（去掉副檔名），不傳送檔案路徑。
+
+### 聊天訊息（`chat:send` / `chat:message`）
+
+- `text`：原始字串上限 1,000 字元（`CHAT_RAW_MAX_LENGTH`）；解析時會將換行正規化為空白並移除前後空白，正規化後須為 1–200 字元（`CHAT_MAX_LENGTH`）。空字串、純空白或超長都由 schema 拒絕，已驗證連線回 `BAD_REQUEST`（未驗證以 `4400` 關閉）。
+- **身份與權限**：房主與收看者皆可發言。`memberId`、`nickname`、`role`、`id`、`sentAt` 一律由伺服器依當下房間成員狀態與伺服器時間填入，不採信客戶端。被踢出或已不在房間成員清單的連線送出時以 `4401` 關閉，不廣播。
+- **限流**：每位成員每 10 秒最多 5 則（`CHAT_RATE_LIMIT_MAX=5`、`CHAT_RATE_LIMIT_WINDOW_MS=10_000`）。超過時拒絕且不廣播：帶 `reqId` 回 `ack { reqId, ok: false, code: 'RATE_LIMITED' }`，否則回 `error { code: 'RATE_LIMITED', message }`。
+- **不保留歷史紀錄**：伺服器不持久化聊天訊息，`room:snapshot` 不包含歷史聊天；加入房間後只看得到之後發出的訊息。房主不需要禁言或刪除訊息。
+- **顯示**：前端聊天室與彈幕一律以純文字呈現，不可用 `dangerouslySetInnerHTML`。
 
 每則 P2P `signal.data` 都必須帶 `negotiationId`（shared 的 `idSchema`，1–64 字元）。房主為每份 offer 呼叫一次 `crypto.randomUUID()`，包括首次協商與每次 ICE restart。這樣停播重開、重建 transport 或換分頁後，也能為同一收看者配發新識別。收看者的 answer 與雙方的 ICE 都原樣帶上所屬 offer 的識別，包含 `candidate: null` 結束標記。
 
@@ -149,4 +167,4 @@ type MemberStatus = {
 
 | `PROTOCOL_VERSION` | 內容 |
 | --- | --- |
-| 1 | 第一版（尚未正式發布）。發布前的修改不升版：ICE 路徑由 `/api/ice` 改為 `/api/rooms/:roomId/ice`（才能驗證是哪個房間的成員）、加入關閉碼表、房主重新連線的流程、連到不存在或已關閉的房間改為接受後以 `4001` 關閉（原本回 HTTP 404）、P2P 信令必填 `data.negotiationId`、條件式加入支援 `existingRoomId` 沿用及 `excludeRoomIds` 防止重複配位、加入可帶 `joinKey` 重試時沿用已配置的席位、換碼 REST 與房主 `RoomInfo` 帶單調遞增的 `inviteCodeVersion`、`Quality` 由三個預設名稱改為解析度／位元率／FPS 三個檔位的物件（T-126；伺服器讀到舊房間存的預設名稱時回到預設畫質）。 |
+| 1 | 第一版（尚未正式發布）。發布前的修改不升版：ICE 路徑由 `/api/ice` 改為 `/api/rooms/:roomId/ice`（才能驗證是哪個房間的成員）、加入關閉碼表、房主重新連線的流程、連到不存在或已關閉的房間改為接受後以 `4001` 關閉（原本回 HTTP 404）、P2P 信令必填 `data.negotiationId`、條件式加入支援 `existingRoomId` 沿用及 `excludeRoomIds` 防止重複配位、加入可帶 `joinKey` 重試時沿用已配置的席位、換碼 REST 與房主 `RoomInfo` 帶單調遞增的 `inviteCodeVersion`、`Quality` 由三個預設名稱改為解析度／位元率／FPS 三個檔位的物件（T-126；伺服器讀到舊房間存的預設名稱時回到預設畫質）、新增聊天訊息 `chat:send` 與 `chat:message`（T-127；不保留歷史紀錄，每成員每 10 秒限 5 則，長度上限 200 字）。 |

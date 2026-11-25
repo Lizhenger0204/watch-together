@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { TITLE_MAX_LENGTH } from "../constants";
 import {
+  chatMessageSchema,
+  chatTextSchema,
   errorCodeSchema,
   idSchema,
   memberSchema,
@@ -63,6 +65,12 @@ export const clientMemberStatusMessageSchema = memberStatusSchema.extend({
   type: z.literal("member:status"),
 });
 
+export const clientChatSendMessageSchema = z.object({
+  type: z.literal("chat:send"),
+  reqId,
+  text: chatTextSchema,
+});
+
 export const pingMessageSchema = z.object({ type: z.literal("ping") });
 
 // zod 4 的 refine 不會改變 schema 型別，可以直接放進 discriminatedUnion。
@@ -73,6 +81,7 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
   clientStreamStatusMessageSchema,
   clientSignalMessageSchema,
   clientMemberStatusMessageSchema,
+  clientChatSendMessageSchema,
   pingMessageSchema,
 ]);
 export type ClientMessage = z.infer<typeof clientMessageSchema>;
@@ -123,6 +132,10 @@ export const serverMemberStatusMessageSchema = z.object({
   status: memberStatusSchema,
 });
 
+export const serverChatMessageSchema = chatMessageSchema.extend({
+  type: z.literal("chat:message"),
+});
+
 export const ackMessageSchema = z.discriminatedUnion("ok", [
   z.object({
     type: z.literal("ack"),
@@ -155,6 +168,7 @@ export const serverMessageSchema = z.union([
   peerRequestMessageSchema,
   serverSignalMessageSchema,
   serverMemberStatusMessageSchema,
+  serverChatMessageSchema,
   ackMessageSchema,
   errorMessageSchema,
   pongMessageSchema,

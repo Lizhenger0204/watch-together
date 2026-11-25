@@ -72,4 +72,4 @@ docs/
 
 ## MVP 不做的事
 
-帳號系統、聊天室、字幕、播放清單、每位收看者各自選模式、Android 當房主、小幫手 App、TURN 自架（coturn）。要加之前先寫 ADR。
+帳號系統、字幕、播放清單、每位收看者各自選模式、Android 當房主、小幫手 App、TURN 自架（coturn）。要加之前先寫 ADR。

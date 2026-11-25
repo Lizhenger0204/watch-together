@@ -1,5 +1,7 @@
 import { z } from "zod";
 import {
+  CHAT_MAX_LENGTH,
+  CHAT_RAW_MAX_LENGTH,
   INVITE_CODE_ALPHABET,
   INVITE_CODE_LENGTH,
   NICKNAME_MAX_LENGTH,
@@ -136,3 +138,20 @@ export const iceServerSchema = z.object({
   credential: z.string().optional(),
 });
 export type IceServer = z.infer<typeof iceServerSchema>;
+
+/** 聊天文字：換行正規化為空白、去掉前後空白，結果須為 1–200 字元。 */
+export const chatTextSchema = z
+  .string()
+  .max(CHAT_RAW_MAX_LENGTH)
+  .transform((value) => value.replace(/[\r\n]+/g, " ").trim())
+  .pipe(z.string().min(1).max(CHAT_MAX_LENGTH));
+
+export const chatMessageSchema = z.object({
+  id: idSchema,
+  memberId: idSchema,
+  nickname: nicknameSchema,
+  role: roleSchema,
+  text: z.string().min(1).max(CHAT_MAX_LENGTH),
+  sentAt: z.number().int(),
+});
+export type ChatMessage = z.infer<typeof chatMessageSchema>;

@@ -1,5 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
+  CHAT_MAX_LENGTH,
+  CHAT_RAW_MAX_LENGTH,
   PROTOCOL_VERSION,
   SDP_MAX_LENGTH,
   createRoomRequestSchema,
@@ -38,6 +40,8 @@ describe("parseClientMessage：合法訊息", () => {
       packetLoss: 0.01,
     },
     { type: "member:status", state: "waiting" },
+    { type: "chat:send", reqId: "3", text: "哈囉大家好" },
+    { type: "chat:send", text: "x".repeat(CHAT_MAX_LENGTH) },
     { type: "ping" },
   ])("$type", (m) => {
     expect(client(m)).toMatchObject({ ok: true, message: m });
@@ -107,8 +111,36 @@ describe("parseClientMessage：不合法訊息", () => {
       "state 不在列舉內",
       JSON.stringify({ type: "member:status", state: "dancing" }),
     ],
+    ["聊天訊息為空字串", JSON.stringify({ type: "chat:send", text: "" })],
+    [
+      "聊天訊息只有空白與換行",
+      JSON.stringify({ type: "chat:send", text: "  \r\n\t  " }),
+    ],
+    [
+      "聊天訊息超過長度上限",
+      JSON.stringify({
+        type: "chat:send",
+        text: "a".repeat(CHAT_MAX_LENGTH + 1),
+      }),
+    ],
+    [
+      "聊天原始訊息超過負載上限",
+      JSON.stringify({
+        type: "chat:send",
+        text: " ".repeat(CHAT_RAW_MAX_LENGTH + 1) + "hi",
+      }),
+    ],
   ])("%s", (_name, raw) => {
     expect(parseClientMessage(raw).ok).toBe(false);
+  });
+
+  test("chat:send 會將換行正規化為空白並去掉前後空白", () => {
+    expect(
+      client({ type: "chat:send", text: "  第一行\r\n第二行\n第三行  " }),
+    ).toEqual({
+      ok: true,
+      message: { type: "chat:send", text: "第一行 第二行 第三行" },
+    });
   });
 });
 
@@ -136,6 +168,15 @@ describe("parseServerMessage", () => {
     { type: "stream:status", live: true, title: "電影", startedAt: 2 },
     { type: "peer:request", memberId: "m2" },
     { type: "member:status", memberId: "m2", status: { state: "buffering" } },
+    {
+      type: "chat:message",
+      id: "msg-1",
+      memberId: "m1",
+      nickname: "小明",
+      role: "host",
+      text: "歡迎光臨",
+      sentAt: 123456,
+    },
     { type: "ack", reqId: "1", ok: true },
     { type: "ack", reqId: "1", ok: false, code: "FORBIDDEN" },
     { type: "error", code: "BAD_REQUEST", message: "格式錯誤" },

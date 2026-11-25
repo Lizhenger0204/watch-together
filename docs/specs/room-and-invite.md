@@ -4,8 +4,8 @@
 
 | 角色 | 取得方式 | 權限 |
 | --- | --- | --- |
-| host（房主） | 建房者，持有 `hostToken` | 選片開播、切換模式、切換畫質、重新產生邀請碼、鎖房、踢人 |
-| member（收看者） | 用邀請碼加入，持有 `memberToken` | 觀看 |
+| host（房主） | 建房者，持有 `hostToken` | 選片開播、切換模式、切換畫質、重新產生邀請碼、鎖房、踢人、聊天室發言 |
+| member（收看者） | 用邀請碼加入，持有 `memberToken` | 觀看、聊天室發言 |
 
 - 每房只有一位房主。房主斷線不轉移，房間繼續存在。**房主斷線或重新驗證（含另一分頁以 4000 取代）時，伺服器把直播狀態改為未開播**並通知收看者。房主重新連線並準備好片源後要再送 `stream:status { live: true, title }`。
 - 房間欄位 `mode`：`p2p`（預設）或 `relay`。
@@ -70,6 +70,7 @@
 - `POST /api/rooms/join`：每 IP（`CF-Connecting-IP`）每分鐘 10 次，超過回 `429`。使用 Workers Rate Limiting binding（`wrangler.toml` 的 `JOIN_RATE_LIMITER`）。沒有綁定或綁定出錯時，改用記憶體後備限流（同樣每 IP 每分鐘 10 次，只在單一 isolate 內計數，並記錄 `ratelimit.fallback`）。
 - 邀請碼錯誤、房間已關閉、已鎖房：一律回 `404 ROOM_NOT_FOUND`，不洩漏房間是否存在。
 - 暱稱：1–24 字，trim 後不可為空。前端顯示時必須跳脫（React 預設會做，不可用 `dangerouslySetInnerHTML`）。
+- 聊天訊息：1–200 字純文字（不保留歷史紀錄，房主不需禁言或刪訊息），每位成員每 10 秒最多 5 則，超過回 `RATE_LIMITED`；被踢出者不可再發言。見 protocol.md「聊天訊息」。
 
 ## 踢人
 
