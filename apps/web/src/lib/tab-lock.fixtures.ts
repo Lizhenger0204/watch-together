@@ -23,6 +23,25 @@ export class FakeIndexedDB {
   readonly data = new Map<string, unknown>();
   /** 設為 true 時 open() 失敗（例如瀏覽器封鎖 IndexedDB）。 */
   failOpen = false;
+  private readonly putWaiters: {
+    match: (key: string, value: unknown) => boolean;
+    resolve: () => void;
+  }[] = [];
+
+  /** 等到有交易寫入符合條件的值（例如「某分頁已取得租約」），不必靠真實時間輪詢。 */
+  waitForPut(match: (key: string, value: unknown) => boolean) {
+    return new Promise<void>((resolve) =>
+      this.putWaiters.push({ match, resolve }),
+    );
+  }
+
+  private notifyPut(key: string, value: unknown) {
+    for (const waiter of [...this.putWaiters]) {
+      if (!waiter.match(key, value)) continue;
+      this.putWaiters.splice(this.putWaiters.indexOf(waiter), 1);
+      waiter.resolve();
+    }
+  }
   private readonly queue: FakeTransaction[] = [];
   private running = false;
 
@@ -68,7 +87,10 @@ export class FakeIndexedDB {
     const store = {
       get: (key: string) => op(() => this.data.get(key)),
       put: (value: unknown, key: string) =>
-        op(() => void this.data.set(key, value)),
+        op(() => {
+          this.data.set(key, value);
+          this.notifyPut(key, value);
+        }),
       delete: (key: string) => op(() => void this.data.delete(key)),
     };
     const tx: FakeTransaction = {
