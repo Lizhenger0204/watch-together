@@ -532,3 +532,53 @@ T-118 第二輪審查（GPT ultra fast，66a7155）：第一輪 8 項中 6 項�
 - 監工 rebase 到 8927b86 後跑四項檢查，全過（啟動器 2、Vitest 442 + 124、e2e 6）；兩個並發測試檔再重跑 10 輪，0 失敗。
 - 以 fast-forward 合併。
 
+> 2026-11-25 T-122 第二步完成（`claude/T-122-relay-step2`，0368af7～7c8dfff，共 6 個 commit，基準 8927b86），五項都做完，dispatcher 已接上 relay，送 GPT 審查。
+
+### T-122 第二步審查（GPT ultra fast，7c8dfff）— 退回修正
+上次的阻擋已修好：Chrome 暫存 ACK、注入 failed 後再交付，房主回到「開始直播」，停播與 DELETE 各 1 次。以下也都通過：dispatcher、空 SDP、收到 Location 就登記、503 E2E（WHIP 恰好 1 次、WHEP 0 次）。本機用兩個 PC 當 SFU 替身，兩位收看者確實收到影音；切回 P2P 後繼續播放，3 個轉發資源都已 DELETE。rebase 到 5d1f55a 沒有衝突，兩版四項檢查全過。
+
+**阻擋：房主在轉發開播途中按停止，房間層不會立刻取消。**
+- 原因：`op === "starting"` 讓 `reconcile()` 直接返回，要等 `start()` 結束才重讀意圖。
+- 在 ICE 回覆前按停止：之後仍送出 1 次 WHIP。
+- 在 201 標頭到達後按停止：畫面停在「開播中…」超過 12 秒，按鈕都無法操作，DELETE 為 0。
+- 改法：房主明確停止時立刻作廢這次開播的世代、銷毀傳輸，讓畫面離開 `starting`；如果 `live:true` 已經送出，就再撤回一次。
+
+應修：
+- relay 房主已經收到終止錯誤時，這一輪的 `start()` 要拒絕並清理，不要再設成 `live`。
+- 已取得 Location 之後，讀取 answer 本文要有期限。
+
+建議：E2E 把「開始直播」的斷言從「看得到」改成「能操作」。
+
+交回 Claude 子對話修正。
+
+> 2026-11-25 T-122 第二步的修正已完成（`claude/T-122-relay-step2-fix`，c1d8e79，基準 dad1e4e），送 GPT 第三次審查：
+> - 開播途中按停止時立刻 `abortStart()`；P2P 與轉發共用同一條處理路徑。
+> - relay `start()` 在套用 answer 前後都檢查是否已失敗。
+> - 讀取 answer 本文的期限為 10 秒。
+> - E2E 改成斷言按鈕「可以操作」。
+
+### T-122 第二步（Claude 子對話，2026-11-25）— DONE，轉發正式接上
+1. 做了什麼：
+   - `transport/index.ts` 的 dispatcher 依 mode 呼叫 relay 工廠，`relayNotReady()` 已移除。
+   - 開播 ACK 抵達前失敗時，`failLive(true)` 撤回開播，判斷依據是 `readyGeneration`。
+   - 開播途中按停止時，`abortStart()` 立刻作廢這一次開播，P2P 與轉發走同一條路徑。
+   - relay `start()` 在套用 answer 前後都檢查是否已失敗（`ensureNotFailed()`）。
+   - 驗完 201 標頭就登記 Location；answer 本文的讀取期限是 10 秒。
+   - 空 SDP 改回 `RELAY_FAILED`。
+   - E2E 在 503 時斷言：WHIP 恰好 1 次、WHEP 0 次、按鈕可以操作。
+2. 介面變動：
+   - `RelayResource.answer` 逾時時會 reject。
+   - 對外協定沒有變動。
+3. 已知限制：
+   - 真實 Cloudflare SFU 與 TURN 留待 T-113。
+   - 收看端 relay 的同類檢查與期限測試，列在 T-131。
+4. 驗證方式：
+   - 四項檢查。
+   - 本機 SFU 替身：兩位收看者的影格與音訊都在增加；切回 P2P 後，3 個資源都已 DELETE。
+
+第三次審查（GPT ultra fast，c1d8e79）判「需退回」。前兩次的阻擋都通過重測，只剩一個新阻擋：「開始→停止→開始→停止」而且回覆很慢時，漏送第二次停播，伺服器停在直播。
+
+監工小修（112b3e8）：新增 `liveSends`／`stopCovers`，只有在等待中的停播涵蓋最新一次開播時才沿用，否則再撤回一次。重跑審查的固定延遲探針（900 ms）：P2P 與轉發送出的都是 true→false→true→false，`serverLive` 為 false。另做 1 個反向實驗。
+
+合併：rebase 到 e2eb62b 後，四項檢查全過（啟動器 2、Vitest 462 + 124、e2e 6），以 fast-forward 合併。轉發從此正式可用。
+

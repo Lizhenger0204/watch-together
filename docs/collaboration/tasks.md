@@ -39,15 +39,16 @@
 | T-119 | T-110 審查後續（收看端）：實際停格（影格與接收量不再前進）時要回報 `buffering`，恢復後清除；收看分頁被 `4000` 取代後要清理該代傳輸、PC 與計時器；首個 snapshot 前到的信令要以新 socket 為單位暫存，等 snapshot 確認直播後再交付；停播後切模式時，新傳輸的建立時點對齊 §6（`room:updated` 時建立） | GPT | T-110 | DONE |
 | T-120 | 轉發伺服器端補強（T-109 回報）：**踢人或成員移除時關閉該成員的 WHEP 資源**（目前只在關房時清理，被踢的收看者在轉發模式下仍可收看，屬阻擋級）；房間是 p2p 模式時 WHIP／WHEP 回 409；新的 WHIP 登記成功時關閉上一個 publication 的 tracks；伺服器端「上游需要額外協商、關閉 track 時回 503」的清理路徑要交給既有的清理待辦重試；shared 的 UUID 統一轉小寫（或規定只收小寫並驗證），讓 `excludeRoomIds` 不會因大小寫不同而漏判 | GPT | T-109, T-116 | DONE |
 | T-121 | T-116 交回 Claude 的前端項目：記憶體房主的「多佔一席」（`roomToken` 提供可列舉房號的介面並接到 `identity.ts`）；舊分頁收到 WS 4401 時只清自己那份憑證；被 4000 取代或另一分頁明確停播時讓舊開播意圖失效；片名截斷以 `Intl.Segmenter` 不切斷組合 emoji；`signal.test.ts` 舊 ICE 回應的假綠測試；`host_closed` 依 `closedBy` 顯示文案；重產邀請碼的 REST 回應晚於廣播或 snapshot 時要忽略；（T-116 第二輪）跨限流時窗記住已比對過的房間（持有 10 房以上身份時，不要每個時窗都從頭比對）；沒有 Web Locks 時的跨分頁加入協調（例如用 IndexedDB 登記進行中的加入）；（T-118 第二輪）片名請求配發序號、開始停播時讓舊序號失效（停播後舊片名被拒仍顯示錯誤、`B → C → B` 被第一個 B 的拒絕清掉）；`room:updated` 等待逾時後先依 snapshot 重新取得伺服器模式，不要直接用原模式重建；`confirmStop` 晚到的 ack 不覆寫 `serverLive`；streaming.md §9 刪掉「成員列表看到該收看者離線」的斷言 | Claude | T-116, T-118 | DONE |
-| T-122 | 轉發整合第二步（第一步 bb6af68 已合併）：**接上 dispatcher 後，轉發在開播 ACK 抵達前失敗，房主仍顯示「直播中」，也沒送停播或 DELETE**（`host-session-base.ts` 的 `starting` 階段忽略了傳輸錯誤；要區分「傳輸啟動中」和「已就緒、等開播確認」，後者收到終止錯誤時取消意圖、銷毀傳輸、撤回已送出的開播，晚到的 ACK 不能恢復舊世代）；把 a8d94d9（dispatcher 接上 relay、E2E 改成攔截後回 503）rebase 上來，並改寫 `host-session.test.ts:82`（注入假的 fetch／ICE，WHIP 回 503 時顯示 RELAY_UNAVAILABLE 並取消意圖）；`postOffer()` 驗證標頭後就登記 Location，讓停止可以立刻清理；空 SDP 改回 `RELAY_FAILED`（在 relay 讀本機 offer 的邊界轉換）；E2E 收緊為「WHIP 恰好 1 次、WHEP 0 次」 | Claude | T-121 | REVIEW |
+| T-122 | 轉發整合第二步（第一步 bb6af68 已合併）：**接上 dispatcher 後，轉發在開播 ACK 抵達前失敗，房主仍顯示「直播中」，也沒送停播或 DELETE**（`host-session-base.ts` 的 `starting` 階段忽略了傳輸錯誤；要區分「傳輸啟動中」和「已就緒、等開播確認」，後者收到終止錯誤時取消意圖、銷毀傳輸、撤回已送出的開播，晚到的 ACK 不能恢復舊世代）；把 a8d94d9（dispatcher 接上 relay、E2E 改成攔截後回 503）rebase 上來，並改寫 `host-session.test.ts:82`（注入假的 fetch／ICE，WHIP 回 503 時顯示 RELAY_UNAVAILABLE 並取消意圖）；`postOffer()` 驗證標頭後就登記 Location，讓停止可以立刻清理；空 SDP 改回 `RELAY_FAILED`（在 relay 讀本機 offer 的邊界轉換）；E2E 收緊為「WHIP 恰好 1 次、WHEP 0 次」 | Claude | T-121 | DONE |
 | T-123 | 工具鏈：`apps/signal` 的 `dev` script 用 `${SIGNAL_PORT:-8787}`，Windows cmd.exe 無法展開，Windows 上 `pnpm dev` 起不來。改成跨平台寫法（例如 node 包裝腳本讀環境變數再啟動 wrangler），並確認 `pnpm dev`、`pnpm e2e` 在 macOS 與 Windows 都能用 `WEB_PORT`／`SIGNAL_PORT` 錯開 port | GPT | — | DONE |
 | T-124 | 介面改善計畫（SPEC／文件）：截圖檢查現有所有頁面，提出改善計畫給使用者挑選，同意後再實作。**由主對話 Claude 負責**（需要和使用者來回討論） | Claude | — | DOING |
 | T-125 | 播放器圖示化控制列：控制列改用圖示按鈕（播放／暫停、時間、音量、彈幕開關、畫質、劇院模式、全螢幕），每個按鈕都要有提示文字與 `aria-label`。做成共用的控制列元件，房主播放器（`features/source`，原本是 GPT 的 UI）與收看端播放器（`features/player`）共用。收看端只有音量、全螢幕、彈幕、聊天，不能暫停或拖進度。若要新增圖示套件，要確認沒有被標成 deprecated，並且符合冷卻期 | Claude | T-124 | TODO |
 | T-126 | 細緻畫質調整（Claude 先改 spec，實作分工待定）：取代固定的畫質預設。房主在播放器的畫質面板用三條分段滑桿即時調整：解析度 720P～1080P（不超過片源）；位元率 8／10／15 Mbps／原片位元率；FPS 暫定 24／30／60／原片。這是契約變更：先改 streaming.md §2、protocol.md、packages/shared 的 `QUALITY_PRESETS` 與 quality 型別，再改 `common/encoding`（`setQuality` 即時套用）與 UI。P2P 60 Mbps 總上傳量提示保留，但不強制 | Claude | T-125 | TODO |
 | T-127 | 聊天室與彈幕（Claude 先改 spec，實作分工待定）：新增聊天訊息（protocol.md 與 shared schema）。不保留歷史紀錄，加入後只看得到之後的訊息；房主不需要禁言或刪訊息。伺服器仍要檢查成員身份、被踢的人不能發言、限流、長度上限，並以純文字顯示。房主與收看者都能發言。彈幕從右往左，有開關與密度設定，全螢幕時仍會顯示（全螢幕的對象改成播放器容器） | Claude | T-125 | TODO |
-| T-128 | 切模式第 2 步等待 `room:updated` 逾時（結果不明）的處理（T-121 第 11 項，與 streaming.md §6 現行條文衝突）：先改 §6，區分兩種情況——**被拒**（`ack ok:false`）時照原模式重建；**逾時**時不要重建，維持「直播暫停中」。再由 `SignalClient` 提供重新驗證的方法（例如 `resync()`），拿到新的 snapshot 後依 snapshot 的模式重建 | Claude | T-121 | TODO |
+| T-128 | 切模式第 2 步等待 `room:updated` 逾時（結果不明）的處理（T-121 第 11 項，與 streaming.md §6 現行條文衝突）：先改 §6，區分兩種情況——**被拒**（`ack ok:false`）時照原模式重建；**逾時**時不要重建，維持「直播暫停中」。再由 `SignalClient` 提供重新驗證的方法（例如 `resync()`），拿到新的 snapshot 後依 snapshot 的模式重建 | Claude | T-121, T-122 | TODO |
 | T-129 | **RoomDO 產品競態**（從不穩定測試查出）：加入與踢人都從記憶體的 `this.room` 算出新成員清單後才交給 `saveTransition()`，提交後才更新 `this.room`。兩個操作讀到同一份舊清單時，後寫的會蓋掉先前已成功加入的席位（新成員拿到 200，卻立刻驗證失敗）。`relay-lifecycle.test.ts:440` 50 輪中失敗 2 輪。要把會改寫房間狀態的操作序列化，範圍從讀取最新狀態、計算變更，一直到提交交易、更新記憶體，並補上能穩定重現的回歸測試 | GPT | T-120 | DONE |
 | T-130 | T-121 審查遺留（前端）：重產邀請碼期間收到「同碼」的鎖房／畫質廣播後 WS 中斷，成功的 REST 新碼被捨棄（應只在邀請碼確實更新、或有更新的重產請求時才捨棄；成功提示要等畫面採用有效碼後才顯示）；`tab-lock.test.ts` 改用假時鐘，不依賴真實的 `setTimeout`；`identity.ts` 的 `comparedRooms` 在身份清除時淘汰對應項，並限制保留數量；**伺服器已配位、分頁尚未保存身份就關頁會多一席**——需要契約：同一次加入重試時沿用已配置的結果（例如加入請求帶冪等鍵），要先改 protocol.md 與 shared，等 T-129 合併後再做 | Claude | T-121, T-129 | REVIEW |
+| T-131 | T-122 審查遺留（轉發）：收看端 relay `start()` 在套用 answer 前後已失敗時要拒絕並清理（比照房主端的 `ensureNotFailed`）；`ANSWER_TIMEOUT_MS` 補上獨立斷言（改成 20 秒時測試要失敗）；E2E 若可行，加上 SFU 替身的影音流程 | Claude | T-122 | TODO |
 
 可平行的組合：T-101 完成後 → T-102（Claude）∥ T-106（GPT）；T-102 完成後 → T-103、T-105（Claude，依序）∥ T-104（GPT）；T-103 完成後 → T-108、T-112（GPT）。T-115（Claude）可與 T-105／T-114 的審查同時進行；T-114 與 T-115 都合併後 → T-107（GPT）∥ T-109、T-110（Claude）。
 
@@ -96,30 +97,9 @@
 >   - 兩者都不改 `apps/signal/`、tasks.md、main。
 > - `claude/test-session-docs`（測試對話規範）刻意先不送審，等功能全部完成後再處理。
 
-> 2026-11-25 T-122 第二步完成（`claude/T-122-relay-step2`，0368af7～7c8dfff，共 6 個 commit，基準 8927b86），五項都做完，dispatcher 已接上 relay，送 GPT 審查。
 
-### T-122 第二步審查（GPT ultra fast，7c8dfff）— 退回修正
-上次的阻擋已修好：Chrome 暫存 ACK、注入 failed 後再交付，房主回到「開始直播」，停播與 DELETE 各 1 次。以下也都通過：dispatcher、空 SDP、收到 Location 就登記、503 E2E（WHIP 恰好 1 次、WHEP 0 次）。本機用兩個 PC 當 SFU 替身，兩位收看者確實收到影音；切回 P2P 後繼續播放，3 個轉發資源都已 DELETE。rebase 到 5d1f55a 沒有衝突，兩版四項檢查全過。
-
-**阻擋：房主在轉發開播途中按停止，房間層不會立刻取消。**
-- 原因：`op === "starting"` 讓 `reconcile()` 直接返回，要等 `start()` 結束才重讀意圖。
-- 在 ICE 回覆前按停止：之後仍送出 1 次 WHIP。
-- 在 201 標頭到達後按停止：畫面停在「開播中…」超過 12 秒，按鈕都無法操作，DELETE 為 0。
-- 改法：房主明確停止時立刻作廢這次開播的世代、銷毀傳輸，讓畫面離開 `starting`；如果 `live:true` 已經送出，就再撤回一次。
-
-應修：
-- relay 房主已經收到終止錯誤時，這一輪的 `start()` 要拒絕並清理，不要再設成 `live`。
-- 已取得 Location 之後，讀取 answer 本文要有期限。
-
-建議：E2E 把「開始直播」的斷言從「看得到」改成「能操作」。
-
-交回 Claude 子對話修正。
 
 > 2026-11-25 T-130（`claude/T-130-join-idempotency`，eac215b～41b752e，共 6 個 commit）完成，送 GPT 審查。內含協定變更：`POST /api/rooms/join` 新增選填的 `joinKey`（32 bytes 的 base64url）。5 分鐘內用同一把鍵、同一個現行邀請碼重試，而且成員還在，伺服器就回傳同一份身份。伺服器以 HKDF 導出查表識別與 AES-GCM 金鑰，token 加密後才保存。
 
-> 2026-11-25 T-122 第二步的修正已完成（`claude/T-122-relay-step2-fix`，c1d8e79，基準 dad1e4e），送 GPT 第三次審查：
-> - 開播途中按停止時立刻 `abortStart()`；P2P 與轉發共用同一條處理路徑。
-> - relay `start()` 在套用 answer 前後都檢查是否已失敗。
-> - 讀取 answer 本文的期限為 10 秒。
-> - E2E 改成斷言按鈕「可以操作」。
+> 2026-11-25 注意：監工合併 T-122 時發現，有人直接在 main 工作目錄留下未提交的修改（09:03）：`apps/signal/src/config.ts` 改用 `WS_AUTH_TIMEOUT_MS`、ADR 0002 加註「ADR 0001 已刪除」、`transport/index.ts` 改了 `relayNotReady()` 的註解。監工已用 `git stash` 暫存（stash@{0}），合併後放回。`transport/index.ts` 的那一處因為 T-122 已刪掉該函式，改用 T-122 的版本；另外兩處留在工作目錄、**未提交**，等修改者走分支流程送審。**只有監工能改 main，請改在自己的分支 commit。**
 
