@@ -643,3 +643,11 @@ T-118 第二輪審查（GPT ultra fast，66a7155）：第一輪 8 項中 6 項�
    - 第三輪複驗（GPT，`62c4bc7`）：單分頁同步中離房通過；退回 1 項阻擋（同步中的第二房主分頁離房呼叫 `setIntent(false)` 觸發 `onExplicitStop` 寫入跨分頁停播標記，導致原直播分頁重整後不再自動恢復）。
    - 第四輪複驗（GPT，`fbdd292`，已 rebase 至含 T-128 與 T-131 之 `main 9011660`）：**通過（可合併）**。雙分頁離房、單分頁直播中／連線中離房、單純重整恢復與明確停播全部通過實測；四項固定檢查與建置全綠（Node 2、Vitest 519、Signal 134，合計 655 項測試；web／signal build 成功；E2E 8/8 耗時 49.7 秒）；扣除 `pnpm-lock.yaml` 後 14 個變更檔均低於 20,000 bytes（最大 `RoomPage.tsx` 14,338 bytes、`p2p-recovery.spec.ts` 8,511 bytes）。
    - 以 fast-forward 合併進 `main`（`9011660..fbdd292`）。
+
+### T-125（Claude 實作與修正，GPT 監工，2026-11-25）— DONE
+
+1. 做了什麼：`components/player/` 新增房主與收看者共用的圖示控制列、全螢幕、音量與格式化時間。房主可控制播放、進度、畫質及桌面劇院模式；收看者可調音量與切換全螢幕。畫質移到播放器控制列。
+2. 介面變動：REST／WebSocket 無變動。`HostSourcePlayer` 新增選填 `quality`、`theater`；`StreamSettings` 移除 `onQualityChange`。
+3. 已知限制：控制列常駐，彈幕與聊天待 T-127；iPhone 使用原生影片全螢幕作為備援。
+4. 審查與驗證：初審 `bda04ab` 重現音量從 0 恢復到 100%、畫質面板在 320px 裁切、Escape 遺失鍵盤焦點。修正 `130e529` 在 320／390px 通過面板與焦點複驗，歸零後恢復最後非零音量。`pnpm typecheck && pnpm lint && pnpm test` 通過（啟動器 2、Vitest 528、Signal 134），`pnpm e2e` 11/11 通過。
+   - 以 fast-forward 合併進 `main`（`cd2fed2..130e529`）。
