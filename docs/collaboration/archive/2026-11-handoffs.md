@@ -651,3 +651,14 @@ T-118 第二輪審查（GPT ultra fast，66a7155）：第一輪 8 項中 6 項�
 3. 已知限制：控制列常駐，彈幕與聊天待 T-127；iPhone 使用原生影片全螢幕作為備援。
 4. 審查與驗證：初審 `bda04ab` 重現音量從 0 恢復到 100%、畫質面板在 320px 裁切、Escape 遺失鍵盤焦點。修正 `130e529` 在 320／390px 通過面板與焦點複驗，歸零後恢復最後非零音量。`pnpm typecheck && pnpm lint && pnpm test` 通過（啟動器 2、Vitest 528、Signal 134），`pnpm e2e` 11/11 通過。
    - 以 fast-forward 合併進 `main`（`cd2fed2..130e529`）。
+
+### T-126（Claude 實作與修正，GPT 監工，2026-11-25）— DONE
+
+1. 做了什麼：`QualityPanel` 改為解析度、位元率、FPS 三條分段滑桿。房主放開滑桿即送出設定，傳輸層在現有 P2P／轉發連線套用編碼參數。解析度上限為片源高度；原片位元率依檔案與片長估計，換片重新取值。保留 P2P 超過 60 Mbps 的上傳提示。
+2. 介面變動：WebSocket `room:update.quality` 與 `RoomInfo.quality` 改用 `{ height, bitrate, fps }` 檔位物件。傳輸層接收解析後的 `EncodingTarget`。舊房間的畫質名稱讀取時回到預設。契約提交 `190dfda` 先於實作 `b2f70f9`。
+3. 已知限制：預設 1080P／8 Mbps／30 FPS。原片位元率估計包含音軌，最高 50 Mbps，量不到以 15 Mbps 套用。伺服器接受後若未收到相符畫質廣播，面板等待最多 10 秒。真實 Cloudflare SFU 留待 T-113 實測。
+4. 審查與驗證：
+   - 初審 `76ec120` 重現廣播延遲時最後選回 8 Mbps 卻停在 15 Mbps，以及 1000P 片源無法直接選 900P。第一次修正補上待確認狀態、請求失敗還原及解析度檔位修正。
+   - 複驗 `68cd868` 重現先鎖房、改 10 Mbps、延後畫質廣播後再改 FPS，導致位元率被覆寫回 8 Mbps。`4876045` 依序比對相符畫質的廣播，修正這個案例。`ef28baa` 同步串流規格說明。
+   - `pnpm typecheck && pnpm lint && pnpm test` 通過（啟動器 2、Vitest 563、Signal 136），`pnpm e2e` 16/16 通過。另用 Chrome 和 Workers 複驗鎖房後快速調整位元率／FPS，以及 1000P 真實片源切 900P，兩條直播連線即時套用縮放。
+   - 以 fast-forward 合併進 `main`（`eace58a..ef28baa`）。
