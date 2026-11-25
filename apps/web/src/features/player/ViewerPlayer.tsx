@@ -1,9 +1,16 @@
 import { Play } from "lucide-react";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import {
   PlayerControls,
   useFullscreen,
   usePlayerVolume,
+  type PlayerControlsProps,
 } from "../../components/player";
 import type { ViewerSession } from "../room/viewer-session";
 import { watchPlaybackProgress } from "./playback-progress";
@@ -34,10 +41,19 @@ export function ViewerPlayer({
   viewer,
   hostName,
   hostOnline,
+  danmaku,
+  danmakuOverlay,
+  chat,
 }: {
   viewer: ViewerSession;
   hostName: string | null;
   hostOnline: boolean;
+  /** 控制列的彈幕開關與設定面板。 */
+  danmaku?: PlayerControlsProps["danmaku"];
+  /** 播放器容器內的彈幕層（隨全螢幕一起顯示）。 */
+  danmakuOverlay?: ReactNode;
+  /** 控制列的聊天室展開／收起按鈕。 */
+  chat?: PlayerControlsProps["chat"];
 }) {
   const view = useSyncExternalStore(viewer.subscribe, viewer.getView);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -199,9 +215,26 @@ export function ViewerPlayer({
           )
         )}
 
-        {/* 收看端只有音量與全螢幕（streaming.md §7），控制列放在全螢幕容器內。 */}
+        {danmakuOverlay}
+        {/* 收看端控制列：音量、彈幕、聊天室入口與全螢幕（streaming.md §7），放在全螢幕容器內。 */}
         <PlayerControls
           volume={volume}
+          danmaku={danmaku}
+          chat={
+            chat
+              ? {
+                  open: fullscreen.active ? false : chat.open,
+                  onToggle: () => {
+                    if (fullscreen.active) {
+                      void document.exitFullscreen?.().catch(() => {});
+                      if (!chat.open) chat.onToggle();
+                      return;
+                    }
+                    chat.onToggle();
+                  },
+                }
+              : undefined
+          }
           fullscreen={{
             on: fullscreen.active,
             disabled: !fullscreen.supported,

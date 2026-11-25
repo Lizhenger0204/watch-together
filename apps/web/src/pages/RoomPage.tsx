@@ -2,16 +2,20 @@ import { resolveQuality } from "@project/shared";
 import { LogOut } from "lucide-react";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { Layout } from "../components/Layout";
+import { usePlayerDanmaku } from "../components/player";
 import { Button, Notice } from "../components/ui";
 import { ViewerPlayer } from "../features/player";
 import { HostSourcePlayer, useLocalSource } from "../features/source";
 import {
+  ChatPanel,
   InviteCodeCard,
   MemberList,
   QualityPanel,
+  SidebarTabs,
   StreamSettings,
   qualityButtonLabel,
   useRoom,
+  useUnreadChat,
 } from "../features/room";
 import type { HostPhase } from "../features/room/host-session-types";
 import {
@@ -120,6 +124,10 @@ function HostView({
   const { error, run } = useActionError();
   /** 劇院模式：側欄移到影片下方，讓影片滿寬（只在桌面寬度有側欄時提供）。 */
   const [theater, setTheater] = useState(false);
+  const [sideTab, setSideTab] = useState<"room" | "chat">("room");
+  const youId = view.you?.memberId ?? "";
+  const unreadChat = useUnreadChat(view.messages, sideTab === "chat");
+  const { danmaku, danmakuOverlay } = usePlayerDanmaku(view.messages, youId);
   const { stream: sourceStream, title: sourceTitle, info: sourceInfo } = source;
   const sourceStatus = source.check.status;
   const sourceBitrate = sourceInfo?.bitrate ?? null;
@@ -189,6 +197,8 @@ function HostView({
               : undefined
           }
           theater={{ on: theater, onToggle: () => setTheater(!theater) }}
+          danmaku={danmaku}
+          danmakuOverlay={danmakuOverlay}
           belowTitle={
             <h2 className="min-w-0 text-base font-semibold wrap-anywhere text-zinc-900">
               {hostTitle(phase, view.stream.title, sourceTitle)}
@@ -258,34 +268,58 @@ function HostView({
       </div>
 
       <aside
-        className={`flex flex-col divide-y divide-zinc-200 bg-white ${
-          theater ? "lg:grid lg:grid-cols-3 lg:divide-x lg:divide-y-0" : ""
+        className={`flex flex-col bg-white ${
+          theater ? "" : "lg:sticky lg:top-0 lg:h-[calc(100dvh-3rem)]"
         }`}
       >
-        {view.room?.inviteCode && (
-          <InviteCodeCard
-            inviteCode={view.room.inviteCode}
-            inviteCodeVersion={view.room.inviteCodeVersion ?? 0}
-            hostName={hostMember?.nickname ?? "房主"}
-            onlineCount={onlineCount}
-            onRegenerate={actions.regenerateInviteCode}
-          />
-        )}
-        <MemberList
-          members={view.members}
-          youId={view.you?.memberId ?? ""}
-          isHost
-          memberStatus={view.memberStatus}
-          onKick={(memberId) => run(actions.kick(memberId))}
+        <SidebarTabs
+          active={sideTab}
+          onChange={setSideTab}
+          tabs={[
+            { id: "room", label: "房間" },
+            { id: "chat", label: "聊天", badge: unreadChat },
+          ]}
         />
-        {view.room && (
-          <StreamSettings
-            room={view.room}
-            viewers={viewers}
-            bitrate={bitrate}
-            busy={busy || !online}
-            onModeChange={(mode) => host.setMode(mode)}
-            onLockedChange={(locked) => run(actions.updateRoom({ locked }))}
+        {sideTab === "room" ? (
+          <div
+            className={`flex min-h-0 flex-1 flex-col divide-y divide-zinc-200 overflow-y-auto ${
+              theater ? "lg:grid lg:grid-cols-3 lg:divide-x lg:divide-y-0" : ""
+            }`}
+          >
+            {view.room?.inviteCode && (
+              <InviteCodeCard
+                inviteCode={view.room.inviteCode}
+                inviteCodeVersion={view.room.inviteCodeVersion ?? 0}
+                hostName={hostMember?.nickname ?? "房主"}
+                onlineCount={onlineCount}
+                onRegenerate={actions.regenerateInviteCode}
+              />
+            )}
+            <MemberList
+              members={view.members}
+              youId={youId}
+              isHost
+              memberStatus={view.memberStatus}
+              onKick={(memberId) => run(actions.kick(memberId))}
+            />
+            {view.room && (
+              <StreamSettings
+                room={view.room}
+                viewers={viewers}
+                bitrate={bitrate}
+                busy={busy || !online}
+                onModeChange={(mode) => host.setMode(mode)}
+                onLockedChange={(locked) => run(actions.updateRoom({ locked }))}
+              />
+            )}
+          </div>
+        ) : (
+          <ChatPanel
+            messages={view.messages}
+            youId={youId}
+            connected={online}
+            onSend={actions.sendChat}
+            className={theater ? "h-80" : "h-80 lg:h-auto"}
           />
         )}
       </aside>
@@ -294,17 +328,46 @@ function HostView({
 }
 
 function ViewerView({ room }: { room: Room }) {
-  const { view, viewer } = room;
+  const { view, viewer, actions } = room;
   const host = view.members.find((m) => m.role === "host");
   const onlineCount = view.members.filter((m) => m.online).length;
+  const online = view.connection.status === "open";
+  const youId = view.you?.memberId ?? "";
+  const [chatOpen, setChatOpen] = useState(true);
+  const [sideTab, setSideTab] = useState<"chat" | "members">("chat");
+  const unreadChat = useUnreadChat(
+    view.messages,
+    chatOpen && sideTab === "chat",
+  );
+  const { danmaku, danmakuOverlay } = usePlayerDanmaku(view.messages, youId);
+
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)] lg:min-h-[calc(100dvh-3rem)] lg:grid-cols-[minmax(0,1fr)_300px]">
-      <section className="flex min-w-0 flex-col lg:border-r lg:border-zinc-200">
+    <div
+      className={`grid grid-cols-[minmax(0,1fr)] lg:min-h-[calc(100dvh-3rem)] ${
+        chatOpen ? "lg:grid-cols-[minmax(0,1fr)_320px]" : ""
+      }`}
+    >
+      <section
+        className={`flex min-w-0 flex-col ${chatOpen ? "lg:border-r lg:border-zinc-200" : ""}`}
+      >
         {viewer && (
           <ViewerPlayer
             viewer={viewer}
             hostName={host?.nickname ?? null}
             hostOnline={host?.online ?? false}
+            danmaku={danmaku}
+            danmakuOverlay={danmakuOverlay}
+            chat={{
+              open: chatOpen,
+              onToggle: () => {
+                if (chatOpen) {
+                  setChatOpen(false);
+                } else {
+                  setChatOpen(true);
+                  setSideTab("chat");
+                }
+              },
+            }}
           />
         )}
         {/* 片名顯示在影片正下方（對齊 DESIGN.md §3） */}
@@ -324,24 +387,46 @@ function ViewerView({ room }: { room: Room }) {
         </div>
       </section>
 
-      <aside className="flex flex-col divide-y divide-zinc-200 bg-white">
-        <div className="px-4 py-3.5">
-          <p className="truncate text-sm text-zinc-900">
-            <span className="font-semibold text-[#0072b2]">
-              {host?.nickname ?? "房主"}
-            </span>{" "}
-            正在主持
-          </p>
-          <p className="text-xs text-zinc-500">{onlineCount} 人在線</p>
-        </div>
-        <MemberList
-          members={view.members}
-          youId={view.you?.memberId ?? ""}
-          isHost={false}
-          memberStatus={{}}
-          onKick={() => {}}
-        />
-      </aside>
+      {chatOpen && (
+        <aside className="flex flex-col bg-white lg:sticky lg:top-0 lg:h-[calc(100dvh-3rem)]">
+          <div className="shrink-0 border-b border-zinc-200 px-4 py-3">
+            <p className="truncate text-sm text-zinc-900">
+              <span className="font-semibold text-[#0072b2]">
+                {host?.nickname ?? "房主"}
+              </span>{" "}
+              正在主持
+            </p>
+            <p className="text-xs text-zinc-500">{onlineCount} 人在線</p>
+          </div>
+          <SidebarTabs
+            active={sideTab}
+            onChange={setSideTab}
+            tabs={[
+              { id: "chat", label: "聊天", badge: unreadChat },
+              { id: "members", label: `成員（${onlineCount}）` },
+            ]}
+          />
+          {sideTab === "chat" ? (
+            <ChatPanel
+              messages={view.messages}
+              youId={youId}
+              connected={online}
+              onSend={actions.sendChat}
+              className="h-80 lg:h-auto"
+            />
+          ) : (
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <MemberList
+                members={view.members}
+                youId={youId}
+                isHost={false}
+                memberStatus={{}}
+                onKick={() => {}}
+              />
+            </div>
+          )}
+        </aside>
+      )}
     </div>
   );
 }

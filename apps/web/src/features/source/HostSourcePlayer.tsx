@@ -22,6 +22,8 @@ export function HostSourcePlayer({
   belowTitle,
   belowAction,
   quality,
+  danmaku,
+  danmakuOverlay,
   theater,
 }: {
   source: ReturnType<typeof useLocalSource>;
@@ -31,6 +33,10 @@ export function HostSourcePlayer({
   belowAction?: ReactNode;
   /** 控制列的畫質按鈕與面板（房間頁提供）。 */
   quality?: PlayerControlsProps["quality"];
+  /** 控制列的彈幕開關與設定面板（房間頁提供）。 */
+  danmaku?: PlayerControlsProps["danmaku"];
+  /** 播放器容器內的彈幕層（隨全螢幕一起顯示）。 */
+  danmakuOverlay?: ReactNode;
   /** 控制列的劇院模式按鈕（房間頁提供）。 */
   theater?: PlayerControlsProps["theater"];
 }) {
@@ -120,6 +126,7 @@ export function HostSourcePlayer({
             </span>
           </button>
         )}
+        {danmakuOverlay}
         <PlayerControls
           playback={{
             playing: ready && playing,
@@ -139,6 +146,7 @@ export function HostSourcePlayer({
           }}
           volume={volume}
           quality={quality}
+          danmaku={danmaku}
           theater={theater}
           fullscreen={{
             on: fullscreen.active,

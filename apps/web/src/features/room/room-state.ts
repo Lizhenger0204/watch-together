@@ -1,4 +1,5 @@
 import {
+  type ChatMessage,
   type ClientMessageOf,
   type Member,
   type MemberStatus,
@@ -15,6 +16,9 @@ import {
   shouldWarnTotalUpload,
 } from "../transport";
 
+/** 聊天室畫面最多保留的近期訊息筆數（不持久化，只留在本次停留的記憶體）。 */
+export const CHAT_HISTORY_LIMIT = 200;
+
 /** 房主可以改的房間設定（room:update 去掉 type、reqId）。 */
 export type RoomUpdate = Omit<ClientMessageOf<"room:update">, "type" | "reqId">;
 
@@ -28,6 +32,8 @@ export type RoomView = {
   session: number;
   /** 只有房主會收到（收看者回報的連線品質）。只保留在線成員的。 */
   memberStatus: Record<string, MemberStatus>;
+  /** 加入後收到的聊天訊息（不保留進房前歷史）。 */
+  messages: ChatMessage[];
   closedBy: ServerMessageOf<"room:closed">["reason"] | null;
   lastError: string | null;
 };
@@ -51,6 +57,7 @@ export const initialRoomView: RoomView = {
   you: null,
   session: 0,
   memberStatus: {},
+  messages: [],
   closedBy: null,
   lastError: null,
 };
@@ -130,6 +137,20 @@ export function roomReducer(state: RoomView, event: RoomEvent): RoomView {
           [message.memberId]: message.status,
         },
       };
+    case "chat:message": {
+      const { id, memberId, nickname, role, text, sentAt } = message;
+      const next = [
+        ...state.messages,
+        { id, memberId, nickname, role, text, sentAt },
+      ];
+      return {
+        ...state,
+        messages:
+          next.length > CHAT_HISTORY_LIMIT
+            ? next.slice(next.length - CHAT_HISTORY_LIMIT)
+            : next,
+      };
+    }
     case "room:closed":
       return { ...state, closedBy: message.reason };
     case "error":

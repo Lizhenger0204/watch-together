@@ -49,3 +49,25 @@ body {
   outline: 2px solid var(--brand);
   outline-offset: 2px;
 }
+
+/* 彈幕層使用 container query 單位，一般視窗、劇院模式與全螢幕都能精確從右滑到左。 */
+.danmaku-stage {
+  container-type: inline-size;
+}
+
+.danmaku-item {
+  text-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.9),
+    0 0 1px rgba(0, 0, 0, 0.9);
+  animation: danmaku-scroll linear forwards;
+  will-change: transform;
+}
+
+@keyframes danmaku-scroll {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(calc(-100cqw - 100%), 0, 0);
+  }
+}

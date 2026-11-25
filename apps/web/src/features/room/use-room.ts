@@ -135,6 +135,7 @@ export function useRoom(roomId: string) {
         client?.request({ type: "room:update", ...patch }),
       kick: (memberId: string) =>
         client?.request({ type: "room:kick", memberId }),
+      sendChat: (text: string) => client?.request({ type: "chat:send", text }),
       async regenerateInviteCode() {
         if (!token) throw new Error("no token");
         const result = await regenerateInviteCode(roomId, token);

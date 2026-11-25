@@ -56,24 +56,31 @@ function IconButton({
   );
 }
 
+type PopoverKind = "quality" | "danmaku";
+
 /**
- * 畫質面板（控制列上方彈出）的開關狀態。面板定位在播放器容器內（不是跟著按鈕），
- * 所以窄視窗不會被左緣裁掉。點外面或按 Esc 關閉；從面板內按 Esc 要把焦點還給按鈕。
+ * 控制列上方彈出面板（畫質、彈幕設定）的開關與焦點管理。
+ * 面板定位在播放器容器內（不是跟著按鈕），所以窄視窗不會被左緣裁掉；
+ * 同一時間最多只開啟一個面板。點外面或按 Esc 關閉；從面板內按 Esc 要把焦點還給對應按鈕。
  */
-function useQualityPopover(disabled: boolean | undefined) {
-  const [open, setOpen] = useState(false);
-  const buttonRef = useRef<HTMLButtonElement>(null);
+function useControlsPopover(qualityDisabled: boolean | undefined) {
+  const [open, setOpen] = useState<PopoverKind | null>(null);
+  const qualityButtonRef = useRef<HTMLButtonElement>(null);
+  const danmakuButtonRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
+    const triggerRef = open === "quality" ? qualityButtonRef : danmakuButtonRef;
     const onPointer = (event: PointerEvent) => {
       const target = event.target as Node;
       if (
         !panelRef.current?.contains(target) &&
-        !buttonRef.current?.contains(target)
-      )
-        setOpen(false);
+        !qualityButtonRef.current?.contains(target) &&
+        !danmakuButtonRef.current?.contains(target)
+      ) {
+        setOpen(null);
+      }
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
@@ -81,9 +88,9 @@ function useQualityPopover(disabled: boolean | undefined) {
       const hadFocus =
         active === document.body ||
         panelRef.current?.contains(active) ||
-        buttonRef.current === active;
-      setOpen(false);
-      if (hadFocus) buttonRef.current?.focus();
+        triggerRef.current === active;
+      setOpen(null);
+      if (hadFocus) triggerRef.current?.focus();
     };
     document.addEventListener("pointerdown", onPointer);
     document.addEventListener("keydown", onKey);
@@ -99,10 +106,14 @@ function useQualityPopover(disabled: boolean | undefined) {
   }, [open]);
 
   useEffect(() => {
-    if (disabled) setOpen(false);
-  }, [disabled]);
+    if (qualityDisabled && open === "quality") setOpen(null);
+  }, [qualityDisabled, open]);
 
-  return { open, setOpen, buttonRef, panelRef };
+  function toggle(kind: PopoverKind) {
+    setOpen((prev) => (prev === kind ? null : kind));
+  }
+
+  return { open, toggle, qualityButtonRef, danmakuButtonRef, panelRef };
 }
 
 export type PlayerControlsProps = {
@@ -118,9 +129,9 @@ export type PlayerControlsProps = {
   volume: PlayerVolume;
   /** 房主：畫質按鈕（顯示目前畫質，點開後是 panel）。 */
   quality?: { label: string; disabled?: boolean; panel: ReactNode };
-  /** 彈幕開關（T-127 接上）。 */
-  danmaku?: { on: boolean; onToggle: () => void };
-  /** 收看端聊天入口（T-127 接上）。 */
+  /** 彈幕設定（有 panel 時點開顯示開關與密度；無 panel 時直接切換）。 */
+  danmaku?: { on: boolean; panel?: ReactNode; onToggle?: () => void };
+  /** 收看端聊天室入口。 */
   chat?: { open: boolean; onToggle: () => void };
   /** 房主：劇院模式（隱藏側欄讓影片滿寬）。 */
   theater?: { on: boolean; onToggle: () => void };
@@ -139,22 +150,41 @@ export function PlayerControls({
 }: PlayerControlsProps) {
   const VolumeIcon =
     volume.audible === 0 ? VolumeX : volume.audible < 0.5 ? Volume1 : Volume2;
-  const popover = useQualityPopover(quality?.disabled);
-  const panelId = useId();
+  const popover = useControlsPopover(quality?.disabled);
+  const qualityPanelId = useId();
+  const danmakuPanelId = useId();
+
+  const activeDialog =
+    popover.open === "quality" && quality
+      ? {
+          id: qualityPanelId,
+          label: "畫質",
+          widthClass: "w-72",
+          content: quality.panel,
+        }
+      : popover.open === "danmaku" && danmaku?.panel
+        ? {
+            id: danmakuPanelId,
+            label: "彈幕設定",
+            widthClass: "w-56",
+            content: danmaku.panel,
+          }
+        : null;
+
   return (
-    // 外層蓋滿播放器但不攔截點擊；畫質面板在控制列上方的剩餘空間內捲動，
+    // 外層蓋滿播放器但不攔截點擊；彈出面板在控制列上方的剩餘空間內捲動，
     // 高度不會超出播放器，窄視窗也不會把影片頂部全遮住。
     <div className="pointer-events-none absolute inset-0 z-20 flex flex-col justify-end">
-      {quality && popover.open && (
+      {activeDialog && (
         <div
           ref={popover.panelRef}
-          id={panelId}
+          id={activeDialog.id}
           role="dialog"
-          aria-label="畫質"
+          aria-label={activeDialog.label}
           tabIndex={-1}
-          className="pointer-events-auto mx-3 mb-1 min-h-0 w-72 max-w-[calc(100%-1.5rem)] self-end overflow-y-auto overscroll-contain rounded-sm bg-zinc-900/95 p-3 text-left text-white shadow-sm focus-visible:outline-none"
+          className={`pointer-events-auto mx-3 mb-1 min-h-0 max-w-[calc(100%-1.5rem)] self-end overflow-y-auto overscroll-contain rounded-sm bg-zinc-900/95 p-3 text-left text-white shadow-sm focus-visible:outline-none ${activeDialog.widthClass}`}
         >
-          {quality.panel}
+          {activeDialog.content}
         </div>
       )}
       <div className="pointer-events-auto bg-gradient-to-t from-black/80 via-black/45 to-transparent px-3 pt-5 pb-1.5">
@@ -214,28 +244,59 @@ export function PlayerControls({
           <div className="flex shrink-0 items-center gap-1">
             {quality && (
               <button
-                ref={popover.buttonRef}
+                ref={popover.qualityButtonRef}
                 type="button"
                 aria-label={`畫質：${quality.label}`}
                 title="畫質"
                 aria-haspopup="dialog"
-                aria-expanded={popover.open}
-                aria-controls={popover.open ? panelId : undefined}
+                aria-expanded={popover.open === "quality"}
+                aria-controls={
+                  popover.open === "quality" ? qualityPanelId : undefined
+                }
                 disabled={quality.disabled}
                 className={`${ICON_BUTTON} w-auto px-1.5 text-xs font-semibold tabular-nums`}
-                onClick={() => popover.setOpen(!popover.open)}
+                onClick={() => popover.toggle("quality")}
               >
                 {quality.label}
               </button>
             )}
-            {danmaku && (
-              <IconButton
-                icon={danmaku.on ? MessageSquareText : MessageSquareOff}
-                label={danmaku.on ? "關閉彈幕" : "開啟彈幕"}
-                pressed={danmaku.on}
-                onClick={danmaku.onToggle}
-              />
-            )}
+            {danmaku &&
+              (danmaku.panel ? (
+                <button
+                  ref={popover.danmakuButtonRef}
+                  type="button"
+                  aria-label={
+                    danmaku.on ? "彈幕設定（已開啟）" : "彈幕設定（已關閉）"
+                  }
+                  title="彈幕設定"
+                  aria-haspopup="dialog"
+                  aria-expanded={popover.open === "danmaku"}
+                  aria-controls={
+                    popover.open === "danmaku" ? danmakuPanelId : undefined
+                  }
+                  className={ICON_BUTTON}
+                  onClick={() => popover.toggle("danmaku")}
+                >
+                  {danmaku.on ? (
+                    <MessageSquareText
+                      className="size-[18px]"
+                      strokeWidth={1.75}
+                    />
+                  ) : (
+                    <MessageSquareOff
+                      className="size-[18px] text-white/60"
+                      strokeWidth={1.75}
+                    />
+                  )}
+                </button>
+              ) : (
+                <IconButton
+                  icon={danmaku.on ? MessageSquareText : MessageSquareOff}
+                  label={danmaku.on ? "關閉彈幕" : "開啟彈幕"}
+                  pressed={danmaku.on}
+                  onClick={() => danmaku.onToggle?.()}
+                />
+              ))}
             {chat && (
               <IconButton
                 icon={MessagesSquare}

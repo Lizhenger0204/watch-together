@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { resetMemoryStorage, roomToken } from "../../lib/storage";
 import {
+  CHAT_HISTORY_LIMIT,
   forgetRoomIdentity,
   formatMbps,
   initialRoomView,
@@ -86,6 +87,27 @@ describe("roomReducer", () => {
       message: { type: "room:closed", reason: "kicked" },
     });
     expect(view.closedBy).toBe("kicked");
+  });
+
+  test("chat:message 追加聊天訊息，超過上限時保留最新紀錄", () => {
+    let view = initialRoomView;
+    for (let i = 0; i < CHAT_HISTORY_LIMIT + 5; i++) {
+      view = roomReducer(view, {
+        kind: "message",
+        message: {
+          type: "chat:message",
+          id: `m-${i}`,
+          memberId: "u1",
+          nickname: "小美",
+          role: "member",
+          text: `訊息 ${i}`,
+          sentAt: 1_000 + i,
+        },
+      });
+    }
+    expect(view.messages).toHaveLength(CHAT_HISTORY_LIMIT);
+    expect(view.messages[0]?.id).toBe("m-5");
+    expect(view.messages.at(-1)?.id).toBe(`m-${CHAT_HISTORY_LIMIT + 4}`);
   });
 });
 
