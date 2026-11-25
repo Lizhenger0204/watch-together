@@ -55,6 +55,8 @@ export abstract class HostSessionFlows extends HostSessionBase {
       return;
     }
     if (gen !== this.generation) return;
+    // 之後傳輸失敗由 build() 的狀態回呼撤回開播；拆掉傳輸會換世代，晚到的 ack 不再生效。
+    this.readyGeneration = gen;
     // start() 期間停止意圖、片源換掉或模式被改：這個傳輸已過時，拆掉交給 reconcile 收尾。
     if (!this.intent || !this.sourceReady() || transport.mode !== this.mode) {
       this.op = null;

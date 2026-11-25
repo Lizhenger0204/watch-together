@@ -64,6 +64,7 @@ export class HostSession extends HostSessionFlows {
   protected peerHandler:
     Parameters<TransportSignal["onPeerRequest"]>[0] | null = null;
   protected op: Op | null = null;
+  protected readyGeneration: number | null = null;
   /** 等停播確認時，收到 live:false 廣播就呼叫。 */
   protected stopWaiter: (() => void) | null = null;
   /** 切模式第 2 步：收到目標模式的 room:updated 就呼叫。 */
@@ -347,14 +348,20 @@ export class HostSession extends HostSessionFlows {
 
   // ── 傳輸 ───────────────────────────────────────────────
 
-  /** 直播中傳輸整體無法繼續：拆掉、取消意圖、讓收看者停止舊連線。 */
-  protected failLive() {
-    const wasLive = this.serverLive;
+  /**
+   * 傳輸整體無法繼續：拆掉、取消意圖、讓收看者停止舊連線。
+   * `duringStart`：傳輸已就緒、還在等停播或 live:true 的確認；live:true 可能已送出，
+   * 一律送 live:false 撤回。
+   */
+  protected failLive(duringStart = false) {
+    const retract = duringStart || this.serverLive;
     this.dropTransport();
     this.op = null;
     this.cancelIntent();
-    this.error = "直播傳輸中斷了，請重新開始直播。";
-    if (wasLive && this.connected) {
+    this.error = duringStart
+      ? "無法開始直播：直播傳輸中斷了，請再試一次。"
+      : "直播傳輸中斷了，請重新開始直播。";
+    if (retract && this.connected) {
       this.options.client
         .request({ type: "stream:status", live: false, title: null })
         .catch(() => {});

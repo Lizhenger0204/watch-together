@@ -34,6 +34,8 @@ export abstract class HostSessionBase {
   protected abstract closed: boolean;
   protected abstract destroyed: boolean;
   protected abstract op: Op | null;
+  /** 開播流程中 start() 已完成的傳輸世代：之後在等停播或 live:true 的確認。 */
+  protected abstract readyGeneration: number | null;
   protected abstract signalHandler:
     Parameters<TransportSignal["onSignal"]>[0] | null;
   protected abstract peerHandler:
@@ -42,7 +44,7 @@ export abstract class HostSessionBase {
 
   protected abstract publish(): void;
   protected abstract showError(error: unknown): void;
-  protected abstract failLive(): void;
+  protected abstract failLive(duringStart?: boolean): void;
 
   /**
    * 送停播；同一 reqId 的 ack 或之後的 live:false 廣播先到者為確認。
@@ -130,10 +132,10 @@ export abstract class HostSessionBase {
       if (current() && error.code === "TRACK_ERROR") this.showError(error);
     });
     transport.onState((state) => {
-      // 開播中的失敗由 start() 的 reject 處理。
-      if (state === "error" && current() && this.op !== "starting") {
-        this.failLive();
-      }
+      if (state !== "error" || !current()) return;
+      if (this.op !== "starting") this.failLive();
+      // 傳輸已就緒、等開播確認時失敗：撤回這次開播。start() 還沒完成時交給它的 reject。
+      else if (this.readyGeneration === gen) this.failLive(true);
     });
     return transport;
   }

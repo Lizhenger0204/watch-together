@@ -1,14 +1,13 @@
 import { describe, expect, test } from "vitest";
 import { ApiError } from "../../lib/api";
 import { SignalDisconnectedError } from "../../lib/signal";
-import { createHostTransport, TransportError } from "../transport";
+import { TransportError } from "../transport";
 import {
   FakeStream,
   fakeTrack,
   flush,
   readySource,
   setup,
-  snapshot,
 } from "./host-session.fixtures";
 
 // 開播流程：建立傳輸、await start()、送 live:true 的時機與失敗處理。
@@ -77,16 +76,6 @@ describe("開播", () => {
     t.session.setIntent(true);
     expect(t.session.getView().error).toBeNull();
     expect(t.transports).toHaveLength(2);
-  });
-
-  test("轉發模式在 T-109 前同步丟出 RELAY_UNAVAILABLE：顯示可讀錯誤、不當機", () => {
-    // 用真正的 dispatcher（features/transport/index.ts）。
-    const t = setup({ createTransport: createHostTransport });
-    t.connect(snapshot({ mode: "relay" }));
-    expect(() => t.session.setSource(readySource())).not.toThrow();
-    expect(t.client.requests).toHaveLength(0);
-    expect(t.session.getView()).toMatchObject({ intent: false, phase: "idle" });
-    expect(t.session.getView().error).toContain("轉發模式還沒完成");
   });
 
   test("live:true 被伺服器拒絕：拆掉傳輸、取消意圖、顯示錯誤", async () => {
@@ -168,5 +157,82 @@ describe("開播", () => {
     });
     t.connect();
     expect(t.transports).toHaveLength(2);
+  });
+
+  describe("傳輸已就緒、等開播確認時傳輸失敗", () => {
+    test("live:true 已送出：取消意圖、拆掉傳輸並撤回開播；晚到的 ack 不恢復", async () => {
+      const t = setup();
+      t.connect();
+      t.session.setSource(readySource());
+      const transport = t.transports[0]!;
+      transport.gate.resolve();
+      await flush();
+      expect(t.log.at(-1)).toBe("stream:status live 電影");
+
+      transport.emitState("error");
+      expect(t.log.slice(-2)).toEqual(["destroy", "stream:status off"]);
+      expect(t.onIntentChange).toHaveBeenLastCalledWith(false);
+      expect(t.session.getView()).toMatchObject({
+        intent: false,
+        phase: "idle",
+      });
+      expect(t.session.getView().error).toBeTruthy();
+
+      // 暫存的 ack 這時才到：不可回到「直播中」，也不重建傳輸。
+      await t.client.ack("stream:status live 電影");
+      await t.client.ack("stream:status off");
+      expect(t.session.getView()).toMatchObject({
+        intent: false,
+        phase: "idle",
+      });
+      expect(t.transports).toHaveLength(1);
+      expect(t.log.at(-1)).toBe("stream:status off");
+    });
+
+    test("還在確認上一次停播：取消意圖、拆掉傳輸，之後不送 live:true", async () => {
+      const t = setup();
+      t.connect();
+      // 上一輪的停播還沒被確認，伺服器仍是直播中。
+      t.client.emit({
+        type: "stream:status",
+        live: true,
+        title: "舊片",
+        startedAt: 1,
+      });
+      t.session.setSource(readySource());
+      const transport = t.transports[0]!;
+      transport.gate.resolve();
+      await flush();
+      expect(t.log.at(-1)).toBe("stream:status off");
+
+      transport.emitState("error");
+      expect(t.log.at(-2)).toBe("destroy");
+      expect(t.session.getView()).toMatchObject({
+        intent: false,
+        phase: "idle",
+      });
+
+      await t.client.ackFirst("stream:status off");
+      await t.client.ack("stream:status off");
+      expect(t.log.filter((l) => l.startsWith("stream:status live"))).toEqual(
+        [],
+      );
+      expect(t.session.getView().phase).toBe("idle");
+    });
+
+    test("start() 還沒完成時的 error 狀態交給 start() 的 reject 處理，不撤回開播", async () => {
+      const t = setup();
+      t.connect();
+      t.session.setSource(readySource());
+      const transport = t.transports[0]!;
+      transport.emitState("error");
+      expect(t.session.getView().phase).toBe("starting");
+      expect(t.client.requests).toHaveLength(0);
+      transport.gate.reject(new TransportError("RELAY_FAILED", "轉發連線中斷"));
+      await flush();
+      expect(t.log).toEqual(["create p2p", "start", "destroy"]);
+      expect(t.client.requests).toHaveLength(0);
+      expect(t.session.getView().error).toContain("轉發連線中斷");
+    });
   });
 });
