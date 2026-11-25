@@ -1,13 +1,31 @@
 import { describe, expect, test } from "vitest";
 import { ApiError } from "../../lib/api";
 import { SignalDisconnectedError } from "../../lib/signal";
-import { TransportError } from "../transport";
+import {
+  createHostTransport,
+  TransportError,
+  type CreateHostTransport,
+} from "../transport";
+import {
+  createFakePeerConnectionFactory,
+  type FakeRtcPeerConnection,
+} from "../transport/common/rtc-fake";
+import {
+  created,
+  flush as flushTimers,
+  gather,
+  location,
+  ROOM,
+  track,
+  useRelayFakes,
+} from "../transport/relay/test-fixtures";
 import {
   FakeStream,
   fakeTrack,
   flush,
   readySource,
   setup,
+  snapshot,
 } from "./host-session.fixtures";
 
 // 開播流程：建立傳輸、await start()、送 live:true 的時機與失敗處理。
@@ -233,6 +251,87 @@ describe("開播", () => {
       expect(t.log).toEqual(["create p2p", "start", "destroy"]);
       expect(t.client.requests).toHaveLength(0);
       expect(t.session.getView().error).toContain("轉發連線中斷");
+    });
+  });
+
+  describe("轉發：真正的 dispatcher（假 fetch／ICE）", () => {
+    const http = useRelayFakes();
+
+    function relaySetup() {
+      const { factory, connections } = createFakePeerConnectionFactory();
+      const createTransport: CreateHostTransport = (options) =>
+        createHostTransport({
+          ...options,
+          roomId: ROOM,
+          createPeerConnection: factory,
+          fetchIceServers: async () => [],
+          getCodecCapabilities: (kind) =>
+            kind === "video"
+              ? [{ mimeType: "video/H264", clockRate: 90000 }]
+              : [{ mimeType: "audio/opus", clockRate: 48000 }],
+        });
+      const t = setup({ createTransport });
+      t.connect(snapshot({ mode: "relay" }));
+      const stream = new MediaStream([track("video", 1080), track("audio")]);
+      t.session.setSource({ stream, status: "ready", title: "電影" });
+      return { ...t, connections };
+    }
+
+    test("WHIP 回 503：顯示 RELAY_UNAVAILABLE 的可讀錯誤、取消開播意圖、不送 live:true", async () => {
+      const t = relaySetup();
+      await gather(t.connections);
+      expect(http().posts()).toHaveLength(1);
+      http()
+        .lastPost()
+        .respond(
+          503,
+          JSON.stringify({
+            error: {
+              code: "RELAY_UNAVAILABLE",
+              message: "轉發模式目前無法使用",
+            },
+          }),
+          { "Content-Type": "application/json" },
+        );
+      await flushTimers();
+      expect(t.client.requests).toHaveLength(0);
+      expect(t.onIntentChange).toHaveBeenLastCalledWith(false);
+      expect(t.session.getView()).toEqual({
+        intent: false,
+        phase: "idle",
+        error: "無法開始直播：轉發模式目前無法使用，請房主改用「P2P 直連」。",
+      });
+    });
+
+    test("WHIP 201 後、live:true 的 ack 前 ICE failed：送停播與 DELETE，晚到的 ack 不恢復", async () => {
+      const t = relaySetup();
+      await gather(t.connections);
+      created(http().lastPost());
+      await flushTimers();
+      expect(t.log.at(-1)).toBe("stream:status live 電影");
+
+      (t.connections[0] as FakeRtcPeerConnection).setIceConnectionState(
+        "failed",
+      );
+      await flushTimers();
+      expect(t.log.at(-1)).toBe("stream:status off");
+      expect(
+        http()
+          .deletes()
+          .map((r) => r.url),
+      ).toEqual([location()]);
+      expect(t.session.getView()).toMatchObject({
+        intent: false,
+        phase: "idle",
+      });
+
+      await t.client.ack("stream:status live 電影");
+      await t.client.ack("stream:status off");
+      expect(t.session.getView()).toMatchObject({
+        intent: false,
+        phase: "idle",
+      });
+      expect(http().posts()).toHaveLength(1);
     });
   });
 });
