@@ -8,11 +8,7 @@
  *   `currentRoundTripTime`。
  * - 封包遺失：`packetsLost` 夾到 ≥ 0，遺失率夾到 0～1。
  */
-import {
-  P2P_TOTAL_BITRATE_WARNING,
-  QUALITY_PRESETS,
-  type Quality,
-} from "@project/shared";
+import { P2P_TOTAL_BITRATE_WARNING } from "@project/shared";
 
 /** 單條連線的統計。 */
 export interface TransportStats {
@@ -41,21 +37,24 @@ export interface StatsSnapshot {
   timestamp: number;
 }
 
-/** 開播前總上傳量預估（bps）：P2P 每條連線都要上傳一份。streaming.md §2。 */
+/**
+ * 總上傳量預估（bps）：P2P 每條連線都要上傳一份。streaming.md §2。
+ * `bitrate` 是每人的實際位元率（`EncodingTarget.maxBitrate`）。
+ */
 export function estimateTotalUploadBitrate(
-  quality: Quality,
+  bitrate: number,
   viewerCount: number,
 ): number {
-  return QUALITY_PRESETS[quality].maxBitrate * viewerCount;
+  return bitrate * viewerCount;
 }
 
-/** 總上傳量超過 60 Mbps 時提示房主改用「流暢」或「轉發」（不強制）。streaming.md §2。 */
+/** 總上傳量超過 60 Mbps 時提示房主調低位元率或改用「轉發」（不強制）。streaming.md §2。 */
 export function shouldWarnTotalUpload(
-  quality: Quality,
+  bitrate: number,
   viewerCount: number,
 ): boolean {
   return (
-    estimateTotalUploadBitrate(quality, viewerCount) > P2P_TOTAL_BITRATE_WARNING
+    estimateTotalUploadBitrate(bitrate, viewerCount) > P2P_TOTAL_BITRATE_WARNING
   );
 }
 

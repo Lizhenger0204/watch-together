@@ -1,9 +1,4 @@
-import {
-  QUALITY_PRESETS,
-  type MemberState,
-  type Quality,
-  type SignalData,
-} from "@project/shared";
+import type { EncodingTarget, MemberState, SignalData } from "@project/shared";
 import type { HostTransportOptions } from "../index";
 import {
   applyAudioEncoding,
@@ -23,7 +18,7 @@ import { Negotiation, peerError } from "./negotiation";
 export type MediaKind = "video" | "audio";
 export interface HostSource {
   tracks: Partial<Record<MediaKind, MediaStreamTrack | null>>;
-  quality: Quality;
+  quality: EncodingTarget;
 }
 
 interface PeerEvents {
@@ -153,7 +148,7 @@ export class HostPeer {
       } else {
         await applyVideoEncoding(
           sender,
-          QUALITY_PRESETS[this.source.quality],
+          this.source.quality,
           sender.track?.getSettings().height ?? 0,
         );
       }

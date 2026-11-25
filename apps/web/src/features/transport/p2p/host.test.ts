@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { TARGETS } from "../common/encoding.fixtures";
 import { FakeRtcPeerConnection } from "../common/rtc-fake";
 import {
   answerHost,
@@ -67,7 +68,7 @@ it("reserves both senders, applies H.264 first, and carries the latest tracks an
   h.fetchIceServers.mockReturnValueOnce(gate.promise);
   h.signal.request("late");
   h.host.replaceTrack("video", secondVideo);
-  await h.host.setQuality("smooth");
+  await h.host.setQuality(TARGETS.smooth);
   gate.resolve([{ urls: "stun:example.invalid" }]);
   await flush();
   expect(h.connections[0]!.offerOptions).toHaveLength(1);
@@ -101,7 +102,9 @@ it("reports each failing member, preserves successful quality changes and reject
   const video = h.connections.map((pc) => pc.getTransceivers()[0]!.sender);
   vi.spyOn(video[0]!, "setParameters").mockRejectedValueOnce(new Error());
   vi.spyOn(video[2]!, "setParameters").mockRejectedValueOnce(new Error());
-  const failure = await h.host.setQuality("smooth").catch((e: unknown) => e);
+  const failure = await h.host
+    .setQuality(TARGETS.smooth)
+    .catch((e: unknown) => e);
   expect(
     errors.mock.calls.flat().map(({ code, memberId }) => [code, memberId]),
   ).toEqual([
@@ -127,9 +130,9 @@ it("serializes overlapping sender writes and finishes at the latest quality and 
     await gate.promise;
     await set(params);
   });
-  const first = h.host.setQuality("smooth");
+  const first = h.host.setQuality(TARGETS.smooth);
   await flush();
-  const second = h.host.setQuality("high");
+  const second = h.host.setQuality(TARGETS.high);
   const newTrack = track("video", 4320);
   h.host.replaceTrack("video", newTrack);
   gate.resolve();
@@ -386,7 +389,7 @@ it("continues applying quality to remaining members when a removed PC's sender o
   const gate = deferred<void>();
   vi.spyOn(first, "setParameters").mockReturnValueOnce(gate.promise);
   const done = vi.fn();
-  const changed = h.host.setQuality("smooth").then(done);
+  const changed = h.host.setQuality(TARGETS.smooth).then(done);
   await flush();
   h.host.removePeer("one");
   await flush();
@@ -415,7 +418,7 @@ it("reapplies the latest track on restart and discards the previous round's pend
   h.pc.setIceConnectionState("failed");
   const latest = track("video", 4320);
   h.host.replaceTrack("video", latest);
-  const updated = h.host.setQuality("high");
+  const updated = h.host.setQuality(TARGETS.high);
   staleIce({ candidate: null });
   replacing.reject(new Error());
   sample.resolve(new Map() as RTCStatsReport);

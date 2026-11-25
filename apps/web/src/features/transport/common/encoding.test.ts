@@ -1,4 +1,4 @@
-import { QUALITY_PRESETS } from "@project/shared";
+import { resolveQuality } from "@project/shared";
 import { describe, expect, it } from "vitest";
 import {
   applyAudioEncoding,
@@ -43,9 +43,13 @@ describe("preferredAudioCodecs", () => {
 describe("applyVideoEncoding", () => {
   it("sets bitrate, framerate and scale on each encoding", async () => {
     const sender = new FakeRtcRtpSender(null);
-    await applyVideoEncoding(sender, QUALITY_PRESETS.standard, 2160);
+    await applyVideoEncoding(
+      sender,
+      { targetHeight: 1080, maxBitrate: 8_000_000, maxFramerate: 30 },
+      2160,
+    );
     expect(sender.lastParameters?.encodings[0]).toMatchObject({
-      maxBitrate: 6_000_000,
+      maxBitrate: 8_000_000,
       maxFramerate: 30,
       scaleResolutionDownBy: 2,
     });
@@ -54,10 +58,43 @@ describe("applyVideoEncoding", () => {
     );
   });
 
-  it("scales 4K down to 720p by 3 for the smooth preset", async () => {
+  it("scales 4K down to 720p by 3 and 900p by 2.4", async () => {
     const sender = new FakeRtcRtpSender(null);
-    await applyVideoEncoding(sender, QUALITY_PRESETS.smooth, 2160);
+    const at = (height: 720 | 900) =>
+      resolveQuality({ height, bitrate: 8_000_000, fps: 30 }, null);
+    await applyVideoEncoding(sender, at(720), 2160);
     expect(sender.lastParameters?.encodings[0]?.scaleResolutionDownBy).toBe(3);
+    await applyVideoEncoding(sender, at(900), 2160);
+    expect(sender.lastParameters?.encodings[0]?.scaleResolutionDownBy).toBe(
+      2.4,
+    );
+  });
+
+  it("never upscales a source shorter than the target height", async () => {
+    const sender = new FakeRtcRtpSender(null);
+    await applyVideoEncoding(
+      sender,
+      { targetHeight: 1080, maxBitrate: 8_000_000, maxFramerate: 30 },
+      720,
+    );
+    expect(sender.lastParameters?.encodings[0]?.scaleResolutionDownBy).toBe(1);
+  });
+
+  it("removes a previous framerate cap when switching to source fps", async () => {
+    const sender = new FakeRtcRtpSender(null);
+    await applyVideoEncoding(
+      sender,
+      { targetHeight: 1080, maxBitrate: 8_000_000, maxFramerate: 24 },
+      1080,
+    );
+    await applyVideoEncoding(
+      sender,
+      { targetHeight: 1080, maxBitrate: 15_000_000, maxFramerate: null },
+      1080,
+    );
+    const encoding = sender.lastParameters?.encodings[0];
+    expect(encoding?.maxBitrate).toBe(15_000_000);
+    expect(encoding).not.toHaveProperty("maxFramerate");
   });
 });
 

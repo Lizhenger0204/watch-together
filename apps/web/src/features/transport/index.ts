@@ -10,7 +10,12 @@
  * 本層是純 TS，不 import React。RTCPeerConnection 一律透過
  * `common/rtc.ts` 的介面，測試注入 `common/rtc-fake.ts` 的 fake。
  */
-import type { MemberState, Mode, Quality, SignalData } from "@project/shared";
+import type {
+  EncodingTarget,
+  MemberState,
+  Mode,
+  SignalData,
+} from "@project/shared";
 import type { Unsubscribe } from "./common/emitter";
 import type { CodecCapabilities } from "./common/encoding";
 import { TransportError } from "./common/errors";
@@ -80,12 +85,13 @@ export interface HostTransport {
   replaceTrack(kind: "video" | "audio", track: MediaStreamTrack | null): void;
 
   /**
-   * 先記住最新畫質供之後的 peer 使用，再逐一套用到現有 video sender。
+   * 先記住最新編碼目標（已由房間層解析的畫質，streaming.md §2）供之後的 peer 使用，
+   * 再逐一套用到現有 video sender。
    * 每個失敗的 peer 各以 onError 回報帶 memberId 的 TRACK_ERROR，其餘照常套用。
    * Relay 的單一上傳失敗時省略 memberId。
    * 全部處理完後若有失敗，Promise 以第一個 TRACK_ERROR reject。
    */
-  setQuality(quality: Quality): Promise<void>;
+  setQuality(quality: EncodingTarget): Promise<void>;
 
   /**
    * 關閉該成員的連線並作廢其協商代次，包括在途建連、ICE 佇列、重試與統計。
@@ -161,7 +167,8 @@ export interface HostTransportOptions extends TransportRtcOptions {
   stream: MediaStream;
   signal: TransportSignal;
   mode: Mode;
-  quality: Quality;
+  /** 已解析的編碼目標（`resolveQuality()`，streaming.md §2）。 */
+  quality: EncodingTarget;
   /** 取 ICE 的房間 id。 */
   roomId: string;
   /** hostToken（Bearer token），呼叫 /ice 與 WHIP 用。不可寫進 log。 */

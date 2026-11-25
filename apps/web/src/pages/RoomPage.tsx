@@ -1,3 +1,4 @@
+import { resolveQuality } from "@project/shared";
 import { LogOut } from "lucide-react";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { Layout } from "../components/Layout";
@@ -9,7 +10,7 @@ import {
   MemberList,
   QualityPanel,
   StreamSettings,
-  qualityLabel,
+  qualityButtonLabel,
   useRoom,
 } from "../features/room";
 import type { HostPhase } from "../features/room/host-session-types";
@@ -113,21 +114,24 @@ function HostView({
       stream,
       status: source.check.status,
       title: source.title,
+      bitrate: source.info?.bitrate ?? null,
     }),
   );
   const { error, run } = useActionError();
   /** 劇院模式：側欄移到影片下方，讓影片滿寬（只在桌面寬度有側欄時提供）。 */
   const [theater, setTheater] = useState(false);
-  const { stream: sourceStream, title: sourceTitle } = source;
+  const { stream: sourceStream, title: sourceTitle, info: sourceInfo } = source;
   const sourceStatus = source.check.status;
-  // 換檔、檢查狀態或片名改變（含第一次通過檢查）。
+  const sourceBitrate = sourceInfo?.bitrate ?? null;
+  // 換檔、檢查狀態、片名或片源位元率改變（含第一次通過檢查）。
   useEffect(() => {
     host.setSource({
       stream: sourceStream,
       status: sourceStatus,
       title: sourceTitle,
+      bitrate: sourceBitrate,
     });
-  }, [host, sourceStream, sourceStatus, sourceTitle]);
+  }, [host, sourceStream, sourceStatus, sourceTitle, sourceBitrate]);
 
   const ready = sourceStatus === "ready";
   const online = view.connection.status === "open";
@@ -139,8 +143,11 @@ function HostView({
   const { phase } = session;
   const busy =
     phase === "starting" || phase === "stopping" || phase === "switching";
+  const bitrate = view.room
+    ? resolveQuality(view.room.quality, sourceBitrate).maxBitrate
+    : 0;
   const upload = view.room
-    ? uploadHint(view.room.mode, view.room.quality, viewers)
+    ? uploadHint(view.room.mode, bitrate, viewers)
     : null;
   const showUploadWarn =
     (phase === "idle" || phase === "waiting") && Boolean(upload?.warn);
@@ -165,11 +172,15 @@ function HostView({
           quality={
             view.room
               ? {
-                  label: qualityLabel(view.room.quality),
+                  label: qualityButtonLabel(
+                    view.room.quality,
+                    sourceInfo?.height ?? null,
+                  ),
                   disabled: busy || !online,
                   panel: (
                     <QualityPanel
                       quality={view.room.quality}
+                      source={sourceInfo}
                       onChange={(quality) => host.setQuality(quality)}
                     />
                   ),
@@ -223,7 +234,7 @@ function HostView({
             {showUploadWarn && upload && (
               <Notice tone="warning">
                 預估上傳 {formatMbps(upload.total)}，超過 60
-                Mbps，建議改用「流暢」畫質或「轉發」模式。
+                Mbps，建議調低位元率或改用「轉發」模式。
               </Notice>
             )}
             {session.error && (
@@ -270,6 +281,7 @@ function HostView({
           <StreamSettings
             room={view.room}
             viewers={viewers}
+            bitrate={bitrate}
             busy={busy || !online}
             onModeChange={(mode) => host.setMode(mode)}
             onLockedChange={(locked) => run(actions.updateRoom({ locked }))}

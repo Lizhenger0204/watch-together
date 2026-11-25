@@ -1,5 +1,6 @@
 import {
   DEFAULT_QUALITY,
+  parseStoredQuality,
   type Member,
   type Mode,
   type Quality,
@@ -30,6 +31,7 @@ export type RoomState = {
   createdAt: number;
   locked: boolean;
   mode: Mode;
+  /** T-126 以前的房間存的是預設名稱字串，送出前一律經過 parseStoredQuality。 */
   quality: Quality;
   inviteCode: string;
   /** 換碼版本（初始 0，每次成功換碼遞增）。舊房間沒有此欄位，視為 0。 */
@@ -191,7 +193,7 @@ export function toRoomInfo(state: RoomState, role: Role): RoomInfo {
     roomId: state.roomId,
     locked: state.locked,
     mode: state.mode,
-    quality: state.quality,
+    quality: parseStoredQuality(state.quality),
     createdAt: state.createdAt,
   };
   return role === "host"

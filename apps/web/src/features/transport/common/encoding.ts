@@ -4,7 +4,7 @@
  * 純邏輯（codec 偏好）與「套用參數到 sender」分開，前者可以在 Node 測試環境
  * 直接測，後者靠 rtc-fake.ts 的 sender 測。
  */
-import { AUDIO_MAX_BITRATE, type QualityPreset } from "@project/shared";
+import { AUDIO_MAX_BITRATE, type EncodingTarget } from "@project/shared";
 import { computeScaleDownBy } from "../../source/source-check";
 import type { RtcRtpSender, RtcRtpTransceiver } from "./rtc";
 
@@ -17,10 +17,10 @@ export type CodecCapabilities = (kind: "audio" | "video") => RTCRtpCodec[];
 export const browserCodecCapabilities: CodecCapabilities = (kind) =>
   RTCRtpSender.getCapabilities(kind)?.codecs ?? [];
 
-/** 依 §2 設定 video sender 的編碼參數（碼率、幀率、縮放、降級策略）。 */
+/** 依 §2 設定 video sender 的編碼參數（碼率、幀率、縮放、降級策略）。`target` 由 resolveQuality() 算出。 */
 export async function applyVideoEncoding(
   sender: RtcRtpSender,
-  preset: QualityPreset,
+  target: EncodingTarget,
   sourceHeight: number,
 ): Promise<void> {
   const parameters = sender.getParameters();
@@ -28,11 +28,13 @@ export async function applyVideoEncoding(
   parameters.degradationPreference = "maintain-framerate";
   const scaleResolutionDownBy = computeScaleDownBy(
     sourceHeight,
-    preset.targetHeight,
+    target.targetHeight,
   );
   for (const encoding of parameters.encodings) {
-    encoding.maxBitrate = preset.maxBitrate;
-    encoding.maxFramerate = preset.maxFramerate;
+    encoding.maxBitrate = target.maxBitrate;
+    // 「原片」FPS 不設上限；要拿掉先前設過的值，否則會沿用舊的上限。
+    if (target.maxFramerate === null) delete encoding.maxFramerate;
+    else encoding.maxFramerate = target.maxFramerate;
     encoding.scaleResolutionDownBy = scaleResolutionDownBy;
   }
   await sender.setParameters(parameters);

@@ -1,3 +1,4 @@
+import { estimateSourceBitrate } from "@project/shared";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { captureVideo, loadMetadata, probePlayback } from "./browser-source";
 import {
@@ -12,6 +13,9 @@ type SourceCheck =
   | { status: "warning"; code: "NO_AUDIO" }
   | { status: "error"; code: Exclude<SourceCheckCode, "NO_AUDIO"> };
 
+/** 片源的高度與估計的平均位元率（streaming.md §2「原片位元率」）。 */
+export type SourceInfo = { height: number; bitrate: number | null };
+
 export function useLocalSource(
   onStreamChange?: (stream: MediaStream | null) => void,
 ) {
@@ -21,6 +25,7 @@ export function useLocalSource(
   const [check, setCheck] = useState<SourceCheck>({ status: "idle" });
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [title, setTitle] = useState("");
+  const [info, setInfo] = useState<SourceInfo | null>(null);
   const notifyStreamChange = useEffectEvent((stream: MediaStream | null) => {
     onStreamChange?.(stream);
   });
@@ -45,6 +50,7 @@ export function useLocalSource(
     release.current?.();
     pendingStream.current = null;
     setStream(null);
+    setInfo(null);
     setTitle(file.name.replace(/\.[^.]+$/, "") || file.name);
     setCheck({ status: "checking" });
 
@@ -69,6 +75,10 @@ export function useLocalSource(
       if (video.videoWidth <= 0 || video.videoHeight <= 0) {
         throw new SourceCheckError("VIDEO_UNDECODABLE");
       }
+      setInfo({
+        height: video.videoHeight,
+        bitrate: estimateSourceBitrate(file.size, video.duration),
+      });
       captured = captureVideo(video);
       await probePlayback(video, signal);
       if (signal.aborted) return;
@@ -90,6 +100,7 @@ export function useLocalSource(
       if (signal.aborted) return;
       release.current?.();
       release.current = undefined;
+      setInfo(null);
       const code =
         error instanceof SourceCheckError ? error.code : "VIDEO_UNDECODABLE";
       setCheck({
@@ -106,5 +117,13 @@ export function useLocalSource(
     setCheck({ status: "ready", code: "NO_AUDIO" });
   }
 
-  return { videoRef, title, stream, check, selectFile, continueWithoutAudio };
+  return {
+    videoRef,
+    title,
+    stream,
+    info,
+    check,
+    selectFile,
+    continueWithoutAudio,
+  };
 }

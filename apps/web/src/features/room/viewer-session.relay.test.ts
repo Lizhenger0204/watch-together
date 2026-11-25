@@ -2,7 +2,11 @@
  * 收看者房間層 × 真正的 relay viewer transport（T-122）：
  * WHEP 409（STREAM_NOT_LIVE）維持 waiting，下一個開播廣播再拉一次。
  */
-import type { ServerMessage, ServerMessageOf } from "@project/shared";
+import {
+  DEFAULT_QUALITY,
+  type ServerMessage,
+  type ServerMessageOf,
+} from "@project/shared";
 import { describe, expect, test } from "vitest";
 import { createFakePeerConnectionFactory } from "../transport/common/rtc-fake";
 import { createRelayViewerTransport } from "../transport/relay";
@@ -23,7 +27,7 @@ const snapshot = (live: boolean): ServerMessageOf<"room:snapshot"> => ({
     roomId: ROOM,
     locked: false,
     mode: "relay",
-    quality: "standard",
+    quality: DEFAULT_QUALITY,
     createdAt: 0,
   },
   members: [],

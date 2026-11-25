@@ -1,48 +1,111 @@
-import { QUALITY_PRESETS, type Quality } from "@project/shared";
-import { formatMbps } from "./room-state";
+import { sameQuality, type Quality } from "@project/shared";
+import { useState } from "react";
+import {
+  QUALITY_STEPS,
+  maxStepIndex,
+  stepIndex,
+  stepLabel,
+  stepValueText,
+  withStep,
+  type QualityField,
+} from "./quality-steps";
 
-const QUALITY_OPTIONS = Object.keys(QUALITY_PRESETS) as Quality[];
+const FIELDS: { field: QualityField; label: string }[] = [
+  { field: "height", label: "解析度" },
+  { field: "bitrate", label: "位元率" },
+  { field: "fps", label: "FPS" },
+];
 
-/** 播放器控制列的畫質按鈕文字。 */
-export function qualityLabel(quality: Quality): string {
-  return QUALITY_PRESETS[quality].label;
-}
-
-/** 播放器控制列「畫質」彈出面板的內容（房主）。 */
+/**
+ * 播放器控制列「畫質」彈出面板（房主，streaming.md §2）：三條分段滑桿。
+ * 拖曳時只改畫面上的草稿，放開（或鍵盤調整後放開按鍵）才送出；
+ * 送出後草稿保留到伺服器廣播的畫質追上為止，避免滑桿跳回舊值。
+ */
 export function QualityPanel({
   quality,
+  source,
   onChange,
 }: {
   quality: Quality;
+  /** 片源高度與估計位元率；還沒選片時為 null。 */
+  source: { height: number; bitrate: number | null } | null;
   onChange: (quality: Quality) => void;
 }) {
+  const [draft, setDraft] = useState<Quality | null>(null);
+  // 伺服器已採用草稿：清掉草稿（render 中依 props 調整 state，不需要 effect）。
+  if (draft && sameQuality(draft, quality)) setDraft(null);
+  const shown = draft ?? quality;
+  const sourceHeight = source?.height ?? null;
+
+  function commit() {
+    if (draft && !sameQuality(draft, quality)) onChange(draft);
+  }
+
   return (
-    <fieldset className="grid gap-1">
-      <legend className="mb-1.5 text-xs font-semibold text-white/70">
-        畫質
-      </legend>
-      {QUALITY_OPTIONS.map((value) => {
-        const preset = QUALITY_PRESETS[value];
-        const selected = value === quality;
+    <div className="grid gap-4">
+      {FIELDS.map(({ field, label }) => {
+        const steps = QUALITY_STEPS[field] as readonly Quality[QualityField][];
+        const max = maxStepIndex(field, sourceHeight);
+        const index = stepIndex(field, shown, sourceHeight);
+        const value = steps[index]!;
+        const valueText = stepValueText(field, value, source?.bitrate ?? null);
+        const id = `quality-${field}`;
         return (
-          <button
-            key={value}
-            type="button"
-            aria-pressed={selected}
-            className={`flex items-center justify-between rounded-sm px-2 py-1.5 text-sm transition-colors focus-visible:ring-2 focus-visible:ring-[#0072b2] focus-visible:outline-none ${
-              selected ? "bg-[#0072b2] text-white" : "hover:bg-white/10"
-            }`}
-            onClick={() => {
-              if (!selected) onChange(value);
-            }}
-          >
-            <span>{preset.label}</span>
-            <span className="text-xs text-white/70">
-              {preset.targetHeight}P・{formatMbps(preset.maxBitrate)}
-            </span>
-          </button>
+          <div key={field} className="grid gap-1.5">
+            <div className="flex items-baseline justify-between text-xs">
+              <label htmlFor={id} className="font-semibold text-white/80">
+                {label}
+              </label>
+              <span className="text-white tabular-nums">
+                {max < 0 ? `${sourceHeight}P（片源）` : valueText}
+              </span>
+            </div>
+            <input
+              id={id}
+              type="range"
+              className="player-range block w-full"
+              min={0}
+              max={steps.length - 1}
+              step={1}
+              value={index}
+              disabled={max < 0}
+              aria-valuetext={valueText}
+              onChange={(event) =>
+                setDraft(
+                  withStep(
+                    shown,
+                    field,
+                    event.currentTarget.valueAsNumber,
+                    sourceHeight,
+                  ),
+                )
+              }
+              onPointerUp={commit}
+              onKeyUp={commit}
+            />
+            <div
+              aria-hidden
+              className="flex justify-between text-xs text-white/60 tabular-nums"
+            >
+              {steps.map((step, i) => (
+                <span
+                  key={String(step)}
+                  className={
+                    i > max ? "text-white/25" : i === index ? "text-white" : ""
+                  }
+                >
+                  {stepLabel(field, step)}
+                </span>
+              ))}
+            </div>
+          </div>
         );
       })}
-    </fieldset>
+      {sourceHeight !== null && (
+        <p className="text-xs text-white/60">
+          片源 {sourceHeight}P，解析度不會超過片源。
+        </p>
+      )}
+    </div>
   );
 }

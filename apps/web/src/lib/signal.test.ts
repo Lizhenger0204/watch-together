@@ -1,3 +1,4 @@
+import { DEFAULT_QUALITY } from "@project/shared";
 import { describe, expect, test, vi } from "vitest";
 import { ApiError } from "./api";
 import {
@@ -73,7 +74,7 @@ const snapshot = {
     roomId: "r",
     locked: false,
     mode: "p2p",
-    quality: "standard",
+    quality: DEFAULT_QUALITY,
     createdAt: 0,
   },
   members: [],

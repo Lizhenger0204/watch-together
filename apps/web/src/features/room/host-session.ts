@@ -1,4 +1,12 @@
-import type { Mode, Quality, ServerMessage } from "@project/shared";
+import {
+  DEFAULT_QUALITY,
+  sameEncodingTarget,
+  sameQuality,
+  type EncodingTarget,
+  type Mode,
+  type Quality,
+  type ServerMessage,
+} from "@project/shared";
 import {
   SignalDisconnectedError,
   type ConnectionState,
@@ -50,9 +58,15 @@ export class HostSession extends HostSessionFlows {
   protected closed = false;
   protected destroyed = false;
   protected intent: boolean;
-  protected source: HostSource = { stream: null, status: "idle", title: "" };
+  protected source: HostSource = {
+    stream: null,
+    status: "idle",
+    title: "",
+    bitrate: null,
+  };
   protected mode: Mode = "p2p";
-  protected quality: Quality = "standard";
+  protected quality: Quality = DEFAULT_QUALITY;
+  protected appliedTarget: EncodingTarget | null = null;
   /** 伺服器目前的直播狀態（snapshot、stream:status 廣播、自己 live:true 的 ack）。 */
   protected serverLive = false;
   protected readonly titles: TitleSync;
@@ -147,6 +161,8 @@ export class HostSession extends HostSessionFlows {
     if (this.destroyed) return;
     this.source = source;
     this.applyTracks();
+    // 「原片位元率」依片源而定：換片後要重新套用。
+    this.applyEncoding();
     this.reconcile();
     this.publish();
   }
@@ -171,7 +187,7 @@ export class HostSession extends HostSessionFlows {
 
   /** 切換畫質：送 room:update，收到 room:updated 後對現有傳輸 setQuality。 */
   setQuality(quality: Quality): void {
-    if (!this.usable() || quality === this.quality) return;
+    if (!this.usable() || sameQuality(quality, this.quality)) return;
     this.error = null;
     this.options.client
       .request({ type: "room:update", quality })
@@ -291,13 +307,22 @@ export class HostSession extends HostSessionFlows {
     this.publish();
   }
 
+  /** 解析後的編碼目標有變（畫質檔位或原片位元率）才對現有傳輸 setQuality。 */
+  private applyEncoding() {
+    const transport = this.transport;
+    if (!transport) return;
+    const target = this.encodingTarget();
+    if (this.appliedTarget && sameEncodingTarget(target, this.appliedTarget))
+      return;
+    this.appliedTarget = target;
+    transport.setQuality(target).catch((error: unknown) => {
+      this.showError(error);
+    });
+  }
+
   private handleRoomUpdated(mode: Mode, quality: Quality) {
-    if (quality !== this.quality) {
-      this.quality = quality;
-      this.transport?.setQuality(quality).catch((error: unknown) => {
-        this.showError(error);
-      });
-    }
+    this.quality = quality;
+    this.applyEncoding();
     if (mode !== this.mode) {
       this.mode = mode;
       const waiter = this.modeWaiter;

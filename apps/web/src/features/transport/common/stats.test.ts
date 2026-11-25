@@ -16,17 +16,18 @@ function entry(
 }
 
 describe("estimateTotalUploadBitrate", () => {
-  it("multiplies the preset bitrate by the viewer count", () => {
-    expect(estimateTotalUploadBitrate("standard", 3)).toBe(18_000_000);
-    expect(estimateTotalUploadBitrate("smooth", 7)).toBe(21_000_000);
-    expect(estimateTotalUploadBitrate("high", 0)).toBe(0);
+  it("multiplies the per-viewer bitrate by the viewer count", () => {
+    expect(estimateTotalUploadBitrate(8_000_000, 3)).toBe(24_000_000);
+    expect(estimateTotalUploadBitrate(10_000_000, 7)).toBe(70_000_000);
+    expect(estimateTotalUploadBitrate(15_000_000, 0)).toBe(0);
   });
 });
 
 describe("shouldWarnTotalUpload", () => {
   it("warns only above 60 Mbps", () => {
-    expect(shouldWarnTotalUpload("high", 7)).toBe(false); // 56 Mbps
-    expect(shouldWarnTotalUpload("high", 8)).toBe(true); // 64 Mbps
+    expect(shouldWarnTotalUpload(8_000_000, 7)).toBe(false); // 56 Mbps
+    expect(shouldWarnTotalUpload(8_000_000, 8)).toBe(true); // 64 Mbps
+    expect(shouldWarnTotalUpload(15_000_000, 4)).toBe(false); // 60 Mbps
   });
 });
 

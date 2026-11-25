@@ -14,6 +14,8 @@ export type HostSource = {
   status: "idle" | "checking" | "ready" | "warning" | "error";
   /** 去掉副檔名的檔名；送出前用 live-intent.ts 的 streamTitle 截斷。 */
   title: string;
+  /** 估計的原片位元率（bps，streaming.md §2「原片位元率」）；量不到為 null。 */
+  bitrate: number | null;
 };
 
 export type HostPhase =

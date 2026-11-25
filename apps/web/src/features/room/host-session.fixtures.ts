@@ -1,9 +1,11 @@
-import type {
-  ClientMessageOf,
-  Member,
-  Mode,
-  Quality,
-  ServerMessage,
+import {
+  DEFAULT_QUALITY,
+  type ClientMessageOf,
+  type EncodingTarget,
+  type Member,
+  type Mode,
+  type Quality,
+  type ServerMessage,
 } from "@project/shared";
 import { expect, vi } from "vitest";
 import type { ConnectionState } from "../../lib/signal";
@@ -36,6 +38,18 @@ export async function flush() {
   for (let i = 0; i < 20; i += 1) await Promise.resolve();
 }
 
+/** 測試用的畫質檔位。 */
+export const Q = {
+  standard: DEFAULT_QUALITY,
+  smooth: { height: 720, bitrate: 8_000_000, fps: 30 },
+  high: { height: 1080, bitrate: 15_000_000, fps: 60 },
+  source: { height: 1080, bitrate: "source", fps: "source" },
+} satisfies Record<string, Quality>;
+
+const qualityText = (q: Quality) => `${q.height}/${q.bitrate}/${q.fps}`;
+const targetText = (t: EncodingTarget) =>
+  `${t.targetHeight}/${t.maxBitrate}/${t.maxFramerate ?? "source"}`;
+
 export function label(message: Request) {
   if (message.type === "stream:status") {
     return message.live
@@ -44,7 +58,10 @@ export function label(message: Request) {
   }
   const parts = Object.entries(message)
     .filter(([key]) => key !== "type")
-    .map(([key, value]) => `${key}=${String(value)}`);
+    .map(
+      ([key, value]) =>
+        `${key}=${key === "quality" ? qualityText(value as Quality) : String(value)}`,
+    );
   return `room:update ${parts.join(" ")}`;
 }
 
@@ -140,8 +157,8 @@ export class FakeTransport implements HostTransport {
   replaceTrack(kind: "video" | "audio", track: MediaStreamTrack | null) {
     this.log.push(`replace ${kind} ${track?.id ?? "null"}`);
   }
-  setQuality(quality: Quality) {
-    this.log.push(`setQuality ${quality}`);
+  setQuality(target: EncodingTarget) {
+    this.log.push(`setQuality ${targetText(target)}`);
     const { error } = this.setQualityResult;
     return error ? Promise.reject(error) : Promise.resolve();
   }
@@ -199,8 +216,9 @@ export const asStream = (stream: FakeStream) =>
 export function readySource(
   stream = new FakeStream(fakeTrack("video", "v1"), fakeTrack("audio", "a1")),
   title = "電影",
+  bitrate: number | null = null,
 ): HostSource {
-  return { stream: asStream(stream), status: "ready", title };
+  return { stream: asStream(stream), status: "ready", title, bitrate };
 }
 
 export const host: Member = {
@@ -225,7 +243,7 @@ export function snapshot(
       roomId: "room",
       locked: false,
       mode: patch.mode ?? "p2p",
-      quality: patch.quality ?? "standard",
+      quality: patch.quality ?? DEFAULT_QUALITY,
       createdAt: 1,
       inviteCode: "ABCD-EFGH",
     },
@@ -237,7 +255,7 @@ export function snapshot(
 
 export function roomUpdated(
   mode: Mode,
-  quality: Quality = "standard",
+  quality: Quality = DEFAULT_QUALITY,
 ): ServerMessage {
   return {
     type: "room:updated",

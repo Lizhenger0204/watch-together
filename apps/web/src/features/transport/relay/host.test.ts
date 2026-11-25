@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
+import { TARGETS } from "../common/encoding.fixtures";
 import type { FakeRtcPeerConnection } from "../common/rtc-fake";
 import { DELETE_RETRY_DELAYS_MS, ICE_GATHERING_TIMEOUT_MS } from "./http";
 import {
@@ -337,9 +338,9 @@ describe("換片、畫質、統計與其他", () => {
   test("setQuality 套用到 video sender；失敗時回報 TRACK_ERROR 並 reject", async () => {
     const { host, pc } = await live();
     const sender = pc.getTransceivers()[0]!.sender;
-    await host.setQuality("smooth");
+    await host.setQuality(TARGETS.smooth);
     const smooth = sender.lastParameters?.encodings[0]?.maxBitrate;
-    await host.setQuality("high");
+    await host.setQuality(TARGETS.high);
     expect(sender.lastParameters?.encodings[0]?.maxBitrate).toBeGreaterThan(
       smooth ?? 0,
     );
@@ -349,7 +350,7 @@ describe("換片、畫質、統計與其他", () => {
     sender.setParameters = vi.fn(async () => {
       throw new Error("nope");
     });
-    await expect(host.setQuality("smooth")).rejects.toMatchObject({
+    await expect(host.setQuality(TARGETS.smooth)).rejects.toMatchObject({
       code: "TRACK_ERROR",
     });
     expect(errors).toHaveLength(1);

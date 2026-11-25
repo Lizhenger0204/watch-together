@@ -10,18 +10,21 @@ const MODE_OPTIONS: { value: Mode; label: string }[] = [
 export function StreamSettings({
   room,
   viewers,
+  bitrate,
   busy = false,
   onModeChange,
   onLockedChange,
 }: {
   room: RoomInfo;
   viewers: number;
+  /** 每位收看者的實際位元率（bps，已依片源解析「原片」）。 */
+  bitrate: number;
   /** 開播、停播、切換傳送方式或重新連線同步中：暫時不能改傳送方式。 */
   busy?: boolean;
   onModeChange: (mode: Mode) => void;
   onLockedChange: (locked: boolean) => void;
 }) {
-  const upload = uploadHint(room.mode, room.quality, viewers);
+  const upload = uploadHint(room.mode, bitrate, viewers);
   return (
     <section className="px-4 py-3.5">
       <h3 className="mb-3 text-xs font-semibold text-zinc-500">播放設定</h3>
@@ -38,8 +41,7 @@ export function StreamSettings({
         {upload && (
           <Notice tone={upload.warn ? "warning" : "info"}>
             {viewers} 位收看者，預估上傳 {formatMbps(upload.total)}。
-            {upload.warn &&
-              "超過 60 Mbps，建議改用「流暢」畫質或「轉發」模式。"}
+            {upload.warn && "超過 60 Mbps，建議調低位元率或改用「轉發」模式。"}
           </Notice>
         )}
         <label className="flex cursor-pointer items-center justify-between gap-3 border-t border-zinc-100 pt-3 text-sm text-zinc-800">

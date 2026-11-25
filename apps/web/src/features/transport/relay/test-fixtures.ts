@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, vi } from "vitest";
+import { TARGETS } from "../common/encoding.fixtures";
 import type {
   HostTransportOptions,
   TransportSignal,
@@ -153,7 +154,7 @@ export function makeHost(
   const host = createRelayHostTransport({
     ...data.options,
     stream,
-    quality: "standard",
+    quality: TARGETS.standard,
     ...overrides,
   });
   return { ...data, host };

@@ -43,7 +43,7 @@ describe("開播", () => {
     const transport = t.transports[0]!;
     expect(transport.options).toMatchObject({
       mode: "p2p",
-      quality: "standard",
+      quality: { targetHeight: 1080, maxBitrate: 8_000_000, maxFramerate: 30 },
       roomId: "room",
       token: "host-token",
     });
@@ -133,7 +133,12 @@ describe("開播", () => {
     t.connect();
     t.session.setSource(readySource());
     // 開播途中換片，進入檢查中（stream 暫時為 null）。
-    t.session.setSource({ stream: null, status: "checking", title: "新片" });
+    t.session.setSource({
+      stream: null,
+      status: "checking",
+      title: "新片",
+      bitrate: null,
+    });
     t.transports[0]!.gate.resolve();
     await flush();
     // 舊傳輸已拆，不再卡在「直播暫停中」；不送 live:true。
@@ -262,7 +267,12 @@ describe("開播", () => {
       const t = setup({ createTransport });
       t.connect(snapshot({ mode: "relay" }));
       const stream = new MediaStream([track("video", 1080), track("audio")]);
-      t.session.setSource({ stream, status: "ready", title: "電影" });
+      t.session.setSource({
+        stream,
+        status: "ready",
+        title: "電影",
+        bitrate: null,
+      });
       return { ...t, connections };
     }
 

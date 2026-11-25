@@ -137,7 +137,12 @@ describe("轉發開播途中按停止（真正的 dispatcher，假 fetch／ICE�
     const t = setup({ createTransport });
     t.connect(snapshot({ mode: "relay" }));
     const stream = new MediaStream([track("video", 1080), track("audio")]);
-    t.session.setSource({ stream, status: "ready", title: "電影" });
+    t.session.setSource({
+      stream,
+      status: "ready",
+      title: "電影",
+      bitrate: null,
+    });
     return { ...t, connections };
   }
 

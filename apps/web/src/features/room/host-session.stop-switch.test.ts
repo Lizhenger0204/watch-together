@@ -8,6 +8,7 @@ import {
   roomUpdated,
   setup,
   snapshot,
+  Q,
 } from "./host-session.fixtures";
 
 beforeEach(() => vi.useFakeTimers());
@@ -240,7 +241,7 @@ describe("直播中切模式", () => {
 
     // 等待 resync 期間：再次切模式、改畫質、片源更新、或收到舊連線晚到的 room:updated，都不重建也不送請求。
     t.session.setMode("relay");
-    t.session.setQuality("smooth");
+    t.session.setQuality(Q.smooth);
     t.session.setSource(readySource(undefined, "新片"));
     t.client.emit(roomUpdated("relay"));
     await flush();
@@ -388,7 +389,12 @@ describe("直播中切模式", () => {
     vi.advanceTimersByTime(MODE_UPDATED_TIMEOUT_MS);
     await flush();
 
-    t.session.setSource({ stream: null, status: "idle", title: "" });
+    t.session.setSource({
+      stream: null,
+      status: "idle",
+      title: "",
+      bitrate: null,
+    });
     t.connect(snapshot({ mode: "relay" }));
     expect(t.transports).toHaveLength(1);
     expect(t.session.getView()).toEqual({

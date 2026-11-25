@@ -9,7 +9,7 @@
  *   （本文可能還在讀）就立刻送冪等的 DELETE。`start()` 在停止時立刻結束，不等已關閉連線上的原生操作。
  * - `removePeer` 在轉發模式是 no-op：收看者各自向 SFU 拉流，房主端沒有逐人的連線。
  */
-import { QUALITY_PRESETS, type Quality } from "@project/shared";
+import type { EncodingTarget } from "@project/shared";
 import type { CreateHostTransport, HostTransportState } from "../index";
 import {
   applyAudioEncoding,
@@ -61,7 +61,7 @@ export const createRelayHostTransport: CreateHostTransport = (options) => {
   }>();
   const queue = publishQueue(options.roomId);
   const tracks: Partial<Record<MediaKind, MediaStreamTrack | null>> = {};
-  let quality: Quality = options.quality;
+  let quality: EncodingTarget = options.quality;
   let state: HostTransportState = "idle";
   let run: Run | undefined;
   let starting: Promise<void> | undefined;
@@ -103,7 +103,7 @@ export const createRelayHostTransport: CreateHostTransport = (options) => {
       else
         await applyVideoEncoding(
           sender,
-          QUALITY_PRESETS[quality],
+          quality,
           sender.track?.getSettings().height ?? 0,
         );
     } catch (error) {

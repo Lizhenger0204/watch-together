@@ -37,7 +37,12 @@ describe("房主重新連線", () => {
   test("重新連線時片源還沒就緒（重新整理後）：不重建，片源就緒後才開播", () => {
     const t = setup({ intent: true });
     t.connect();
-    t.session.setSource({ stream: null, status: "idle", title: "" });
+    t.session.setSource({
+      stream: null,
+      status: "idle",
+      title: "",
+      bitrate: null,
+    });
     expect(t.transports).toHaveLength(0);
     expect(t.session.getView().phase).toBe("waiting");
     t.session.setSource(readySource());

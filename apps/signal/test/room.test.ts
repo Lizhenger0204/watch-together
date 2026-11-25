@@ -14,7 +14,7 @@ import {
   isRoomId,
   timingSafeEqual,
 } from "../src/room/crypto";
-import { normalizeInviteCode } from "@project/shared";
+import { DEFAULT_QUALITY, normalizeInviteCode } from "@project/shared";
 
 const config = {
   maxMembers: 3,
@@ -138,6 +138,14 @@ test("只有房主看得到邀請碼與換碼版本", () => {
   });
   expect(toRoomInfo(room(), "member")).not.toHaveProperty("inviteCode");
   expect(toRoomInfo(room(), "member")).not.toHaveProperty("inviteCodeVersion");
+});
+
+test("新房間用預設畫質；舊房間存的預設名稱送出時回到預設畫質", () => {
+  expect(toRoomInfo(room(), "member").quality).toEqual(DEFAULT_QUALITY);
+  const legacy = { ...room(), quality: "high" } as unknown as ReturnType<
+    typeof room
+  >;
+  expect(toRoomInfo(legacy, "host").quality).toEqual(DEFAULT_QUALITY);
 });
 
 test("toMembers 依連線標示 online", () => {

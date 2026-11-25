@@ -3,7 +3,6 @@ import {
   type Member,
   type MemberStatus,
   type Mode,
-  type Quality,
   type RoomInfo,
   type ServerMessage,
   type ServerMessageOf,
@@ -184,13 +183,14 @@ export function forgetRoomIdentity(roomId: string, token: string | null) {
 
 /**
  * P2P 模式下房主要上傳的總量（bps）與是否該提醒（streaming.md §2「P2P 總頻寬保護」）。
+ * `bitrate` 是每人實際位元率（`resolveQuality(...).maxBitrate`）。
  * 轉發只上傳一份、沒有收看者時不需要提示，回 null。
  */
-export function uploadHint(mode: Mode, quality: Quality, viewers: number) {
+export function uploadHint(mode: Mode, bitrate: number, viewers: number) {
   if (mode !== "p2p" || viewers <= 0) return null;
   return {
-    total: estimateTotalUploadBitrate(quality, viewers),
-    warn: shouldWarnTotalUpload(quality, viewers),
+    total: estimateTotalUploadBitrate(bitrate, viewers),
+    warn: shouldWarnTotalUpload(bitrate, viewers),
   };
 }
 

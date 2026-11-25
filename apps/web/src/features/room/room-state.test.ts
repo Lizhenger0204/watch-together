@@ -16,7 +16,7 @@ const snapshot = {
     roomId: "r",
     locked: false,
     mode: "p2p" as const,
-    quality: "standard" as const,
+    quality: { height: 1080, bitrate: 8_000_000, fps: 30 } as const,
     createdAt: 0,
     inviteCode: "AAAAAAAA",
     inviteCodeVersion: 0,
@@ -251,11 +251,15 @@ describe("roomReducer：連線品質與重新驗證", () => {
       kind: "message",
       message: {
         type: "room:updated",
-        room: { ...snapshot.room, quality: "high", inviteCodeVersion: 1 },
+        room: {
+          ...snapshot.room,
+          quality: { height: 720, bitrate: "source", fps: 60 },
+          inviteCodeVersion: 1,
+        },
       },
     });
     expect(view.room).toMatchObject({
-      quality: "high",
+      quality: { height: 720, bitrate: "source", fps: 60 },
       inviteCode: "BBBBBBBB",
       inviteCodeVersion: 2,
     });
@@ -393,26 +397,26 @@ describe("forgetRoomIdentity", () => {
 });
 
 describe("uploadHint（P2P 總頻寬保護，streaming.md §2）", () => {
-  test("3 人標準畫質：18 Mbps，不提醒", () => {
-    expect(uploadHint("p2p", "standard", 3)).toEqual({
-      total: 18_000_000,
+  test("3 人 8 Mbps：24 Mbps，不提醒", () => {
+    expect(uploadHint("p2p", 8_000_000, 3)).toEqual({
+      total: 24_000_000,
       warn: false,
     });
   });
   test("剛好 60 Mbps 不提醒，超過才提醒", () => {
-    // 標準 6 Mbps × 10 人 = 60 Mbps；× 11 人 = 66 Mbps。
-    expect(uploadHint("p2p", "standard", 10)).toEqual({
+    // 15 Mbps × 4 人 = 60 Mbps；10 Mbps × 7 人 = 70 Mbps。
+    expect(uploadHint("p2p", 15_000_000, 4)).toEqual({
       total: 60_000_000,
       warn: false,
     });
-    expect(uploadHint("p2p", "standard", 11)?.warn).toBe(true);
-    // 高畫質 8 Mbps：7 人 56 Mbps 不提醒，8 人 64 Mbps 提醒。
-    expect(uploadHint("p2p", "high", 7)?.warn).toBe(false);
-    expect(uploadHint("p2p", "high", 8)?.warn).toBe(true);
+    expect(uploadHint("p2p", 10_000_000, 7)?.warn).toBe(true);
+    // 8 Mbps：7 人 56 Mbps 不提醒，8 人 64 Mbps 提醒。
+    expect(uploadHint("p2p", 8_000_000, 7)?.warn).toBe(false);
+    expect(uploadHint("p2p", 8_000_000, 8)?.warn).toBe(true);
   });
   test("轉發模式或沒有收看者：不提示", () => {
-    expect(uploadHint("relay", "high", 20)).toBeNull();
-    expect(uploadHint("p2p", "high", 0)).toBeNull();
+    expect(uploadHint("relay", 15_000_000, 20)).toBeNull();
+    expect(uploadHint("p2p", 15_000_000, 0)).toBeNull();
   });
   test("formatMbps", () => {
     expect(formatMbps(18_000_000)).toBe("18 Mbps");

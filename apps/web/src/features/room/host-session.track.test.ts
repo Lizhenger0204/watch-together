@@ -5,6 +5,7 @@ import {
   fakeTrack,
   flush,
   host,
+  Q,
   readySource,
   roomUpdated,
   setup,
@@ -18,7 +19,12 @@ describe("換片與 track 異動", () => {
   test("換片走 replaceTrack、不重建，檢查期間不停播，片名更新", async () => {
     const t = setup();
     await t.goLive();
-    t.session.setSource({ stream: null, status: "checking", title: "新片" });
+    t.session.setSource({
+      stream: null,
+      status: "checking",
+      title: "新片",
+      bitrate: null,
+    });
     expect(t.log).toEqual(["replace video null", "replace audio null"]);
     expect(t.session.getView().phase).toBe("live");
 
@@ -61,7 +67,12 @@ describe("換片與 track 異動", () => {
   test("直播中片源失敗：送停播，確認後 stop／destroy，保留意圖；片源恢復再重建", async () => {
     const t = setup();
     await t.goLive();
-    t.session.setSource({ stream: null, status: "error", title: "壞片" });
+    t.session.setSource({
+      stream: null,
+      status: "error",
+      title: "壞片",
+      bitrate: null,
+    });
     expect(t.log).toEqual([
       "replace video null",
       "replace audio null",
@@ -81,7 +92,12 @@ describe("換片與 track 異動", () => {
   test("直播中換成無聲片（warning）：不停播，保留傳輸，確認後補上 video", async () => {
     const t = setup();
     await t.goLive();
-    t.session.setSource({ stream: null, status: "warning", title: "無聲片" });
+    t.session.setSource({
+      stream: null,
+      status: "warning",
+      title: "無聲片",
+      bitrate: null,
+    });
     expect(t.log).toEqual(["replace video null", "replace audio null"]);
     expect(t.client.requests).toHaveLength(0);
     expect(t.transports).toHaveLength(1);
@@ -134,18 +150,61 @@ describe("畫質與成員", () => {
   test("畫質：送 room:update，收到 room:updated 後才 setQuality", async () => {
     const t = setup();
     const transport = await t.goLive();
-    t.session.setQuality("smooth");
-    expect(t.log).toEqual(["room:update quality=smooth"]);
-    t.client.emit(roomUpdated("p2p", "smooth"));
-    expect(t.log).toEqual(["room:update quality=smooth", "setQuality smooth"]);
+    t.session.setQuality(Q.smooth);
+    expect(t.log).toEqual(["room:update quality=720/8000000/30"]);
+    t.client.emit(roomUpdated("p2p", Q.smooth));
+    expect(t.log).toEqual([
+      "room:update quality=720/8000000/30",
+      "setQuality 720/8000000/30",
+    ]);
+    // 同一個檔位再按一次、或廣播的檔位沒變：不送請求也不重套。
+    t.session.setQuality({ ...Q.smooth });
+    t.client.emit(roomUpdated("p2p", { ...Q.smooth }));
+    expect(t.log).toHaveLength(2);
 
     transport.setQualityResult.error = new TransportError(
       "TRACK_ERROR",
       "畫質套用失敗",
     );
-    t.client.emit(roomUpdated("p2p", "high"));
+    t.client.emit(roomUpdated("p2p", Q.high));
     await flush();
     expect(t.session.getView().error).toBe("畫質套用失敗");
+  });
+
+  test("原片位元率：依片源估計值建立傳輸，換片後位元率不同才重套", async () => {
+    const t = setup();
+    t.connect(snapshot({ quality: Q.source }));
+    const stream = new FakeStream(
+      fakeTrack("video", "v1"),
+      fakeTrack("audio", "a1"),
+    );
+    t.session.setSource(readySource(stream, "電影", 12_000_000));
+    const transport = t.transports[0]!;
+    expect(transport.options.quality).toEqual({
+      targetHeight: 1080,
+      maxBitrate: 12_000_000,
+      maxFramerate: null,
+    });
+    transport.gate.resolve();
+    await flush();
+    await t.client.ack("stream:status live 電影");
+    t.log.length = 0;
+
+    t.session.setSource(readySource(stream, "電影", 12_000_000));
+    expect(t.log).toEqual([]);
+    t.session.setSource(readySource(stream, "續集", 20_000_000));
+    expect(t.log).toContain("setQuality 1080/20000000/source");
+    // 量不到片源位元率時用 15 Mbps。
+    t.session.setSource(readySource(stream, "續集", null));
+    expect(t.log).toContain("setQuality 1080/15000000/source");
+  });
+
+  test("固定位元率時換片不重套畫質", async () => {
+    const t = setup();
+    await t.goLive();
+    t.log.length = 0;
+    t.session.setSource(readySource(undefined, "別片", 30_000_000));
+    expect(t.log.filter((l) => l.startsWith("setQuality"))).toEqual([]);
   });
 
   test("傳輸的 TRACK_ERROR 顯示給房主", async () => {

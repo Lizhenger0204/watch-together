@@ -31,7 +31,12 @@ describe("整合：P2P host transport", () => {
       rtcTrack("video", 1080),
       rtcTrack("audio"),
     ]);
-    t.session.setSource({ stream, status: "ready", title: "電影" });
+    t.session.setSource({
+      stream,
+      status: "ready",
+      title: "電影",
+      bitrate: null,
+    });
     await flushTimers();
     await t.client.ack("stream:status live 電影");
     expect(t.session.getView().phase).toBe("live");

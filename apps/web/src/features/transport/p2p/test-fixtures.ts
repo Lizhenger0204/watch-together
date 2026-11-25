@@ -1,4 +1,5 @@
 import type { SignalData } from "@project/shared";
+import { TARGETS } from "../common/encoding.fixtures";
 import { afterEach, beforeEach, vi } from "vitest";
 import type {
   HostTransportOptions,
@@ -86,7 +87,7 @@ export function makeHost(
   const host = createP2PHostTransport({
     ...endpointData.options,
     stream,
-    quality: "standard",
+    quality: TARGETS.standard,
     ...overrides,
   });
   return { ...endpointData, host };

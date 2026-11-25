@@ -214,6 +214,23 @@ describe("onMessage 權限", () => {
     ]);
   });
 
+  test("房主改畫質：存下新檔位並廣播給全房", () => {
+    const quality = { height: 720, bitrate: "source", fps: 60 } as const;
+    const outcome = onMessage(
+      roomWith(),
+      "host",
+      { type: "room:update", reqId: "1", quality },
+      online,
+      T0,
+    );
+    expect(outcome.state.quality).toEqual(quality);
+    for (const id of ["host", "a", "b"]) {
+      expect(
+        sentTo(outcome.effects, id).find((m) => m?.type === "room:updated"),
+      ).toMatchObject({ room: { quality } });
+    }
+  });
+
   test("房主送 member:status → FORBIDDEN", () => {
     const outcome = onMessage(
       roomWith(),

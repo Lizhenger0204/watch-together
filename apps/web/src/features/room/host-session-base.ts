@@ -1,4 +1,9 @@
-import type { Mode, Quality } from "@project/shared";
+import {
+  resolveQuality,
+  type EncodingTarget,
+  type Mode,
+  type Quality,
+} from "@project/shared";
 import { SignalTimeoutError } from "../../lib/signal";
 import {
   type CreateHostTransport,
@@ -35,6 +40,8 @@ export abstract class HostSessionBase {
   protected abstract timers: SessionTimers;
   protected abstract mode: Mode;
   protected abstract quality: Quality;
+  /** 最後一次交給傳輸的編碼目標（建立傳輸或 setQuality 時更新）。 */
+  protected abstract appliedTarget: EncodingTarget | null;
   protected abstract closed: boolean;
   protected abstract destroyed: boolean;
   protected abstract op: Op | null;
@@ -52,6 +59,11 @@ export abstract class HostSessionBase {
   protected abstract publish(): void;
   protected abstract showError(error: unknown): void;
   protected abstract failLive(duringStart?: boolean): void;
+
+  /** 目前畫質檔位依片源解析出的編碼目標（streaming.md §2）。 */
+  protected encodingTarget(): EncodingTarget {
+    return resolveQuality(this.quality, this.source.bitrate);
+  }
 
   /**
    * 送停播；同一 reqId 的 ack 或之後的 live:false 廣播先到者為確認。
@@ -133,7 +145,7 @@ export abstract class HostSessionBase {
       stream: this.source.stream!,
       signal,
       mode: this.mode,
-      quality: this.quality,
+      quality: (this.appliedTarget = this.encodingTarget()),
       roomId: this.options.roomId,
       token: this.options.token,
     });
