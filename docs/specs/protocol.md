@@ -6,7 +6,7 @@
 ## 通用
 
 - 時間：epoch 毫秒（number）。
-- `packages/shared` 另外提供：`normalizeInviteCode` / `formatInviteCode`（前後端共用的邀請碼正規化）、`QUALITY_PRESETS`（streaming.md §2 的畫質表）、`parseClientMessage` / `parseServerMessage`（解析 WebSocket 訊息）。前後端不可自己再寫一份。
+- `packages/shared` 另外提供：`normalizeInviteCode` / `formatInviteCode`（前後端共用的邀請碼正規化）、`DEFAULT_QUALITY` / `resolveQuality` / `estimateSourceBitrate`（streaming.md §2 的畫質檔位與解析）、`parseClientMessage` / `parseServerMessage`（解析 WebSocket 訊息）。前後端不可自己再寫一份。
 - REST 錯誤格式：`{ error: { code: ErrorCode, message: string } }`。`message` 給人看，程式判斷只看 `code`。
 - `ErrorCode`：`BAD_REQUEST`、`UNAUTHORIZED`、`FORBIDDEN`、`ROOM_NOT_FOUND`、`ROOM_FULL`、`RATE_LIMITED`、`STREAM_NOT_LIVE`、`RELAY_UNAVAILABLE`、`INTERNAL`。
 
@@ -111,7 +111,12 @@ WHIP 只需房間已切到 relay 即可發布。P2P 模式下，WHIP 的 409 訊
 
 ```ts
 type Mode = 'p2p' | 'relay';
-type Quality = 'smooth' | 'standard' | 'high'; // 對應 streaming.md 的 720p3M / 1080p6M / 1080p8M
+// streaming.md §2 的三條畫質滑桿檔位；'source' 代表沿用原片。三個欄位都必填，不可有其他欄位。
+type Quality = {
+  height: 720 | 900 | 1080;
+  bitrate: 8_000_000 | 10_000_000 | 15_000_000 | 'source'; // bps
+  fps: 24 | 30 | 60 | 'source';
+};
 type RoomInfo = {
   roomId: string;
   locked: boolean;
@@ -144,4 +149,4 @@ type MemberStatus = {
 
 | `PROTOCOL_VERSION` | 內容 |
 | --- | --- |
-| 1 | 第一版（尚未正式發布）。發布前的修改不升版：ICE 路徑由 `/api/ice` 改為 `/api/rooms/:roomId/ice`（才能驗證是哪個房間的成員）、加入關閉碼表、房主重新連線的流程、連到不存在或已關閉的房間改為接受後以 `4001` 關閉（原本回 HTTP 404）、P2P 信令必填 `data.negotiationId`、條件式加入支援 `existingRoomId` 沿用及 `excludeRoomIds` 防止重複配位、加入可帶 `joinKey` 重試時沿用已配置的席位、換碼 REST 與房主 `RoomInfo` 帶單調遞增的 `inviteCodeVersion`。 |
+| 1 | 第一版（尚未正式發布）。發布前的修改不升版：ICE 路徑由 `/api/ice` 改為 `/api/rooms/:roomId/ice`（才能驗證是哪個房間的成員）、加入關閉碼表、房主重新連線的流程、連到不存在或已關閉的房間改為接受後以 `4001` 關閉（原本回 HTTP 404）、P2P 信令必填 `data.negotiationId`、條件式加入支援 `existingRoomId` 沿用及 `excludeRoomIds` 防止重複配位、加入可帶 `joinKey` 重試時沿用已配置的席位、換碼 REST 與房主 `RoomInfo` 帶單調遞增的 `inviteCodeVersion`、`Quality` 由三個預設名稱改為解析度／位元率／FPS 三個檔位的物件（T-126；伺服器讀到舊房間存的預設名稱時回到預設畫質）。 |

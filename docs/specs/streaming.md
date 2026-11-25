@@ -45,15 +45,21 @@
 
 ## 2. 編碼與畫質（`features/transport/common/`）
 
-### 畫質預設
+### 畫質（三條分段滑桿，T-126）
 
-| 預設 | 目標高度 | maxBitrate | maxFramerate |
-| --- | --- | --- | --- |
-| 流暢 | 720 | 3 Mbps | 30 |
-| 標準（預設） | 1080 | 6 Mbps | 30 |
-| 高畫質 | 1080 | 8 Mbps | 30 |
+房主點控制列的「畫質」按鈕（文字顯示目前解析度，例如 `1080P`），在彈出面板用三條分段滑桿調整，放開即套用：
 
-- 房主在房間內選擇預設，可在播放中切換（呼叫 `setParameters`，不重建連線）。
+| 滑桿 | 檔位 | 說明 |
+| --- | --- | --- |
+| 解析度 | `720P`／`900P`／`1080P` | 目標高度。**不超過片源**：高於片源高度的檔位停用；房間設定比片源高時以片源高度送出（不放大） |
+| 位元率 | `8 Mbps`／`10 Mbps`／`15 Mbps`／`原片` | 每位收看者的 `maxBitrate` |
+| FPS | `24`／`30`／`60`／`原片` | `maxFramerate`；`原片` 不設上限，沿用片源幀率 |
+
+- 預設 `1080P`、`8 Mbps`、`30`（`DEFAULT_QUALITY`）。
+- 房間只記住**檔位**（protocol.md 的 `Quality`）。實際編碼參數由房主端 `resolveQuality(quality, sourceBitrate)` 算出 `EncodingTarget { targetHeight, maxBitrate, maxFramerate | null }` 再交給傳輸層。
+- **原片位元率**：選檔後以 `檔案大小 × 8 ÷ 片長` 估計（含音軌，`estimateSourceBitrate`）。量不到時用 15 Mbps（`SOURCE_BITRATE_FALLBACK`），最高 50 Mbps（`SOURCE_BITRATE_MAX`）。檔位是「原片」時換片會依新片重新估計並套用。
+- 調整時房主送 `room:update { quality }`，收到 `room:updated` 後對現有傳輸 `setQuality(encodingTarget)`（`setParameters`，不重建連線）。開播、停播、切換傳送方式或斷線同步中暫時停用畫質面板。
+- 收看者不顯示畫質控制。
 - **4K 片源要縮放**：`scaleResolutionDownBy = max(1, videoHeight / 目標高度)`，否則會以 4K 編碼。
 - `videoTrack.contentHint = 'motion'`；`degradationPreference = 'maintain-framerate'`。
 - Codec 偏好：**H.264 優先**（收看端 Android 硬體解碼最普遍），其次 VP8。用 `RTCRtpTransceiver.setCodecPreferences` 設定。
@@ -62,13 +68,13 @@
 ### P2P 總頻寬保護
 
 - 一般 3 位收看者，上限 7 位。
-- 開播前顯示預估總上傳量 = 預設碼率 × 收看人數；超過 60 Mbps 時提示房主改用「流暢」或「轉發」模式，但不強制。
+- 預估總上傳量 = 實際位元率（`EncodingTarget.maxBitrate`）× 收看人數；超過 60 Mbps 時提示房主調低位元率或改用「轉發」模式，但不強制。
 
 ### 實作位置
 
 - 編碼參數、codec 偏好：`features/transport/common/encoding.ts`（`applyVideoEncoding`、`applyAudioEncoding`、`applyCodecPreferences`、`preferredVideoCodecs`／`preferredAudioCodecs`）。
 - 總頻寬預估：`features/transport/common/stats.ts`（`estimateTotalUploadBitrate`、`shouldWarnTotalUpload`）。
-- 畫質預設實值：`packages/shared/src/quality.ts`（`QUALITY_PRESETS`）。
+- 畫質檔位、預設值與解析：`packages/shared/src/quality.ts`（`DEFAULT_QUALITY`、`resolveQuality`、`estimateSourceBitrate`）；檔位常數與 schema 在 `schemas/common.ts`（`RESOLUTION_STEPS`、`BITRATE_STEPS`、`FRAMERATE_STEPS`、`qualitySchema`）。
 
 ## 3. P2P 模式（`features/transport/p2p/`）
 
@@ -237,6 +243,7 @@ createViewerTransport({ signal, mode, roomId, token }): ViewerTransport
 - 可注入：`fetchIceServers`（預設 `common/ice.ts`）、`createPeerConnection`（預設瀏覽器
   adapter）、`getCodecCapabilities`（預設 `browserCodecCapabilities`）。
 - `token` 是 `hostToken`／`memberToken`（機密，不可寫進 log）。
+- `quality` 是已解析的 `EncodingTarget`（§2），不是房間的 `Quality` 檔位；房間層負責 `resolveQuality()`，傳輸層不認識「原片」。
 - `start()` resolve 才代表就緒。P2P 房主已訂閱 `onPeerRequest` 與 `onSignal` 並記住當前 tracks、畫質，收看者已訂閱 `onSignal`。即使尚無 peer，兩端的 `start()` 都能完成。Relay 則須 WHIP／WHEP 回 201 且已套用 answer。只有房主的房間層會在 `await start()` 後，確認仍是當次開播才送 `stream:status { live: true, title }`。
 - `stop()` 停止但保留物件（可再 start），`destroy()` 釋放連線、監聽與計時，之後不可用。兩者均冪等。`destroy()` 後不得再觸發狀態、統計或錯誤事件，仍須處理晚到的 `Location` 並完成 §4 的資源清理。
 
@@ -269,7 +276,7 @@ interface TransportSignal {
 | `start()` | `Promise<void>` | P2P 訂閱與 tracks／畫質就緒，或 WHIP 201 且已套用 answer |
 | `stop()` / `destroy()` | `void` | 冪等，保留來源 tracks。WHIP 清理與後續發布依 §4 排序 |
 | `replaceTrack(kind, track)` | `void` | 換片／track 異動（`track=null` = 暫時沒有該 kind） |
-| `setQuality(quality)` | `Promise<void>` | 記住最新畫質，逐人套用，個別失敗回報 `TRACK_ERROR` |
+| `setQuality(target: EncodingTarget)` | `Promise<void>` | 記住最新編碼目標，逐人套用，個別失敗回報 `TRACK_ERROR` |
 | `removePeer(memberId)` | `void` | 冪等，關閉該成員連線並作廢其協商代次（§3） |
 | `onState(handler)` | `HostTransportState = "idle" \| "live" \| "error"` | 整體狀態 |
 | `onPeerState(handler)` | `{ memberId, state: MemberState }` | 每位收看者的**本地**連線狀態（P2P；relay 不觸發） |

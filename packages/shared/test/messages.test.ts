@@ -1,13 +1,11 @@
 import { describe, expect, test } from "vitest";
 import {
   PROTOCOL_VERSION,
-  QUALITY_PRESETS,
   SDP_MAX_LENGTH,
   createRoomRequestSchema,
   joinRoomRequestSchema,
   parseClientMessage,
   parseServerMessage,
-  qualitySchema,
   regenerateInviteCodeResponseSchema,
   reuseRoomResponseSchema,
 } from "../src";
@@ -21,7 +19,14 @@ describe("parseClientMessage：合法訊息", () => {
     { type: "auth", token, protocolVersion: PROTOCOL_VERSION },
     { type: "room:update", reqId: "1", mode: "relay" },
     { type: "room:update", locked: true },
-    { type: "room:update", quality: "high" },
+    {
+      type: "room:update",
+      quality: { height: 1080, bitrate: 15_000_000, fps: 60 },
+    },
+    {
+      type: "room:update",
+      quality: { height: 720, bitrate: "source", fps: "source" },
+    },
     { type: "room:kick", reqId: "2", memberId: "m1" },
     { type: "stream:status", live: true, title: "電影" },
     { type: "stream:status", live: false, title: null },
@@ -46,6 +51,38 @@ describe("parseClientMessage：不合法訊息", () => {
     ["auth 缺 token", JSON.stringify({ type: "auth", protocolVersion: 1 })],
     ["room:update 沒有任何欄位", JSON.stringify({ type: "room:update" })],
     ["mode 不在列舉內", JSON.stringify({ type: "room:update", mode: "cdn" })],
+    [
+      "畫質是舊版的預設名稱",
+      JSON.stringify({ type: "room:update", quality: "high" }),
+    ],
+    [
+      "解析度不在檔位內",
+      JSON.stringify({
+        type: "room:update",
+        quality: { height: 2160, bitrate: 8_000_000, fps: 30 },
+      }),
+    ],
+    [
+      "位元率不在檔位內",
+      JSON.stringify({
+        type: "room:update",
+        quality: { height: 1080, bitrate: 9_000_000, fps: 30 },
+      }),
+    ],
+    [
+      "畫質缺欄位",
+      JSON.stringify({
+        type: "room:update",
+        quality: { height: 1080, bitrate: 8_000_000 },
+      }),
+    ],
+    [
+      "畫質多出欄位",
+      JSON.stringify({
+        type: "room:update",
+        quality: { height: 1080, bitrate: 8_000_000, fps: 30, codec: "hevc" },
+      }),
+    ],
     [
       "SDP 超過上限",
       JSON.stringify({
@@ -80,7 +117,7 @@ describe("parseServerMessage", () => {
     roomId: "r1",
     locked: false,
     mode: "p2p",
-    quality: "standard",
+    quality: { height: 1080, bitrate: 8_000_000, fps: 30 },
     createdAt: 1,
   };
 
@@ -262,10 +299,5 @@ describe("REST 與常數", () => {
         false,
       );
     }
-  });
-
-  test("每個畫質都有預設值", () => {
-    for (const q of qualitySchema.options)
-      expect(QUALITY_PRESETS[q]).toBeDefined();
   });
 });
