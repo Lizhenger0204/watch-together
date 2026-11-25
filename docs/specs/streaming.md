@@ -37,7 +37,7 @@
   | 劇院模式（桌面寬度才有：側欄移到影片下方，影片滿寬） | ✓ | — |
   | 全螢幕（對象是播放器容器，控制列與彈幕層一起進全螢幕） | ✓ | ✓ |
 
-  純圖示按鈕都要有 `aria-label` 與 `title`（DESIGN.md §5）。
+  純圖示按鈕都要有 `aria-label` 與 `title`（DESIGN.md §5）。畫質、劇院模式只由房間頁的房主視圖傳入，收看端元件不接受這兩組控制。音量拖到 0 後取消靜音，回到最後的非零音量。
 - AGENTS.md 的「`captureStream()` 只呼叫一次」以**同一次選檔**為單位。T-106 擷取一次，所有連線共用這份片源。換檔時 T-106 釋放舊 track，為新檔案擷取新的 `MediaStream`。Chrome 實測兩次擷取的物件不同，舊的 video track 已是 `ended`。
 - 房主端音量：T-106 在 Chrome 158（macOS）實測，`video.volume = 0` 與 `video.muted = true` 都**不影響**擷取出去的音訊（AnalyserNode RMS 幾乎相同），因此房主本地音量直接調 `video.volume`。Windows Edge 列入 T-113 驗收。
 - **影片播完時 Chrome 會把擷取的 track 從 stream 移除**，重播時會加入新 track。換檔、`addtrack` 或 `removetrack` 都由 `useLocalSource(onStreamChange)` 通知房間層，後者以 `host.replaceTrack(kind, track | null)` 更新現有傳輸。需要重建傳輸時，再從 T-106 讀取當下的 stream（§9）。
