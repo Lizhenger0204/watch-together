@@ -614,3 +614,17 @@ T-118 第二輪審查（GPT ultra fast，66a7155）：第一輪 8 項中 6 項�
    - 第一輪審查（GPT，`eae797f`）：退回修正（阻擋 2 項：`ack ok:true` 後在 `room:updated` 前 `1006` 斷線，10 秒舊計時器誤打斷自動重連；舊連線驗證前 `4400` 查詢晚到誤殺 `resync()` 新連線。應修 2 項：同步期間模式／畫質選項仍可點；首次 `start()` 前呼叫 `resync()` 留兩條 socket）。
    - 第二輪複驗（GPT，`809f386`）：**通過（可合併）**。第一輪 4 項全過實測與真實 Chrome 截圖複驗；四項固定檢查全綠（Node 2、Vitest 512、Workers 134，合計 648 測試；E2E 6/6，33.8 秒；額外 Chrome 複驗 2 項通過）；所有 11 個非豁免變更檔低於 20,000 bytes（最大 `signal.test.ts` 19,002 bytes、`host-session.ts` 17,285 bytes）。
    - 以 fast-forward 合併進 `main`（`8aed6ea..809f386`）。
+
+### T-131（Gemini 子對話 + 監工收尾與修訂，2026-11-25）— DONE
+1. 做了什麼：
+   - **收看端轉發失敗收尾（`apps/web/src/features/transport/relay/viewer.ts`、`viewer.test.ts`）**：新增 `isFailed(pc)`、`failCurrent(current)` 與 `ensureNotFailed(current, pc)`，於 `postOffer`、`resource.answer`、`setRemoteDescription`、`sampleStats` 前皆驗證 PC 實際狀態；連線失敗時立即 `abort` 結束當次 `start()`、解除 `run`／`starting`、關閉 PC、清除 tracks 並 DELETE 已登記資源（晚到的 POST 201 由背景 `pull()` 補刪，不影響新連線），且 ICE 收集期間失敗不送 POST、POST 晚到 409 不會蓋過 `RELAY_FAILED`／`failed`、重複失敗只發一次錯誤、`stop()` 在失敗狀態下仍可回到 `waiting`。
+   - **`ANSWER_TIMEOUT_MS` 獨立斷言（`apps/web/src/features/transport/relay/http.test.ts`）**：直接驗證常數值為 `10_000` 並以字面時間（`9_999` + `1`、`10_000`）驗證 10 秒期限，改為 `20_000` 時兩項測試皆失敗。
+   - **本機 SFU 替身影音 E2E（`e2e/relay-sfu.ts`、`e2e/relay-playback.spec.ts`、`e2e/p2p-media.ts`、`e2e/playwright.config.ts`）**：於獨立 Playwright 空白頁以真實 `RTCPeerConnection` 建立本機 WHIP／WHEP／DELETE 轉發替身（零外部 API 呼叫），獨立以 `allPeers` 追蹤全部建立的 PC，於授權／標頭檢查前記錄全部 POST 與 DELETE 請求，以真實 Chrome 驗證 P2P → 轉發（1 次 WHIP、2 次 WHEP、3 條 SFU 連線、兩位收看者影格與音訊能量皆持續前進）→ 切回 P2P（精確 3 筆 DELETE 且無 401／重複請求、SFU 連線歸零、兩人恢復 P2P 影音）。
+2. 介面變動：無（協定、REST、WebSocket、shared 與伺服器端皆無變動）。
+3. 已知限制：真實 Cloudflare Realtime SFU 與 TURN 留待 T-113 實測。
+4. 審查與驗證：
+   - 第一輪審查（GPT，`932477f`）：退回修正（阻擋 2 項：最後 `check()` 前 PC 已失敗仍誤報 `start()` 成功；POST 在途或收集期間失敗卡住 `starting` 或仍送 POST。應修 3 項：晚到 409 蓋過 `failed`；SFU `openPeers()` 抓不到漏關 PC；POST 計次只含 201）。
+   - 第二輪複驗（GPT，`6962753`）：原阻擋與 4 項全過；退回 1 項應修（DELETE 只記成功 200，抓不到重複 DELETE 回 403）。
+   - 第三輪複驗（GPT，`dab4961`）：重複 DELETE 403 通過；退回 1 項應修（缺授權回 401 的 DELETE 在記次前提前返回，會漏計）。
+   - 第四輪複驗（GPT，`f83f777`）：**通過（可合併）**。授權檢查前記次與反向實驗（各送一次無授權 401 DELETE 再正常刪除，實送 6 筆如預期失敗）均通過；四項固定檢查全綠（Node 2、Vitest 519、Signal 134、E2E 7/7 耗時 36.0 秒，合計 662 項通過）；7 個變更檔介於 1,124～13,985 bytes，全部低於 20,000 bytes。
+   - 以 fast-forward 合併進 `main`（`18c6010..f83f777`）。
