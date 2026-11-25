@@ -43,6 +43,9 @@ export const tokenSchema = z.string().min(16).max(256);
 /** 加入冪等鍵：32 bytes 隨機值的 base64url。機密，與 token 同等對待。 */
 export const joinKeySchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
 
+/** 邀請碼換碼版本（初始 0，每次成功換碼遞增）。 */
+export const inviteCodeVersionSchema = z.number().int().min(0);
+
 export const roomInfoSchema = z.object({
   roomId: idSchema,
   locked: z.boolean(),
@@ -51,6 +54,8 @@ export const roomInfoSchema = z.object({
   createdAt: z.number().int(),
   /** 只在房主收到的訊息中出現。 */
   inviteCode: inviteCodeSchema.optional(),
+  /** 只在房主收到的訊息中出現，初始 0，每次換碼遞增。 */
+  inviteCodeVersion: inviteCodeVersionSchema.optional(),
 });
 export type RoomInfo = z.infer<typeof roomInfoSchema>;
 

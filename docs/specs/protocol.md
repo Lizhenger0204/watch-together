@@ -16,7 +16,7 @@
 | --- | --- | --- | --- | --- |
 | POST | `/api/rooms` | 無 | `{ nickname }` | `201 { roomId, inviteCode, hostToken, memberId }` |
 | POST | `/api/rooms/join` | 新加入免認證；沿用身份帶 Bearer | `{ inviteCode, nickname, existingRoomId?, excludeRoomIds?, joinKey? }` | 新加入 `200 { roomId, memberToken, memberId }`；沿用 `200 { roomId, memberId, reused: true }` |
-| POST | `/api/rooms/:roomId/invite-code` | host | — | `200 { inviteCode }`（重新產生） |
+| POST | `/api/rooms/:roomId/invite-code` | host | — | `200 { inviteCode, inviteCodeVersion }`（重新產生） |
 | GET | `/api/rooms/:roomId/ice` | 任一成員 | — | `200 { iceServers: RTCIceServer[] }` |
 | POST | `/api/rooms/:roomId/whip` | host | SDP offer（`application/sdp`） | `201` SDP answer + `Location`；P2P 模式回 `409 STREAM_NOT_LIVE` |
 | POST | `/api/rooms/:roomId/whep` | member | SDP offer | `201` SDP answer + `Location`；P2P 模式、未開播或無有效發布回 `409 STREAM_NOT_LIVE` |
@@ -33,11 +33,11 @@ WHIP 只需房間已切到 relay 即可發布。P2P 模式下，WHIP 的 409 訊
 
 伺服器已配置席位、但回應沒被保存（例如分頁在保存身份前關閉），重試時不可再多配一席。新加入可帶 `joinKey`：
 
-- 格式：32 bytes 隨機值的 base64url（43 字元，`^[A-Za-z0-9_-]{43}$`），與 token 同強度。客戶端用 `crypto.getRandomValues` 為每一次「使用者按加入」產生一把，**送出前**先寫進持久儲存。同一次加入的重試，以及接手的其他分頁，都沿用同一把。身份保存成功後刪除。
+- 格式：32 bytes 隨機值的 base64url（43 字元，`^[A-Za-z0-9_-]{43}$`），與 token 同強度。客戶端用 `crypto.getRandomValues` 為每一次新的加入操作產生一把，**送出前**先寫進持久儲存。只有前一次請求結果未明（例如網路中斷、回應遺失、`500`、分頁在保存身份前關閉，或身份無法寫入持久儲存而待完成鍵已持久化）時，5 分鐘內的重試與接手的其他分頁才沿用同一把。身份成功寫入持久儲存、成功沿用既有身份，或伺服器明確未配位（錯碼／鎖房／排除名單的 `404`、滿房 `409`，以及本次新產生之鍵在進入房間前遭 `400`／`429` 等拒絕）時，條件清除自己這把鍵；之後再按「加入」即為新操作，改產生新的鍵。若既有待完成鍵在重試時遭 `429` 限流，結果仍未明，保留待完成鍵以便稍後重試。
 - 伺服器在配置席位的同一筆狀態變更中記下這把鍵，期限為配置後 5 分鐘（`JOIN_KEY_TTL_MS`）。期限內再收到同一把鍵，且邀請碼仍是該房現行的碼、當時配置的成員還在，就回傳**同一份**結果 `200 { roomId, memberToken, memberId }`（同一個 token），不再配置席位。這時不檢查鎖房、滿房與 `excludeRoomIds`，也不採用新的暱稱。
 - 鍵已過期、不認得，或當時的成員已被踢出或淘汰：視為一般新加入，照常檢查鎖房、滿房與排除名單，成功時記下這把鍵。
 - 帶 `existingRoomId` 的沿用請求忽略 `joinKey`。格式錯誤回 `400 BAD_REQUEST` 及通用錯誤本文。沒有新的錯誤碼，錯碼、鎖房、滿房的回應和不帶鍵時完全相同。重放也計入同一個每 IP 每分鐘 10 次的限流。
-- 邀請碼在重試前已被重新產生：舊碼照常回 `404`，鍵不能跨碼使用。多出的席位要等房主踢除或離線淘汰。
+- 邀請碼重新產生時，伺服器在同一筆換碼交易中清空先前邀請碼配發的 `joinKeys` 紀錄（既有成員與憑證不受影響）：舊碼照常回 `404`，新碼也不能命中舊碼時期的紀錄，鍵不能跨碼使用。多出的席位要等房主踢除或離線淘汰。
 
 鍵與 token 的關係與安全：
 
@@ -119,6 +119,7 @@ type RoomInfo = {
   quality: Quality;
   createdAt: number;
   inviteCode?: string; // 只在 host 收到的訊息中出現
+  inviteCodeVersion?: number; // 只在 host 收到的訊息中出現，初始 0，每次換碼遞增
 };
 type Member = { memberId: string; nickname: string; role: 'host' | 'member'; online: boolean };
 type StreamInfo = { live: boolean; title: string | null; startedAt: number | null };
@@ -143,4 +144,4 @@ type MemberStatus = {
 
 | `PROTOCOL_VERSION` | 內容 |
 | --- | --- |
-| 1 | 第一版（尚未正式發布）。發布前的修改不升版：ICE 路徑由 `/api/ice` 改為 `/api/rooms/:roomId/ice`（才能驗證是哪個房間的成員）、加入關閉碼表、房主重新連線的流程、連到不存在或已關閉的房間改為接受後以 `4001` 關閉（原本回 HTTP 404）、P2P 信令必填 `data.negotiationId`、條件式加入支援 `existingRoomId` 沿用及 `excludeRoomIds` 防止重複配位、加入可帶 `joinKey`，重試時沿用已配置的席位。 |
+| 1 | 第一版（尚未正式發布）。發布前的修改不升版：ICE 路徑由 `/api/ice` 改為 `/api/rooms/:roomId/ice`（才能驗證是哪個房間的成員）、加入關閉碼表、房主重新連線的流程、連到不存在或已關閉的房間改為接受後以 `4001` 關閉（原本回 HTTP 404）、P2P 信令必填 `data.negotiationId`、條件式加入支援 `existingRoomId` 沿用及 `excludeRoomIds` 防止重複配位、加入可帶 `joinKey` 重試時沿用已配置的席位、換碼 REST 與房主 `RoomInfo` 帶單調遞增的 `inviteCodeVersion`。 |

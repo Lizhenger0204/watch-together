@@ -8,6 +8,7 @@ import {
   parseClientMessage,
   parseServerMessage,
   qualitySchema,
+  regenerateInviteCodeResponseSchema,
   reuseRoomResponseSchema,
 } from "../src";
 
@@ -110,9 +111,21 @@ describe("parseServerMessage", () => {
     expect(server({ type: "ack", reqId: "1", ok: false }).ok).toBe(false);
   });
 
-  test("邀請碼格式不對會被拒絕", () => {
+  test("邀請碼格式不對或換碼版本為負數會被拒絕", () => {
     expect(
       server({ type: "room:updated", room: { ...room, inviteCode: "abc" } }).ok,
+    ).toBe(false);
+    expect(
+      server({
+        type: "room:updated",
+        room: { ...room, inviteCode: "ABCDEFGH", inviteCodeVersion: 0 },
+      }).ok,
+    ).toBe(true);
+    expect(
+      server({
+        type: "room:updated",
+        room: { ...room, inviteCode: "ABCDEFGH", inviteCodeVersion: -1 },
+      }).ok,
     ).toBe(false);
   });
 });
@@ -231,6 +244,24 @@ describe("REST 與常數", () => {
     expect(
       createRoomRequestSchema.safeParse({ nickname: "x".repeat(25) }).success,
     ).toBe(false);
+  });
+
+  test("換碼回應必須包含非負整數 inviteCodeVersion", () => {
+    expect(
+      regenerateInviteCodeResponseSchema.parse({
+        inviteCode: "ABCDEFGH",
+        inviteCodeVersion: 1,
+      }),
+    ).toEqual({ inviteCode: "ABCDEFGH", inviteCodeVersion: 1 });
+    for (const bad of [
+      { inviteCode: "ABCDEFGH" },
+      { inviteCode: "ABCDEFGH", inviteCodeVersion: -1 },
+      { inviteCode: "ABCDEFGH", inviteCodeVersion: 1.5 },
+    ]) {
+      expect(regenerateInviteCodeResponseSchema.safeParse(bad).success).toBe(
+        false,
+      );
+    }
   });
 
   test("每個畫質都有預設值", () => {

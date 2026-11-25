@@ -5,6 +5,7 @@ import {
   iceServerSchema,
   idSchema,
   inviteCodeSchema,
+  inviteCodeVersionSchema,
   joinKeySchema,
   nicknameSchema,
   tokenSchema,
@@ -65,6 +66,7 @@ export type ReuseRoomResponse = z.infer<typeof reuseRoomResponseSchema>;
 // POST /api/rooms/:roomId/invite-code
 export const regenerateInviteCodeResponseSchema = z.object({
   inviteCode: inviteCodeSchema,
+  inviteCodeVersion: inviteCodeVersionSchema,
 });
 export type RegenerateInviteCodeResponse = z.infer<
   typeof regenerateInviteCodeResponseSchema
