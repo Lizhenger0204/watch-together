@@ -378,9 +378,9 @@ export function RoomPage({ roomId }: { roomId: string }) {
     ) {
       return;
     }
-    // 不論快照是否已送達（view.you 可能尚未建立），主動離房都撤銷本分頁已保存的開播意圖，
-    // 但保留房主憑證；收看者原本 intent 為 false，呼叫 setIntent(false) 為 no-op。
-    room.host?.setIntent(false);
+    // 不論快照是否已送達（view.you 可能尚未建立），主動離房只撤銷「本分頁」已保存的開播意圖
+    // 並保留房主憑證；不呼叫會寫入跨分頁停播標記的 setIntent(false)，避免同步中的第二分頁離房
+    // 時連帶讓原直播分頁的開播意圖失效。
     liveIntent.set(roomId, false);
     navigate("/");
   }

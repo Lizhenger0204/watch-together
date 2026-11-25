@@ -152,23 +152,47 @@ test("房主選片前顯示片名，確認離開房間後返回再選片須手�
   await startLive(host, "h264-aac");
   await expectPlaying(viewer);
 
-  // 直播中重新整理，在首則 room:snapshot 抵達前（仍顯示「連線中…」）按離開房間，
-  // 返回再選片也須撤銷開播意圖，不得自動對外開播。
-  let holdSnapshot = true;
-  await host.routeWebSocket(/\/ws$/, (ws) => {
+  let holdSnapshot = false;
+  await host.context().routeWebSocket(/\/ws$/, (ws) => {
+    if (holdSnapshot) return;
     const server = ws.connectToServer();
     ws.onMessage((message) => server.send(message));
-    server.onMessage((message) => {
-      if (
-        holdSnapshot &&
-        typeof message === "string" &&
-        message.includes('"room:snapshot"')
-      ) {
-        return;
-      }
-      ws.send(message);
-    });
+    server.onMessage((message) => ws.send(message));
   });
+
+  // 雙分頁：由直播中的分頁 A 開啟同房分頁 B（繼承開播意圖），B 還在「連線中…」就離房，
+  // 只應清掉 B 自己的意圖，不可影響 A 重整後自動恢復直播。
+  holdSnapshot = true;
+  const [secondTab] = await Promise.all([
+    host.context().waitForEvent("page"),
+    host.evaluate(() => {
+      window.open(location.href, "_blank");
+    }),
+  ]);
+  await expect(secondTab.getByText("連線中…", { exact: true })).toBeVisible();
+  await secondTab
+    .getByRole("button", { name: "離開房間", exact: true })
+    .click();
+  await expect(secondTab).toHaveURL("/");
+  await secondTab.close();
+  await expect(
+    host.getByRole("heading", { name: "直播中：h264-aac", exact: true }),
+  ).toBeVisible();
+
+  holdSnapshot = false;
+  await host.reload();
+  await expect(
+    host.getByRole("heading", { name: "直播暫停中", exact: true }),
+  ).toBeVisible();
+  await playMovie(host, "h264-aac");
+  await expect(
+    host.getByRole("heading", { name: "直播中：h264-aac", exact: true }),
+  ).toBeVisible();
+  await expectPlaying(viewer);
+
+  // 單分頁：直播中重新整理，在首則 room:snapshot 抵達前（仍顯示「連線中…」）按離開房間，
+  // 返回再選片也須撤銷本分頁開播意圖，不得自動對外開播。
+  holdSnapshot = true;
   await host.reload();
   await expect(host.getByText("連線中…", { exact: true })).toBeVisible();
   await host.getByRole("button", { name: "離開房間", exact: true }).click();
