@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import {
+  ANSWER_TIMEOUT_MS,
   DELETE_RETRY_DELAYS_MS,
   DELETE_TIMEOUT_MS,
   deleteResource,
@@ -7,6 +8,7 @@ import {
 } from "./http";
 import {
   answerSdp,
+  createdSlowBody,
   location,
   ROOM,
   TOKEN,
@@ -105,5 +107,38 @@ describe("DELETE 逾時", () => {
     await vi.advanceTimersByTimeAsync(0);
     const init = http().fetch.mock.calls[0]![1] as RequestInit;
     expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+});
+
+describe("answer 本文期限", () => {
+  test("201 標頭後本文一直沒讀完：期限到才以 RELAY_FAILED 結束，並中止讀取", async () => {
+    const result = postOffer(ROOM, "whip", TOKEN, "v=0");
+    await vi.advanceTimersByTimeAsync(0);
+    createdSlowBody(http().lastPost());
+    const resource = await result;
+    expect(resource.location).toBe(location());
+    let outcome: unknown = "pending";
+    resource.answer.then(
+      (value) => (outcome = value),
+      (error: unknown) => (outcome = error),
+    );
+    await vi.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS - 1);
+    expect(outcome).toBe("pending");
+    const init = http().fetch.mock.calls[0]![1] as RequestInit;
+    expect(init.signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(outcome).toMatchObject({ code: "RELAY_FAILED" });
+    expect(init.signal?.aborted).toBe(true);
+  });
+
+  test("期限內讀完：照常回 answer，之後期限到也不影響", async () => {
+    const result = postOffer(ROOM, "whep", TOKEN, "v=0");
+    await vi.advanceTimersByTimeAsync(0);
+    const body = createdSlowBody(http().lastPost());
+    const resource = await result;
+    await vi.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS - 1);
+    body.finish();
+    await expect(resource.answer).resolves.toBe(answerSdp);
+    await vi.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS);
   });
 });

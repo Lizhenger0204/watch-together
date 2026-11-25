@@ -20,13 +20,20 @@ export const DELETE_RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
 
 /**
  * `201` 的標頭驗證過就交出：`location` 立刻可用來清理，`answer` 是還在讀取的本文
- * （讀取失敗得到空字串，交給套用 answer 的步驟回報）。
+ * （讀取失敗得到空字串，交給套用 answer 的步驟回報；超過 ANSWER_TIMEOUT_MS 以 RELAY_FAILED 拒絕）。
  */
 export type RelayResource = { location: string; answer: Promise<string> };
 
 export function relayUrl(roomId: string, role: RelayRole) {
   return `/api/rooms/${encodeURIComponent(roomId)}/${role}`;
 }
+
+/**
+ * 201 標頭到了之後讀 answer 本文的期限。SDP answer 只有數 KB，正常在標頭後幾百毫秒內讀完；
+ * 10 秒涵蓋慢速或高延遲網路，又不會讓房主卡在「開播中…」太久。逾時以 RELAY_FAILED 結束，
+ * 呼叫端照既有流程 DELETE 已登記的 Location。
+ */
+export const ANSWER_TIMEOUT_MS = 10_000;
 
 /** 單次 DELETE 的期限；逾時視為失敗，沿用重試與待清理機制。 */
 export const DELETE_TIMEOUT_MS = 5_000;
@@ -112,6 +119,8 @@ export async function postOffer(
   token: string,
   sdp: string,
 ): Promise<RelayResource> {
+  // 只在讀 answer 本文逾時時中止（POST 本身照 §4 一定等回應）。
+  const bodyAbort = new AbortController();
   let response: Response;
   try {
     response = await fetch(relayUrl(roomId, role), {
@@ -122,6 +131,7 @@ export async function postOffer(
       },
       body: sdp,
       cache: "no-store",
+      signal: bodyAbort.signal,
     });
   } catch (error) {
     throw new TransportError("RELAY_FAILED", "無法連到轉發服務", {
@@ -134,7 +144,24 @@ export async function postOffer(
     void response.body?.cancel().catch(() => {});
     throw new TransportError("RELAY_FAILED", "轉發服務的回應缺少資源位置");
   }
-  return { location, answer: response.text().catch(() => "") };
+  return { location, answer: readAnswer(response, bodyAbort) };
+}
+
+/** 有期限地讀 answer 本文；逾時就中止讀取。呼叫端已停止而不再等它時，也不留下未處理的 rejection。 */
+function readAnswer(response: Response, abort: AbortController) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new TransportError("RELAY_FAILED", "轉發服務的回應逾時"));
+      abort.abort();
+    }, ANSWER_TIMEOUT_MS);
+  });
+  const answer = Promise.race([
+    response.text().catch(() => ""),
+    timeout,
+  ]).finally(() => clearTimeout(timer));
+  answer.catch(() => {});
+  return answer;
 }
 
 export type DeleteOutcome =

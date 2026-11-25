@@ -322,6 +322,8 @@ export class HostSession extends HostSessionFlows {
   /** 依目前狀態決定要開播、停播、更新片名或切到伺服器的模式。進行中的操作結束後會再呼叫。 */
   protected reconcile() {
     if (this.destroyed || this.closed || !this.host) return;
+    // 開播途中按停止：不等 start()，立刻作廢這次開播（含斷線中）。
+    if (this.op === "starting" && !this.intent) this.abortStart();
     if (!this.connected) {
       // 斷線中按停止：不能送請求，直接拆掉；重新驗證時伺服器會改為未開播。
       if (this.transport && !this.intent && !this.op) this.dropTransport();
@@ -367,6 +369,21 @@ export class HostSession extends HostSessionFlows {
         .catch(() => {});
     }
     this.publish();
+  }
+
+  /**
+   * 開播途中房主明確停止：換世代並銷毀傳輸（晚到的 start() 結果、ack 與錯誤都作廢），
+   * 傳輸自己依進度清理 WHIP（§4）。`start()` 已完成時 live:true 可能已送出，伺服器也可能
+   * 還在上一次直播：送一次停播撤回；開播流程正在確認的停播由那一次的 ack 收尾，不重送。
+   */
+  private abortStart() {
+    const retract = this.readyGeneration === this.generation || this.serverLive;
+    const confirming = this.stopWaiter !== null;
+    this.dropTransport();
+    this.op = null;
+    if (retract && !confirming && this.connected) {
+      this.confirmStop().catch(() => {});
+    }
   }
 
   private applyTracks() {

@@ -61,7 +61,7 @@ test("三方重新整理、轉發不可用與踢人後的 P2P 播放", async ({ 
     ).toBeVisible();
     await expect(
       host.getByRole("button", { name: "開始直播", exact: true }),
-    ).toBeVisible();
+    ).toBeEnabled();
     await expectWaiting(...viewers);
     const p2p = host.getByRole("button", { name: "P2P 直連", exact: true });
     await p2p.click();

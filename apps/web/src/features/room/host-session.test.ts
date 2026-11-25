@@ -128,17 +128,6 @@ describe("開播", () => {
     expect(t.transports).toHaveLength(2);
   });
 
-  test("start() 期間按停止：start 完成後不送 live:true，直接拆掉", async () => {
-    const t = setup();
-    t.connect();
-    t.session.setSource(readySource());
-    t.session.setIntent(false);
-    t.transports[0]!.gate.resolve();
-    await flush();
-    expect(t.log).toEqual(["create p2p", "start", "destroy"]);
-    expect(t.session.getView().phase).toBe("idle");
-  });
-
   test("start() 期間換片檢查：start 完成後拆掉舊傳輸，新片就緒後重建開播", async () => {
     const t = setup();
     t.connect();

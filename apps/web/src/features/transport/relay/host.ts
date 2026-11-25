@@ -157,6 +157,12 @@ export const createRelayHostTransport: CreateHostTransport = (options) => {
     pc.onconnectionstatechange = check;
   }
 
+  /** 開播途中 watch() 已回報連線中斷：這一輪不可再進 live，交給 start() 的 reject 清理。 */
+  function ensureNotFailed(current: Run) {
+    if (current.failed)
+      throw new TransportError("RELAY_FAILED", "轉發連線中斷");
+  }
+
   async function publish(current: Run) {
     const { signal } = current.abort;
     const release = await queue.turn();
@@ -210,9 +216,11 @@ export const createRelayHostTransport: CreateHostTransport = (options) => {
       if (signal.aborted) return abandon(current);
       const answer = await resource.answer;
       if (signal.aborted) return abandon(current);
+      ensureNotFailed(current);
 
       await pc.setRemoteDescription({ type: "answer", sdp: answer });
       if (signal.aborted) return abandon(current);
+      ensureNotFailed(current);
       sampleStats(pc, "send", signal, (stats) => {
         if (!destroyed && isIceConnected(pc)) events.emit("stats", stats);
       });
@@ -274,7 +282,8 @@ export const createRelayHostTransport: CreateHostTransport = (options) => {
             closePeerConnection(current.pc);
             current.abort.abort();
             setState("error");
-            emitError(failure);
+            // watch() 已經回報過這次中斷：不重複發錯誤。
+            if (!current.failed) emitError(failure);
           }
           throw failure;
         },
