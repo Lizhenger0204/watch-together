@@ -149,6 +149,30 @@ export const roomInviteCode = {
   },
 };
 
+const joinKeyKey = (inviteCode: string) => `join:${inviteCode}:key`;
+
+/**
+ * 尚未保存身份的加入冪等鍵（protocol.md「加入冪等」、room-and-invite.md）。
+ * 存在共用儲存，接手加入鎖的其他分頁讀得到；值為 `<建立時間>:<鍵>`。
+ * 機密，與 token 同等對待：不可寫進 log、URL 或畫面。
+ */
+export const pendingJoinKey = {
+  /** 期限內的鍵；沒有或已超過 ttlMs 就回 null。 */
+  get(inviteCode: string, ttlMs: number, now = Date.now()) {
+    const value = readIdentity(joinKeyKey(inviteCode));
+    const match = value && /^(\d+):(.+)$/.exec(value);
+    if (!match || now - Number(match[1]) >= ttlMs) return null;
+    return match[2] ?? null;
+  },
+  set: (inviteCode: string, key: string, now = Date.now()) =>
+    writeIdentity(joinKeyKey(inviteCode), `${now}:${key}`),
+  /** 身份已保存：只刪除自己用的那把（其他分頁可能已換了新的）。 */
+  clearIfCurrent(inviteCode: string, key: string) {
+    const value = readIdentity(joinKeyKey(inviteCode));
+    if (value?.endsWith(`:${key}`)) writeIdentity(joinKeyKey(inviteCode), null);
+  },
+};
+
 const liveIntentKey = (roomId: string) => `room:${roomId}:live`;
 const liveStopKey = (roomId: string) => `room:${roomId}:stopped`;
 

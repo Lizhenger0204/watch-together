@@ -1,4 +1,5 @@
 import {
+  JOIN_KEY_TTL_MS,
   JOIN_MAX_EXCLUDED_ROOMS,
   errorResponseSchema,
   iceResponseSchema,
@@ -9,7 +10,7 @@ import {
 } from "@project/shared";
 import { ApiError, joinRoom } from "../../lib/api";
 import type { IdentityCheck } from "../../lib/signal";
-import { roomInviteCode, roomToken } from "../../lib/storage";
+import { pendingJoinKey, roomInviteCode, roomToken } from "../../lib/storage";
 import { withTabLock } from "../../lib/tab-lock";
 import { comparedRooms } from "./compared-rooms";
 
@@ -105,12 +106,34 @@ async function conditionalJoin(body: JoinRoomRequest, token?: string) {
   return json;
 }
 
+/** 32 bytes 隨機值的 base64url（shared 的 joinKeySchema）。 */
+function generateJoinKey() {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
+/**
+ * 這次加入的冪等鍵：沿用尚未完成的那把（回應遺失、或前一個分頁在保存身份前關閉），
+ * 否則產生新的。送出前先存進共用儲存，在加入鎖內接手的分頁才讀得到。
+ */
+function joinKeyFor(inviteCode: string) {
+  const pending = pendingJoinKey.get(inviteCode, JOIN_KEY_TTL_MS);
+  if (pending) return pending;
+  const key = generateJoinKey();
+  pendingJoinKey.set(inviteCode, key);
+  return key;
+}
+
 async function joinNew(body: JoinRoomRequest, roomIds: string[]) {
+  const joinKey = joinKeyFor(body.inviteCode);
   const joined = roomIds.length
     ? joinRoomResponseSchema.parse(
-        await conditionalJoin({ ...body, excludeRoomIds: roomIds }),
+        await conditionalJoin({ ...body, excludeRoomIds: roomIds, joinKey }),
       )
-    : await joinRoom(body.inviteCode, body.nickname);
+    : await joinRoom(body.inviteCode, body.nickname, joinKey);
   // 新身份可能在請求途中由另一分頁寫入。先保住房主或既有成員的憑證。
   let current = roomToken.get(joined.roomId);
   while (current && current !== joined.memberToken) {
@@ -123,12 +146,16 @@ async function joinNew(body: JoinRoomRequest, roomIds: string[]) {
     if (check === "unknown") throw new ApiError("INTERNAL");
     if (check === "valid") {
       roomInviteCode.set(joined.roomId, body.inviteCode);
+      pendingJoinKey.clearIfCurrent(body.inviteCode, joinKey);
       return { roomId: joined.roomId, reused: true };
     }
     break;
   }
-  roomToken.set(joined.roomId, joined.memberToken);
+  const persisted = roomToken.set(joined.roomId, joined.memberToken);
   roomInviteCode.set(joined.roomId, body.inviteCode);
+  // 身份確實存進共用儲存後才刪鍵：在這之前中斷（或存不進去、重新整理就會遺失），
+  // 下一次加入仍會用同一把鍵取回同一席。
+  if (persisted) pendingJoinKey.clearIfCurrent(body.inviteCode, joinKey);
   return { roomId: joined.roomId, reused: false };
 }
 

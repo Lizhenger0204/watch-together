@@ -66,10 +66,15 @@ export function createRoom(nickname: string) {
   });
 }
 
-export function joinRoom(inviteCode: string, nickname: string) {
+/** joinKey：protocol.md「加入冪等」。機密，只放在請求本文。 */
+export function joinRoom(
+  inviteCode: string,
+  nickname: string,
+  joinKey?: string,
+) {
   return request("/api/rooms/join", joinRoomResponseSchema, {
     method: "POST",
-    body: JSON.stringify({ inviteCode, nickname }),
+    body: JSON.stringify({ inviteCode, nickname, joinKey }),
   });
 }
 
