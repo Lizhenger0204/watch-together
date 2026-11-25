@@ -9,6 +9,7 @@ import {
 } from "@project/shared";
 import type { RoomConfig } from "../config";
 import { timingSafeEqual } from "./crypto";
+import type { JoinKeyRecord } from "./join-key";
 
 // 房間狀態的純邏輯。不依賴 Workers、Hono 或 Durable Objects。
 // 「誰在線上」不存在狀態裡，由 runtime 依實際連線提供（online 參數）。
@@ -35,6 +36,8 @@ export type RoomState = {
   stream: StreamInfo;
   /** 最後一人離線的時間；有人在線時為 null。 */
   idleSince: number | null;
+  /** 加入冪等鍵的紀錄（join-key.ts）。舊房間沒有此欄位。 */
+  joinKeys?: JoinKeyRecord[];
 };
 
 export type Online = ReadonlySet<string>;

@@ -2,13 +2,18 @@ import { INVITE_CODE_ALPHABET, INVITE_CODE_LENGTH } from "@project/shared";
 
 // 只用標準 Web Crypto（Workers 與 Node 22 都有），保持可移植。
 
-function base64Url(bytes: Uint8Array) {
+export function base64Url(bytes: Uint8Array) {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary)
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/, "");
+}
+
+export function fromBase64Url(text: string) {
+  const binary = atob(text.replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from(binary, (c) => c.charCodeAt(0));
 }
 
 /** 32 bytes 隨機，base64url。 */

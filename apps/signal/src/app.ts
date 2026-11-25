@@ -28,6 +28,8 @@ export interface AppServices extends Services {
       inviteCode: string,
       nickname: string,
       excludeRoomIds?: string[],
+      /** protocol.md「加入冪等」。機密，不可寫進 log。 */
+      joinKey?: string,
     ): ReturnType<Services["rooms"]["joinRoom"]>;
     reuseRoom(
       inviteCode: string,
@@ -148,7 +150,12 @@ export function createApp(resolveServices: (c: Ctx) => AppServices) {
     const result =
       body.existingRoomId && token
         ? await rooms.reuseRoom(inviteCode, body.existingRoomId, token)
-        : await rooms.joinRoom(inviteCode, body.nickname, body.excludeRoomIds);
+        : await rooms.joinRoom(
+            inviteCode,
+            body.nickname,
+            body.excludeRoomIds,
+            body.joinKey,
+          );
     return result.ok ? c.json(result.value) : fail(c, result.code);
   });
 

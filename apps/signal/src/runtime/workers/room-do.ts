@@ -1,8 +1,4 @@
-import {
-  PROTOCOL_VERSION,
-  parseClientMessage,
-  type ReuseRoomResponse,
-} from "@project/shared";
+import { PROTOCOL_VERSION, parseClientMessage } from "@project/shared";
 import { DurableObject } from "cloudflare:workers";
 import type { RoomMember } from "../../app";
 import { readRoomConfig, type RoomConfig } from "../../config";
@@ -18,7 +14,6 @@ import {
 } from "./room-relay";
 import { generateId, generateToken, hashToken } from "../../room/crypto";
 import {
-  addMember,
   closeAt,
   createRoomState,
   findMember,
@@ -46,6 +41,7 @@ import {
   socketsOf,
   type Attachment,
 } from "./room-sockets";
+import { joinMember, reuseMember, type JoinInput } from "./room-join";
 import { SerialQueue } from "./serial-queue";
 
 const STATE_KEY = "state";
@@ -221,47 +217,21 @@ export class RoomDO extends DurableObject<Env> {
     });
   }
 
-  async reuseMember(
-    inviteCode: string,
-    token: string,
-  ): Promise<Result<ReuseRoomResponse>> {
-    const hash = await hashToken(token);
-    const room = this.room;
-    if (!room || room.inviteCode !== inviteCode)
-      return { ok: false, code: "ROOM_NOT_FOUND" };
-    const member = findMemberByTokenHash(room, hash);
-    if (!member) return { ok: false, code: "ROOM_NOT_FOUND" };
-    return {
-      ok: true,
-      value: { roomId: room.roomId, memberId: member.memberId, reused: true },
-    };
+  reuseMember(inviteCode: string, token: string) {
+    return reuseMember(() => this.room, inviteCode, token);
   }
 
-  async join(input: {
-    inviteCode: string;
-    nickname: string;
-    excluded?: boolean;
-  }): Promise<Result<{ memberToken: string; memberId: string }>> {
-    const memberToken = generateToken();
-    const memberId = generateId();
-    const tokenHash = await hashToken(memberToken);
-    return this.changes.run(async () => {
-      if (!this.room) return { ok: false, code: "ROOM_NOT_FOUND" };
-      const outcome = addMember(
-        this.room,
-        {
-          inviteCode: input.inviteCode,
-          excluded: input.excluded,
-          member: { memberId, nickname: input.nickname, tokenHash },
-        },
-        this.online(),
-        Date.now(),
-        this.config,
-      );
-      if (!outcome.ok) return outcome;
-      await this.saveTransition(outcome.state);
-      return { ok: true, value: { memberToken, memberId } };
-    });
+  join(input: JoinInput) {
+    return joinMember(
+      {
+        room: () => this.room,
+        changes: this.changes,
+        online: () => this.online(),
+        save: (next) => this.saveTransition(next),
+        config: this.config,
+      },
+      input,
+    );
   }
 
   async authenticate(
