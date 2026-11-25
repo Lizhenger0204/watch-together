@@ -97,6 +97,7 @@ export abstract class HostSessionFlows extends HostSessionBase {
 
     const title = streamTitle(this.source.title);
     try {
+      this.liveSends += 1;
       await this.options.client.request({
         type: "stream:status",
         live: true,

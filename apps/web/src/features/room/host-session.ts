@@ -65,6 +65,8 @@ export class HostSession extends HostSessionFlows {
     Parameters<TransportSignal["onPeerRequest"]>[0] | null = null;
   protected op: Op | null = null;
   protected readyGeneration: number | null = null;
+  protected liveSends = 0;
+  protected stopCovers = 0;
   /** 等停播確認時，收到 live:false 廣播就呼叫。 */
   protected stopWaiter: (() => void) | null = null;
   /** 切模式第 2 步：收到目標模式的 room:updated 就呼叫。 */
@@ -378,7 +380,10 @@ export class HostSession extends HostSessionFlows {
    */
   private abortStart() {
     const retract = this.readyGeneration === this.generation || this.serverLive;
-    const confirming = this.stopWaiter !== null;
+    // 還在等的停播只有在它送出之後沒有再送過 live:true 時才算數；
+    // 否則（例如「開始 → 停止 → 開始 → 停止」回覆都很慢）要為最新的開播再撤回一次。
+    const confirming =
+      this.stopWaiter !== null && this.stopCovers >= this.liveSends;
     this.dropTransport();
     this.op = null;
     if (retract && !confirming && this.connected) {

@@ -68,6 +68,27 @@ describe("開播途中按停止（假傳輸）", () => {
     expect(t.log.filter((l) => l === "stream:status off")).toHaveLength(1);
   });
 
+  test("開始→停止→開始→停止、回覆都還沒到：第二次停止也要撤回，最後一則是停播", async () => {
+    const t = setup();
+    t.connect();
+    t.session.setSource(readySource());
+    t.transports[0]!.gate.resolve();
+    await flush();
+    t.session.setIntent(false); // 第一輪撤回（stream:status off 尚未 ack）
+    t.session.setIntent(true);
+    t.transports[1]!.gate.resolve();
+    await flush();
+    t.session.setIntent(false); // 第二輪：第一輪的停播在第二輪 live:true 之前送出，不能沿用
+    const statuses = () => t.log.filter((l) => l.startsWith("stream:status"));
+    expect(statuses()).toEqual([
+      "stream:status live 電影",
+      "stream:status off",
+      "stream:status live 電影",
+      "stream:status off",
+    ]);
+    expect(t.session.getView()).toEqual(idle);
+  });
+
   test("停止後再按開始：建立新的傳輸重新開播", async () => {
     const t = setup();
     t.connect();

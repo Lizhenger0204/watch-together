@@ -36,6 +36,9 @@ export abstract class HostSessionBase {
   protected abstract op: Op | null;
   /** 開播流程中 start() 已完成的傳輸世代：之後在等停播或 live:true 的確認。 */
   protected abstract readyGeneration: number | null;
+  /** 已送出的 live:true 次數；`stopCovers` 記錄最近一次送出的停播涵蓋到第幾次開播。 */
+  protected abstract liveSends: number;
+  protected abstract stopCovers: number;
   protected abstract signalHandler:
     Parameters<TransportSignal["onSignal"]>[0] | null;
   protected abstract peerHandler:
@@ -63,6 +66,7 @@ export abstract class HostSessionBase {
         fn();
       };
       this.stopWaiter = onBroadcast;
+      this.stopCovers = this.liveSends;
       this.options.client
         .request({ type: "stream:status", live: false, title: null })
         .then(
