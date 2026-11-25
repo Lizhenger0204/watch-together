@@ -1,5 +1,10 @@
-import { Maximize, Minimize, Play, Volume2, VolumeX } from "lucide-react";
+import { Play } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  PlayerControls,
+  useFullscreen,
+  usePlayerVolume,
+} from "../../components/player";
 import type { ViewerSession } from "../room/viewer-session";
 import { watchPlaybackProgress } from "./playback-progress";
 import { playerStatus } from "./player-status";
@@ -25,9 +30,6 @@ function playIfReady(video: HTMLMediaElement | null, onBlocked: () => void) {
   });
 }
 
-/** iPhone Safari 不支援元素全螢幕，只能讓 <video> 自己進全螢幕。 */
-type IosVideo = HTMLVideoElement & { webkitEnterFullscreen?: () => void };
-
 export function ViewerPlayer({
   viewer,
   hostName,
@@ -45,19 +47,17 @@ export function ViewerPlayer({
   const frameRef = useRef<HTMLDivElement>(null);
   /** 使用者點過「開始觀看」（取得播放權限）。 */
   const [armed, setArmed] = useState(false);
-  const [volume, setVolume] = useState(1);
-  const [muted, setMuted] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const volume = usePlayerVolume();
+  const fullscreen = useFullscreen(frameRef, videoRef);
   const [fullscreenError, setFullscreenError] = useState("");
   const { remoteStream, state } = view;
 
+  // 靜音用 muted 屬性（見下方 JSX），音量另外套到 <video> 與備援 <audio>。
+  const level = volume.volume;
   useEffect(() => {
-    const onChange = () => {
-      setIsFullscreen(document.fullscreenElement === frameRef.current);
-    };
-    document.addEventListener("fullscreenchange", onChange);
-    return () => document.removeEventListener("fullscreenchange", onChange);
-  }, []);
+    if (videoRef.current) videoRef.current.volume = level;
+    if (audioRef.current) audioRef.current.volume = level;
+  }, [level]);
 
   // 空的 MediaStream 先綁進 Chrome，後來只加音軌時，播放器可能會一直等 metadata。
   const connected = state === "playing" || state === "buffering";
@@ -133,13 +133,13 @@ export function ViewerPlayer({
           ref={videoRef}
           className="h-full w-full object-contain"
           playsInline
-          muted={muted || playingAudioOnly}
+          muted={volume.muted || playingAudioOnly}
           onResize={(event) => {
             if (event.currentTarget.videoWidth > 0)
               setAudioFallbackStream(null);
           }}
         />
-        <audio ref={audioRef} hidden muted={muted} />
+        <audio ref={audioRef} hidden muted={volume.muted} />
         {/* 連線失敗時直接給「重新連線」，即使還沒按過開始觀看（按鈕本身就是使用者手勢）。 */}
         {!armed && !status.reconnect ? (
           <button
@@ -199,69 +199,18 @@ export function ViewerPlayer({
           )
         )}
 
-        {/* 控制列放在全螢幕容器內，全螢幕觀看時仍可調音量與退出。 */}
-        <div className="absolute inset-x-0 bottom-0 z-20 flex items-center justify-between gap-3 bg-gradient-to-t from-black/80 via-black/45 to-transparent px-3 pt-5 pb-2">
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              aria-label={muted ? "取消靜音" : "靜音"}
-              title={muted ? "取消靜音" : "靜音"}
-              className="inline-flex size-7 items-center justify-center text-white/90 transition-colors hover:text-white focus-visible:ring-2 focus-visible:ring-[#0072b2] focus-visible:outline-none"
-              aria-pressed={muted}
-              onClick={() => setMuted(!muted)}
-            >
-              {muted || volume === 0 ? (
-                <VolumeX className="size-4" strokeWidth={1.75} />
-              ) : (
-                <Volume2 className="size-4" strokeWidth={1.75} />
-              )}
-            </button>
-            <input
-              type="range"
-              aria-label="音量"
-              className="player-range w-20 sm:w-24"
-              min={0}
-              max={1}
-              step={0.01}
-              value={muted ? 0 : volume}
-              onChange={(event) => {
-                const next = event.currentTarget.valueAsNumber;
-                if (videoRef.current) videoRef.current.volume = next;
-                if (audioRef.current) audioRef.current.volume = next;
-                setVolume(next);
-                if (next > 0 && muted) setMuted(false);
-              }}
-            />
-          </div>
-          <button
-            type="button"
-            aria-label={isFullscreen ? "退出全螢幕" : "全螢幕"}
-            title={isFullscreen ? "退出全螢幕" : "全螢幕"}
-            className="inline-flex size-7 items-center justify-center text-white/90 transition-colors hover:text-white focus-visible:ring-2 focus-visible:ring-[#0072b2] focus-visible:outline-none"
-            onClick={() => {
-              const frame = frameRef.current;
-              if (!frame) return;
+        {/* 收看端只有音量與全螢幕（streaming.md §7），控制列放在全螢幕容器內。 */}
+        <PlayerControls
+          volume={volume}
+          fullscreen={{
+            on: fullscreen.active,
+            disabled: !fullscreen.supported,
+            onToggle: () => {
               setFullscreenError("");
-              if (!document.fullscreenEnabled) {
-                const video = videoRef.current as IosVideo | null;
-                if (video?.webkitEnterFullscreen) video.webkitEnterFullscreen();
-                else setFullscreenError("這個瀏覽器不支援全螢幕。");
-                return;
-              }
-              const action =
-                document.fullscreenElement === frame
-                  ? document.exitFullscreen()
-                  : frame.requestFullscreen();
-              void action.catch(() => setFullscreenError("無法切換全螢幕。"));
-            }}
-          >
-            {isFullscreen ? (
-              <Minimize className="size-4" strokeWidth={1.75} />
-            ) : (
-              <Maximize className="size-4" strokeWidth={1.75} />
-            )}
-          </button>
-        </div>
+              fullscreen.toggle(setFullscreenError);
+            },
+          }}
+        />
       </div>
       {fullscreenError && (
         <p role="alert" className="px-4 pt-2 text-xs text-red-600">

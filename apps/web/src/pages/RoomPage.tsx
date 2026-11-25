@@ -7,7 +7,9 @@ import { HostSourcePlayer, useLocalSource } from "../features/source";
 import {
   InviteCodeCard,
   MemberList,
+  QualityPanel,
   StreamSettings,
+  qualityLabel,
   useRoom,
 } from "../features/room";
 import type { HostPhase } from "../features/room/host-session-types";
@@ -114,6 +116,8 @@ function HostView({
     }),
   );
   const { error, run } = useActionError();
+  /** 劇院模式：側欄移到影片下方，讓影片滿寬（只在桌面寬度有側欄時提供）。 */
+  const [theater, setTheater] = useState(false);
   const { stream: sourceStream, title: sourceTitle } = source;
   const sourceStatus = source.check.status;
   // 換檔、檢查狀態或片名改變（含第一次通過檢查）。
@@ -148,10 +152,31 @@ function HostView({
     Boolean(error);
 
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)] lg:min-h-[calc(100dvh-3rem)] lg:grid-cols-[minmax(0,1fr)_320px]">
-      <div className="flex min-w-0 flex-col lg:border-r lg:border-zinc-200">
+    <div
+      className={`grid grid-cols-[minmax(0,1fr)] lg:min-h-[calc(100dvh-3rem)] ${
+        theater ? "" : "lg:grid-cols-[minmax(0,1fr)_320px]"
+      }`}
+    >
+      <div
+        className={`flex min-w-0 flex-col ${theater ? "" : "lg:border-r lg:border-zinc-200"}`}
+      >
         <HostSourcePlayer
           source={source}
+          quality={
+            view.room
+              ? {
+                  label: qualityLabel(view.room.quality),
+                  disabled: busy || !online,
+                  panel: (
+                    <QualityPanel
+                      quality={view.room.quality}
+                      onChange={(quality) => host.setQuality(quality)}
+                    />
+                  ),
+                }
+              : undefined
+          }
+          theater={{ on: theater, onToggle: () => setTheater(!theater) }}
           belowTitle={
             <h2 className="min-w-0 text-base font-semibold wrap-anywhere text-zinc-900">
               {hostTitle(phase, view.stream.title, sourceTitle)}
@@ -220,7 +245,11 @@ function HostView({
         )}
       </div>
 
-      <aside className="flex flex-col divide-y divide-zinc-200 bg-white">
+      <aside
+        className={`flex flex-col divide-y divide-zinc-200 bg-white ${
+          theater ? "lg:grid lg:grid-cols-3 lg:divide-x lg:divide-y-0" : ""
+        }`}
+      >
         {view.room?.inviteCode && (
           <InviteCodeCard
             inviteCode={view.room.inviteCode}
@@ -243,7 +272,6 @@ function HostView({
             viewers={viewers}
             busy={busy || !online}
             onModeChange={(mode) => host.setMode(mode)}
-            onQualityChange={(quality) => host.setQuality(quality)}
             onLockedChange={(locked) => run(actions.updateRoom({ locked }))}
           />
         )}

@@ -1,9 +1,4 @@
-import {
-  QUALITY_PRESETS,
-  type Mode,
-  type Quality,
-  type RoomInfo,
-} from "@project/shared";
+import type { Mode, RoomInfo } from "@project/shared";
 import { Notice, Segmented } from "../../components/ui";
 import { formatMbps, uploadHint } from "./room-state";
 
@@ -12,28 +7,18 @@ const MODE_OPTIONS: { value: Mode; label: string }[] = [
   { value: "relay", label: "轉發" },
 ];
 
-const QUALITY_OPTIONS = (Object.keys(QUALITY_PRESETS) as Quality[]).map(
-  (value) => ({
-    value,
-    label: QUALITY_PRESETS[value].label,
-    description: `${QUALITY_PRESETS[value].targetHeight}p・每人 ${formatMbps(QUALITY_PRESETS[value].maxBitrate)}`,
-  }),
-);
-
 export function StreamSettings({
   room,
   viewers,
   busy = false,
   onModeChange,
-  onQualityChange,
   onLockedChange,
 }: {
   room: RoomInfo;
   viewers: number;
-  /** 開播、停播、切換傳送方式或重新連線同步中：暫時不能改傳送方式與畫質。 */
+  /** 開播、停播、切換傳送方式或重新連線同步中：暫時不能改傳送方式。 */
   busy?: boolean;
   onModeChange: (mode: Mode) => void;
-  onQualityChange: (quality: Quality) => void;
   onLockedChange: (locked: boolean) => void;
 }) {
   const upload = uploadHint(room.mode, room.quality, viewers);
@@ -48,15 +33,6 @@ export function StreamSettings({
           disabled={busy}
           onChange={(mode) => {
             if (mode !== room.mode) onModeChange(mode);
-          }}
-        />
-        <Segmented
-          label="畫質"
-          value={room.quality}
-          options={QUALITY_OPTIONS}
-          disabled={busy}
-          onChange={(quality) => {
-            if (quality !== room.quality) onQualityChange(quality);
           }}
         />
         {upload && (

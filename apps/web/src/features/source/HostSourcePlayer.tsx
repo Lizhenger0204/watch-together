@@ -1,14 +1,11 @@
-import {
-  Film,
-  FolderOpen,
-  Maximize,
-  Minimize,
-  Pause,
-  Play,
-  Volume2,
-  VolumeX,
-} from "lucide-react";
+import { Film, FolderOpen } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  PlayerControls,
+  useFullscreen,
+  usePlayerVolume,
+  type PlayerControlsProps,
+} from "../../components/player";
 import { SOURCE_ACCEPT, type SourceCheckCode } from "./source-check";
 import type { useLocalSource } from "./use-local-source";
 
@@ -20,45 +17,40 @@ const CHECK_MESSAGES: Record<SourceCheckCode, string> = {
   CAPTURE_UNSUPPORTED: "此瀏覽器無法擷取影片，請使用桌面版 Chrome 或 Edge。",
 };
 
-function formatTime(value: number) {
-  const seconds = Math.floor(value);
-  const parts = [Math.floor(seconds / 60) % 60, seconds % 60];
-  if (seconds >= 3600) parts.unshift(Math.floor(seconds / 3600));
-  return parts
-    .map((part, index) => String(part).padStart(index === 0 ? 1 : 2, "0"))
-    .join(":");
-}
-
 export function HostSourcePlayer({
   source,
   belowTitle,
   belowAction,
+  quality,
+  theater,
 }: {
   source: ReturnType<typeof useLocalSource>;
   /** 影片正下方的標題節點（未提供時使用片名，供獨立 demo 頁面使用）。 */
   belowTitle?: ReactNode;
   /** 影片正下方右側的主操作按鈕（例如開始／停止直播）。 */
   belowAction?: ReactNode;
+  /** 控制列的畫質按鈕與面板（房間頁提供）。 */
+  quality?: PlayerControlsProps["quality"];
+  /** 控制列的劇院模式按鈕（房間頁提供）。 */
+  theater?: PlayerControlsProps["theater"];
 }) {
   const { videoRef, check, selectFile, continueWithoutAudio, title } = source;
   const playerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const lastVolumeRef = useRef(1);
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [volume, setVolume] = useState(1);
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const volume = usePlayerVolume();
+  const fullscreen = useFullscreen(playerRef);
   const [controlError, setControlError] = useState("");
   const ready = check.status === "ready";
 
+  // 房主本地音量直接調 video.volume，不影響擷取出去的音訊（streaming.md §1）。
+  // 不用 video.muted：選檔檢查（probePlayback）會自己切換 muted。
+  const { audible } = volume;
   useEffect(() => {
-    const onChange = () => {
-      setIsFullscreen(document.fullscreenElement === playerRef.current);
-    };
-    document.addEventListener("fullscreenchange", onChange);
-    return () => document.removeEventListener("fullscreenchange", onChange);
-  }, []);
+    if (videoRef.current) videoRef.current.volume = audible;
+  }, [videoRef, audible]);
 
   const statusText =
     check.status === "checking"
@@ -78,17 +70,16 @@ export function HostSourcePlayer({
         ? "text-amber-700"
         : "text-zinc-500";
 
-  function toggleMute() {
+  function togglePlay() {
     const video = videoRef.current;
     if (!video) return;
-    if (volume > 0) {
-      lastVolumeRef.current = volume;
-      video.volume = 0;
-      setVolume(0);
+    setControlError("");
+    if (video.paused) {
+      void video
+        .play()
+        .catch(() => setControlError("無法播放影片，請再試一次。"));
     } else {
-      const restored = lastVolumeRef.current > 0 ? lastVolumeRef.current : 1;
-      video.volume = restored;
-      setVolume(restored);
+      video.pause();
     }
   }
 
@@ -96,11 +87,11 @@ export function HostSourcePlayer({
     <section className="grid min-w-0">
       <div
         ref={playerRef}
-        className="group relative bg-black text-white fullscreen:flex fullscreen:flex-col"
+        className="group relative bg-black text-white fullscreen:grid fullscreen:place-items-center"
       >
         <video
           ref={videoRef}
-          className="aspect-video w-full bg-black object-contain group-fullscreen:min-h-0 group-fullscreen:flex-1"
+          className="aspect-video max-h-[calc(100dvh-3rem)] w-full bg-black object-contain group-fullscreen:h-full group-fullscreen:max-h-none group-fullscreen:aspect-auto"
           playsInline
           preload="metadata"
           onPlay={() => setPlaying(true)}
@@ -121,7 +112,7 @@ export function HostSourcePlayer({
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="absolute inset-x-0 top-0 bottom-12 grid place-items-center text-zinc-300 transition-colors hover:text-white focus-visible:ring-2 focus-visible:ring-[#0072b2] focus-visible:outline-none focus-visible:ring-inset"
+            className="absolute inset-x-0 top-0 bottom-16 grid place-items-center text-zinc-300 transition-colors hover:text-white focus-visible:ring-2 focus-visible:ring-[#0072b2] focus-visible:outline-none focus-visible:ring-inset"
           >
             <span className="grid justify-items-center gap-2 px-4 text-center">
               <Film className="size-8 text-zinc-400" strokeWidth={1.75} />
@@ -129,112 +120,35 @@ export function HostSourcePlayer({
             </span>
           </button>
         )}
-        <div className="absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/80 via-black/45 to-transparent px-3 pt-4 pb-2 group-fullscreen:static group-fullscreen:bg-black/90 group-fullscreen:pt-2">
-          <input
-            type="range"
-            aria-label="影片進度"
-            className="player-range mb-2 block w-full"
-            min={0}
-            max={duration || 1}
-            step={0.01}
-            value={ready ? time : 0}
-            disabled={!ready || duration === 0}
-            onChange={(event) => {
+        <PlayerControls
+          playback={{
+            playing: ready && playing,
+            disabled: !ready,
+            onToggle: togglePlay,
+          }}
+          progress={{
+            time,
+            duration,
+            disabled: !ready,
+            onSeek: (next) => {
               const video = videoRef.current;
               if (!video) return;
-              video.currentTime = event.currentTarget.valueAsNumber;
+              video.currentTime = next;
               setTime(video.currentTime);
-            }}
-          />
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2.5">
-              <button
-                type="button"
-                aria-label={ready && playing ? "暫停" : "播放"}
-                title={ready && playing ? "暫停" : "播放"}
-                className="inline-flex size-7 items-center justify-center text-white/90 transition-colors hover:text-white focus-visible:ring-2 focus-visible:ring-[#0072b2] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40"
-                disabled={!ready}
-                onClick={() => {
-                  const video = videoRef.current;
-                  if (!video) return;
-                  setControlError("");
-                  if (video.paused) {
-                    void video
-                      .play()
-                      .catch(() =>
-                        setControlError("無法播放影片，請再試一次。"),
-                      );
-                  } else {
-                    video.pause();
-                  }
-                }}
-              >
-                {ready && playing ? (
-                  <Pause className="size-4 fill-current" strokeWidth={1.75} />
-                ) : (
-                  <Play className="size-4 fill-current" strokeWidth={1.75} />
-                )}
-              </button>
-              <span className="font-mono text-xs text-white/90 tabular-nums">
-                {formatTime(ready ? time : 0)} / {formatTime(duration)}
-              </span>
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  aria-label={volume === 0 ? "取消靜音" : "靜音"}
-                  title={volume === 0 ? "取消靜音" : "靜音"}
-                  className="inline-flex size-7 items-center justify-center text-white/90 transition-colors hover:text-white focus-visible:ring-2 focus-visible:ring-[#0072b2] focus-visible:outline-none"
-                  onClick={toggleMute}
-                >
-                  {volume === 0 ? (
-                    <VolumeX className="size-4" strokeWidth={1.75} />
-                  ) : (
-                    <Volume2 className="size-4" strokeWidth={1.75} />
-                  )}
-                </button>
-                <input
-                  aria-label="本地音量"
-                  className="player-range w-16 sm:w-20"
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  value={volume}
-                  onChange={(event) => {
-                    const video = videoRef.current;
-                    if (!video) return;
-                    const next = event.currentTarget.valueAsNumber;
-                    if (next > 0) lastVolumeRef.current = next;
-                    video.volume = next;
-                    setVolume(video.volume);
-                  }}
-                />
-              </div>
-            </div>
-            <button
-              type="button"
-              aria-label={isFullscreen ? "退出全螢幕" : "全螢幕"}
-              title={isFullscreen ? "退出全螢幕" : "全螢幕"}
-              className="inline-flex size-7 items-center justify-center text-white/90 transition-colors hover:text-white focus-visible:ring-2 focus-visible:ring-[#0072b2] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40"
-              disabled={!ready || !document.fullscreenEnabled}
-              onClick={() => {
-                const player = playerRef.current;
-                if (!player) return;
-                const action =
-                  document.fullscreenElement === player
-                    ? document.exitFullscreen()
-                    : player.requestFullscreen();
-                void action.catch(() => setControlError("無法切換全螢幕。"));
-              }}
-            >
-              {isFullscreen ? (
-                <Minimize className="size-4" strokeWidth={1.75} />
-              ) : (
-                <Maximize className="size-4" strokeWidth={1.75} />
-              )}
-            </button>
-          </div>
-        </div>
+            },
+          }}
+          volume={volume}
+          quality={quality}
+          theater={theater}
+          fullscreen={{
+            on: fullscreen.active,
+            disabled: !ready || !fullscreen.supported,
+            onToggle: () => {
+              setControlError("");
+              fullscreen.toggle(setControlError);
+            },
+          }}
+        />
       </div>
 
       {/* 影片正下方的片名與操作橫列（對齊 DESIGN.md §3） */}

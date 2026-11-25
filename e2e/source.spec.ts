@@ -45,7 +45,7 @@ test("plays a local movie and replaces its captured stream after selecting anoth
   await expect(video).toHaveJSProperty("currentTime", 6);
   await seek.press("Home");
   await expect(video).toHaveJSProperty("currentTime", 0);
-  await page.getByRole("slider", { name: "本地音量" }).press("Home");
+  await page.getByRole("slider", { name: "音量" }).press("Home");
   await expect(video).toHaveJSProperty("volume", 0);
 
   const fullscreen = page.getByRole("button", { name: "全螢幕" });
