@@ -3,6 +3,7 @@ import { JOIN_KEY_TTL_MS, joinKeySchema } from "@project/shared";
 import {
   pendingJoinKey,
   resetMemoryStorage,
+  roomInviteCode,
   roomToken,
 } from "../../lib/storage";
 import { joinKeepingIdentity, resetComparedRooms } from "./identity";
@@ -95,7 +96,7 @@ describe("加入冪等鍵", () => {
       reused: false,
     });
     expect(server.seats()).toBe(1);
-    expect(server.sent).toHaveLength(2);
+    expect(server.sent.length).toBe(2);
     expect(server.sent[1] === server.sent[0]).toBe(true);
     expect(server.redirects).toEqual(["error", "error"]);
     expect(joinKeySchema.safeParse(server.sent[0]).success).toBe(true);
@@ -222,5 +223,60 @@ describe("加入冪等鍵", () => {
     denySecond.mockRestore();
     expect(server.sent[1] === server.sent[0]).toBe(false);
     expect(hasStoredKey()).toBe(true);
+  });
+
+  test("雙分頁回歸：甲頁以舊碼沿用身份期間乙頁換碼，甲頁晚到的回應不可覆寫新版邀請碼對照", async () => {
+    // 初始狀態：已保存房主憑證，但缺少邀請碼對照。
+    persistedTokens([[ROOM, TOKEN]]);
+    let releaseReuse!: () => void;
+    const reuseGate = new Promise<void>((resolve) => {
+      releaseReuse = resolve;
+    });
+    let reuseInFlight!: () => void;
+    const reuseStarted = new Promise<void>((resolve) => {
+      reuseInFlight = resolve;
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (path, init) => {
+        expect(String(path)).toBe("/api/rooms/join");
+        const body: {
+          inviteCode: string;
+          existingRoomId?: string;
+          excludeRoomIds?: string[];
+        } = JSON.parse(String(init?.body));
+        if (body.existingRoomId === ROOM) {
+          reuseInFlight();
+          await reuseGate;
+          return Response.json({
+            roomId: ROOM,
+            memberId: "host",
+            reused: true,
+          });
+        }
+        // 新加入請求命中 excludeRoomIds → 404，進入 existingRoomId 沿用。
+        return Response.json(
+          { error: { code: "ROOM_NOT_FOUND", message: "找不到房間" } },
+          { status: 404 },
+        );
+      }),
+    );
+
+    // 甲頁以舊碼沿用身份，但 REST 回應暫緩交付。
+    const tabAJoin = joinKeepingIdentity(CODE, "房主");
+    await reuseStarted;
+
+    // 乙頁隨後換碼，把新版邀請碼寫入共用儲存。
+    localStorage.setItem(`room:${ROOM}:invite`, `${ROTATED}:1`);
+
+    // 放行甲頁的晚到回應。
+    releaseReuse();
+    await expect(tabAJoin).resolves.toEqual({ roomId: ROOM, reused: true });
+
+    // 共用儲存必須維持乙頁寫入的新版對照，不可退回無版本的舊碼。
+    expect(localStorage.getItem(`room:${ROOM}:invite`)).toBe(`${ROTATED}:1`);
+    expect(roomInviteCode.findRoom(ROTATED)).toBe(ROOM);
+    expect(roomInviteCode.findRoom(CODE)).toBeNull();
   });
 });

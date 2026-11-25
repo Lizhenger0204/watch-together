@@ -161,6 +161,7 @@ function clearKeyWhenSafe(
 }
 
 async function joinNew(body: JoinRoomRequest, roomIds: string[]) {
+  const invitesBefore = roomInviteCode.snapshot();
   const pending = joinKeyFor(body.inviteCode);
   let joined;
   try {
@@ -179,6 +180,7 @@ async function joinNew(body: JoinRoomRequest, roomIds: string[]) {
     }
     throw error;
   }
+  const inviteBefore = invitesBefore.get(joined.roomId) ?? null;
   // 新身份可能在請求途中由另一分頁寫入。先保住房主或既有成員的憑證。
   let current = roomToken.get(joined.roomId);
   while (current && current !== joined.memberToken) {
@@ -190,7 +192,11 @@ async function joinNew(body: JoinRoomRequest, roomIds: string[]) {
     }
     if (check === "unknown") throw new ApiError("INTERNAL");
     if (check === "valid") {
-      roomInviteCode.set(joined.roomId, body.inviteCode);
+      roomInviteCode.setIfUnchanged(
+        joined.roomId,
+        body.inviteCode,
+        inviteBefore,
+      );
       clearKeyWhenSafe(
         body.inviteCode,
         joined.roomId,
@@ -202,7 +208,7 @@ async function joinNew(body: JoinRoomRequest, roomIds: string[]) {
     break;
   }
   const tokenPersisted = roomToken.set(joined.roomId, joined.memberToken);
-  roomInviteCode.set(joined.roomId, body.inviteCode);
+  roomInviteCode.setIfUnchanged(joined.roomId, body.inviteCode, inviteBefore);
   if (tokenPersisted || !pending.persisted) {
     pendingJoinKey.clearIfCurrent(body.inviteCode, pending.key);
   }
@@ -259,12 +265,13 @@ async function join(inviteCode: string, nickname: string) {
   for (const roomId of roomIds) {
     const existing = roomToken.get(roomId);
     if (!existing || compared.has(roomId, existing)) continue;
+    const inviteBefore = roomInviteCode.readRaw(roomId);
     try {
       const reused = reuseRoomResponseSchema.parse(
         await conditionalJoin({ ...body, existingRoomId: roomId }, existing),
       );
       if (reused.roomId !== roomId) throw new ApiError("INTERNAL");
-      roomInviteCode.set(roomId, inviteCode);
+      roomInviteCode.setIfUnchanged(roomId, inviteCode, inviteBefore);
       if (existingPending) {
         clearKeyWhenSafe(
           inviteCode,

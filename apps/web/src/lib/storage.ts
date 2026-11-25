@@ -142,12 +142,30 @@ function parseStoredInvite(raw: string | null | undefined) {
   };
 }
 
+function readRawInvite(roomId: string): string | null {
+  const key = inviteKey(roomId);
+  const stored = storedIdentity(key);
+  if (stored !== undefined && stored !== null) return stored;
+  return memory.local.get(key) ?? null;
+}
+
 /**
  * 房間邀請碼對照（用來在開邀請連結時認出是哪一房，以及在同源分頁間依版本同步最新邀請碼）。
  * 不是機密：邀請碼本來就要傳給朋友。
  * 房主寫入格式為 `<邀請碼>:<版本>`；收看者或舊資料為 `<邀請碼>`。
  */
 export const roomInviteCode = {
+  /** 讀取目前對照原值（供請求前拍照，避免晚到的無版本回應覆寫請求期間已更新的對照）。 */
+  readRaw: (roomId: string) => readRawInvite(roomId),
+  /** 拍下所有房間目前的邀請碼對照原值（給送出前還不知道房號的加入請求用）。 */
+  snapshot(): Map<string, string | null> {
+    const snap = new Map<string, string | null>();
+    for (const key of keys("local")) {
+      const match = /^room:(.+):invite$/.exec(key);
+      if (match?.[1]) snap.set(match[1], readRawInvite(match[1]));
+    }
+    return snap;
+  },
   set: (roomId: string, inviteCode: string) => {
     const key = inviteKey(roomId);
     const current = parseStoredInvite(readIdentity(key));
@@ -156,6 +174,27 @@ export const roomInviteCode = {
       return storedIdentity(key) === `${inviteCode}:${current.version}`;
     }
     return writeIdentity(key, inviteCode);
+  },
+  /**
+   * 只有請求期間對照沒有被其他分頁改寫時才寫入無版本邀請碼；
+   * 若另一分頁已在途中換碼並寫入新版對照，保留該對照、不倒退覆寫。
+   */
+  setIfUnchanged(
+    roomId: string,
+    inviteCode: string,
+    expectedRaw: string | null,
+  ) {
+    const key = inviteKey(roomId);
+    const currentRaw = readRawInvite(roomId);
+    if (currentRaw !== expectedRaw) {
+      const stored = storedIdentity(key);
+      if (stored !== undefined && stored !== null) {
+        memory.local.set(key, stored);
+        lastStoredIdentity.set(key, stored);
+      }
+      return false;
+    }
+    return roomInviteCode.set(roomId, inviteCode);
   },
   /**
    * 房主依單調遞增的 inviteCodeVersion 同步共用儲存：

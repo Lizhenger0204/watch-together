@@ -248,6 +248,27 @@ describe("roomInviteCode", () => {
     expect(storage.getItem(`room:${ROOM}:invite`)).toBe("CCCCCCCC:2");
   });
 
+  test("setIfUnchanged：請求期間另一分頁已寫入新版對照時，不覆寫回舊碼", () => {
+    const storage = new MemoryStorage();
+    vi.stubGlobal("localStorage", storage);
+    const before = roomInviteCode.readRaw(ROOM);
+    expect(before).toBeNull();
+
+    // 請求進行中，另一分頁換碼並寫入新版對照。
+    storage.setItem(`room:${ROOM}:invite`, "CCCCCCCC:1");
+    expect(roomInviteCode.setIfUnchanged(ROOM, "AAAAAAAA", before)).toBe(false);
+    expect(storage.getItem(`room:${ROOM}:invite`)).toBe("CCCCCCCC:1");
+    expect(roomInviteCode.findRoom("CCCCCCCC")).toBe(ROOM);
+    expect(roomInviteCode.findRoom("AAAAAAAA")).toBeNull();
+
+    // 若期間沒有被其他分頁改動，則正常寫入。
+    const beforeUnchanged = roomInviteCode.readRaw(ROOM);
+    expect(
+      roomInviteCode.setIfUnchanged(ROOM, "DDDDDDDD", beforeUnchanged),
+    ).toBe(true);
+    expect(storage.getItem(`room:${ROOM}:invite`)).toBe("DDDDDDDD");
+  });
+
   test("subscribe 收到同源分頁的 storage 換碼事件時回報新碼與版本", () => {
     vi.stubGlobal("localStorage", new MemoryStorage());
     const listeners = new Set<(event: Event) => void>();

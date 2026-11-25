@@ -215,13 +215,25 @@ test("當時配置的成員已被踢出：重放照一般新加入處理", async
   expect(records.map((r) => r.memberId)).toEqual([again.memberId]);
 });
 
-/** 驗證錯誤回應時不把整份 body 丟進 toEqual，避免意外回 200 時印出 memberToken。 */
+/** 驗證錯誤回應時不把整份 body 丟進 toEqual，並嚴格檢查欄位集合，避免夾帶或印出 memberToken。 */
 function expectErrorResponse(
   res: { status: number; body: unknown },
   status: number,
   code: ErrorCode,
 ) {
   expect(res.status).toBe(status);
+  const record =
+    typeof res.body === "object" && res.body !== null
+      ? (res.body as Record<string, unknown>)
+      : null;
+  expect(record !== null).toBe(true);
+  expect(record ? "memberToken" in record : false).toBe(false);
+  expect(record ? Object.keys(record) : []).toEqual(["error"]);
+  const errObj =
+    typeof record?.error === "object" && record.error !== null
+      ? (record.error as Record<string, unknown>)
+      : null;
+  expect(errObj ? Object.keys(errObj).sort() : []).toEqual(["code", "message"]);
   const parsed = errorResponseSchema.safeParse(res.body);
   const expected = errorBody(code).error;
   expect(
@@ -229,6 +241,24 @@ function expectErrorResponse(
       parsed.data.error.code === expected.code &&
       parsed.data.error.message === expected.message,
   ).toBe(true);
+}
+
+/** 驗證沿用回應時不把整份 JSON 丟進 toEqual，避免回歸成新加入回應時印出 memberToken。 */
+function expectReuseResponse(body: unknown, roomId: string, memberId: string) {
+  const record =
+    typeof body === "object" && body !== null
+      ? (body as Record<string, unknown>)
+      : null;
+  expect(record !== null).toBe(true);
+  expect(record ? "memberToken" in record : false).toBe(false);
+  expect(record ? Object.keys(record).sort() : []).toEqual([
+    "memberId",
+    "reused",
+    "roomId",
+  ]);
+  expect(record?.roomId).toBe(roomId);
+  expect(record?.memberId).toBe(memberId);
+  expect(record?.reused).toBe(true);
 }
 
 test("重新產生邀請碼後，舊碼帶同一把鍵也回相同的 404", async () => {
@@ -322,11 +352,7 @@ test("重新產生邀請碼後，舊碼配發的紀錄作廢：新碼帶舊鍵�
     first.memberToken,
   );
   expect(reused.status).toBe(200);
-  expect(await reused.json()).toEqual({
-    roomId: created.roomId,
-    memberId: first.memberId,
-    reused: true,
-  });
+  expectReuseResponse(await reused.json(), created.roomId, first.memberId);
 
   // 再次換碼：版本遞增為 2，房主重新連線的 snapshot 也帶著版本 2。
   const rotated2 = await post(
@@ -369,7 +395,8 @@ test("鍵格式錯誤回 400；沿用請求忽略鍵", async () => {
     },
     hostToken,
   );
-  expect(await reused.json()).toEqual({ roomId, memberId, reused: true });
+  expect(reused.status).toBe(200);
+  expectReuseResponse(await reused.json(), roomId, memberId);
   expect(await memberCount(roomId)).toBe(1);
 });
 
