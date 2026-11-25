@@ -17,6 +17,7 @@ import { TransportError } from "./common/errors";
 import type { PeerConnectionFactory } from "./common/rtc";
 import type { TransportStats } from "./common/stats";
 import { createP2PHostTransport, createP2PViewerTransport } from "./p2p";
+import { createRelayHostTransport, createRelayViewerTransport } from "./relay";
 
 export * from "./common";
 
@@ -183,17 +184,13 @@ export type CreateViewerTransport = (
   options: ViewerTransportOptions,
 ) => ViewerTransport;
 
-/** relay/ 還沒交付（T-109）前，轉發模式一律回報 RELAY_UNAVAILABLE。 */
-function relayNotReady(): never {
-  throw new TransportError(
-    "RELAY_UNAVAILABLE",
-    "轉發模式還沒完成，請房主改用「P2P 直連」。",
-  );
-}
-
-/** 依 mode 選用實作（§9「匯出位置」）。建立失敗時同步丟出 TransportError。 */
+/** 依 mode 選用實作（§9「匯出位置」）。 */
 export const createHostTransport: CreateHostTransport = (options) =>
-  options.mode === "p2p" ? createP2PHostTransport(options) : relayNotReady();
+  options.mode === "p2p"
+    ? createP2PHostTransport(options)
+    : createRelayHostTransport(options);
 
 export const createViewerTransport: CreateViewerTransport = (options) =>
-  options.mode === "p2p" ? createP2PViewerTransport(options) : relayNotReady();
+  options.mode === "p2p"
+    ? createP2PViewerTransport(options)
+    : createRelayViewerTransport(options);

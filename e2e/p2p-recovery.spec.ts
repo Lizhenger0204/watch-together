@@ -28,14 +28,30 @@ test("三方重新整理、轉發不可用與踢人後的 P2P 播放", async ({ 
     await expectPeers(host, 2);
   });
 
-  await test.step("轉發不可用時顯示原因，切回 P2P 後兩人恢復", async () => {
-    // T-122 接上 relay dispatcher 後要改寫為本機模擬的轉發切換流程。
+  await test.step("轉發服務回 503 時顯示原因，切回 P2P 後兩人恢復", async () => {
+    // 接上 relay 後真的會送 WHIP／WHEP；在本頁攔下並回 503，不打真實的 SFU。
+    const relayRequests: string[] = [];
+    for (const page of [host, ...viewers]) {
+      await page.route(/\/api\/rooms\/[^/]+\/(whip|whep)\b/, (route) => {
+        relayRequests.push(new URL(route.request().url()).pathname);
+        return route.fulfill({
+          status: 503,
+          json: {
+            error: {
+              code: "RELAY_UNAVAILABLE",
+              message: "轉發模式目前無法使用",
+            },
+          },
+        });
+      });
+    }
     const relay = host.getByRole("button", { name: "轉發", exact: true });
     await relay.click();
     await expect(relay).toHaveAttribute("aria-pressed", "true");
     await expect(
-      host.getByText("轉發模式還沒完成，請房主改用「P2P 直連」。"),
+      host.getByText("轉發模式目前無法使用，請房主改用「P2P 直連」。"),
     ).toBeVisible();
+    expect(relayRequests.some((path) => path.endsWith("/whip"))).toBe(true);
     await expectWaiting(...viewers);
     const p2p = host.getByRole("button", { name: "P2P 直連", exact: true });
     await p2p.click();
