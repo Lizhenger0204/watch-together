@@ -222,6 +222,53 @@ describe("roomInviteCode", () => {
     expect(roomInviteCode.findRoom("ABCDEFGH")).toBe(ROOM);
     expect(roomInviteCode.findRoom("ZZZZZZZZ")).toBeNull();
   });
+
+  test("斷線分頁晚收到 v1 時，sync 採用另一分頁已保存的 v2 而不倒退覆蓋共用儲存", () => {
+    const storage = new MemoryStorage();
+    vi.stubGlobal("localStorage", storage);
+    // 乙頁已換到 v2 並寫入共用儲存。
+    expect(roomInviteCode.sync(ROOM, "CCCCCCCC", 2)).toEqual({
+      inviteCode: "CCCCCCCC",
+      version: 2,
+    });
+    expect(roomInviteCode.findRoom("CCCCCCCC")).toBe(ROOM);
+
+    // 模擬甲頁（只有舊記憶體狀態 v0）在斷線後晚收到 v1 REST 回應。
+    resetMemoryStorage();
+    expect(roomInviteCode.sync(ROOM, "BBBBBBBB", 1)).toEqual({
+      inviteCode: "CCCCCCCC",
+      version: 2,
+    });
+    expect(storage.getItem(`room:${ROOM}:invite`)).toBe("CCCCCCCC:2");
+    expect(roomInviteCode.findRoom("CCCCCCCC")).toBe(ROOM);
+    expect(roomInviteCode.findRoom("BBBBBBBB")).toBeNull();
+
+    // 同碼無版本寫入會保留版本號。
+    roomInviteCode.set(ROOM, "CCCCCCCC");
+    expect(storage.getItem(`room:${ROOM}:invite`)).toBe("CCCCCCCC:2");
+  });
+
+  test("subscribe 收到同源分頁的 storage 換碼事件時回報新碼與版本", () => {
+    vi.stubGlobal("localStorage", new MemoryStorage());
+    const listeners = new Set<(event: Event) => void>();
+    vi.stubGlobal("addEventListener", (_type: string, fn: (e: Event) => void) =>
+      listeners.add(fn),
+    );
+    vi.stubGlobal(
+      "removeEventListener",
+      (_type: string, fn: (e: Event) => void) => listeners.delete(fn),
+    );
+    const seen: Array<{ inviteCode: string; version: number }> = [];
+    const off = roomInviteCode.subscribe(ROOM, (latest) => seen.push(latest));
+    const event = {
+      key: `room:${ROOM}:invite`,
+      newValue: "CCCCCCCC:2",
+    } as unknown as Event;
+    for (const fn of listeners) fn(event);
+    expect(seen).toEqual([{ inviteCode: "CCCCCCCC", version: 2 }]);
+    off();
+    expect(listeners.size).toBe(0);
+  });
 });
 
 describe("pendingJoinKey", () => {
@@ -260,7 +307,7 @@ describe("pendingJoinKey", () => {
     expect(pendingJoinKey.set(CODE, key, 1000)).toBe(true);
     expect(pendingJoinKey.persisted(CODE, key)).toBe(true);
     storage.removeItem(`join:${CODE}:key`);
-    expect(pendingJoinKey.get(CODE, 60_000, 1000)).toBeNull();
+    expect(pendingJoinKey.get(CODE, 60_000, 1000) === null).toBe(true);
   });
 
   test("逾期讀取會即時刪除儲存項；prune 會清掉其他邀請碼的逾期鍵", () => {
@@ -273,15 +320,15 @@ describe("pendingJoinKey", () => {
     pendingJoinKey.set(OTHER_CODE, expiredB, 1000);
     pendingJoinKey.set("MNPQ6789", fresh, 50_000);
 
-    expect(pendingJoinKey.get(CODE, 10_000, 11_000)).toBeNull();
-    expect(storage.getItem(`join:${CODE}:key`)).toBeNull();
+    expect(pendingJoinKey.get(CODE, 10_000, 11_000) === null).toBe(true);
+    expect(storage.getItem(`join:${CODE}:key`) === null).toBe(true);
 
     pendingJoinKey.prune(10_000, 55_000);
-    expect(storage.getItem(`join:${OTHER_CODE}:key`)).toBeNull();
+    expect(storage.getItem(`join:${OTHER_CODE}:key`) === null).toBe(true);
     expect(pendingJoinKey.get("MNPQ6789", 10_000, 55_000) === fresh).toBe(true);
   });
 
-  test("removeItem 失敗時隱藏刪不掉的舊鍵，但仍採用其他分頁之後寫入的新鍵", () => {
+  test("removeItem 暫時失敗後：隱藏舊鍵、不擋他頁新鍵，恢復後 prune() 會補刪舊值", () => {
     const storage = new MemoryStorage();
     vi.stubGlobal("localStorage", storage);
     const oldKey = crypto.randomUUID();
@@ -291,10 +338,25 @@ describe("pendingJoinKey", () => {
       throw new Error("denied");
     });
     pendingJoinKey.clearIfCurrent(CODE, oldKey);
-    expect(pendingJoinKey.get(CODE, 60_000, 1000)).toBeNull();
+    expect(pendingJoinKey.get(CODE, 60_000, 1000) === null).toBe(true);
+    // 持久儲存裡還留著舊值；恢復儲存並呼叫 prune() 後必須補刪乾淨。
+    expect(storage.getItem(`join:${CODE}:key`) !== null).toBe(true);
     denied.mockRestore();
+    pendingJoinKey.prune(60_000, 100_000);
+    expect(storage.getItem(`join:${CODE}:key`) === null).toBe(true);
 
-    storage.setItem(`join:${CODE}:key`, `2000:${newKey}`);
-    expect(pendingJoinKey.get(CODE, 60_000, 2000) === newKey).toBe(true);
+    // 刪除失敗後若有另一分頁寫入新鍵，prune() 淘汰過時墓碑且保留未逾期的新鍵。
+    pendingJoinKey.set(OTHER_CODE, oldKey, 1000);
+    const denied2 = vi.spyOn(storage, "removeItem").mockImplementation(() => {
+      throw new Error("denied");
+    });
+    pendingJoinKey.clearIfCurrent(OTHER_CODE, oldKey);
+    denied2.mockRestore();
+    storage.setItem(`join:${OTHER_CODE}:key`, `2000:${newKey}`);
+    pendingJoinKey.prune(60_000, 3000);
+    expect(storage.getItem(`join:${OTHER_CODE}:key`) === `2000:${newKey}`).toBe(
+      true,
+    );
+    expect(pendingJoinKey.get(OTHER_CODE, 60_000, 3000) === newKey).toBe(true);
   });
 });

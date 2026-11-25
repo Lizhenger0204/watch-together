@@ -133,17 +133,86 @@ export const roomToken = {
   },
 };
 
+function parseStoredInvite(raw: string | null | undefined) {
+  const match = raw && /^([A-Za-z0-9]+)(?::(\d+))?$/.exec(raw);
+  if (!match) return null;
+  return {
+    inviteCode: match[1]!,
+    version: match[2] !== undefined ? Number(match[2]) : null,
+  };
+}
+
 /**
- * 房主看到的邀請碼（只用來在房主開自己的邀請連結時認出是哪一房）。
+ * 房間邀請碼對照（用來在開邀請連結時認出是哪一房，以及在同源分頁間依版本同步最新邀請碼）。
  * 不是機密：邀請碼本來就要傳給朋友。
+ * 房主寫入格式為 `<邀請碼>:<版本>`；收看者或舊資料為 `<邀請碼>`。
  */
 export const roomInviteCode = {
-  set: (roomId: string, inviteCode: string) =>
-    writeIdentity(inviteKey(roomId), inviteCode),
+  set: (roomId: string, inviteCode: string) => {
+    const key = inviteKey(roomId);
+    const current = parseStoredInvite(readIdentity(key));
+    // 同一組碼已有版本號時保留原版本，避免無版本寫入抹掉房主版本。
+    if (current?.inviteCode === inviteCode && current.version !== null) {
+      return storedIdentity(key) === `${inviteCode}:${current.version}`;
+    }
+    return writeIdentity(key, inviteCode);
+  },
+  /**
+   * 房主依單調遞增的 inviteCodeVersion 同步共用儲存：
+   * 若另一同源分頁已寫入更新版本，保留該版本並回傳，不倒退覆蓋。
+   */
+  sync(
+    roomId: string,
+    inviteCode: string,
+    version: number,
+  ): { inviteCode: string; version: number } {
+    const key = inviteKey(roomId);
+    const stored = parseStoredInvite(storedIdentity(key));
+    const mem = parseStoredInvite(memory.local.get(key));
+    const current =
+      stored?.version !== undefined &&
+      stored.version !== null &&
+      (mem?.version === undefined ||
+        mem.version === null ||
+        stored.version >= mem.version)
+        ? stored
+        : mem;
+    if (current && current.version !== null && current.version > version) {
+      const raw = `${current.inviteCode}:${current.version}`;
+      memory.local.set(key, raw);
+      if (stored?.version === current.version) lastStoredIdentity.set(key, raw);
+      return { inviteCode: current.inviteCode, version: current.version };
+    }
+    writeIdentity(key, `${inviteCode}:${version}`);
+    return { inviteCode, version };
+  },
+  /** 監聽其他同源分頁寫入的較新邀請碼版本。 */
+  subscribe(
+    roomId: string,
+    onUpdate: (latest: { inviteCode: string; version: number }) => void,
+  ) {
+    if (typeof globalThis.addEventListener !== "function") return () => {};
+    const key = inviteKey(roomId);
+    const listener = (event: Event) => {
+      const storageEvent = event as StorageEvent;
+      if (storageEvent.key !== key || !storageEvent.newValue) return;
+      const parsed = parseStoredInvite(storageEvent.newValue);
+      if (!parsed || parsed.version === null) return;
+      memory.local.set(key, storageEvent.newValue);
+      lastStoredIdentity.set(key, storageEvent.newValue);
+      onUpdate({ inviteCode: parsed.inviteCode, version: parsed.version });
+    };
+    globalThis.addEventListener("storage", listener);
+    return () => globalThis.removeEventListener("storage", listener);
+  },
   findRoom(inviteCode: string): string | null {
     for (const key of keys("local")) {
       const match = /^room:(.+):invite$/.exec(key);
-      if (match?.[1] && readIdentity(key) === inviteCode) return match[1];
+      if (
+        match?.[1] &&
+        parseStoredInvite(readIdentity(key))?.inviteCode === inviteCode
+      )
+        return match[1];
     }
     return null;
   },
@@ -153,8 +222,9 @@ const joinKeyKey = (inviteCode: string) => `join:${inviteCode}:key`;
 
 // 只放「寫入共用儲存失敗」的本分頁待完成鍵，避免共用儲存已被別的分頁清空後又讀回舊值。
 const pendingJoinMemory = new Map<string, string>();
-// 刪除共用儲存失敗時記住確切的舊原值：略過那筆刪不掉的舊值，但其他分頁寫新值仍讀得到。
-const tombstonedJoinKeys = new Set<string>();
+// 刪除共用儲存失敗時記住確切的舊原值：略過那筆刪不掉的舊值，但其他分頁寫新值仍讀得到，
+// 且 prune() 會比對持久原值重試刪除，成功或發現新值後淘汰墓碑。
+const tombstonedJoinKeys = new Map<string, string>();
 
 function parseJoinKeyEntry(raw: string | null | undefined) {
   const match = raw && /^(\d+):(.+)$/.exec(raw);
@@ -164,8 +234,12 @@ function parseJoinKeyEntry(raw: string | null | undefined) {
 
 function readStoredJoinKey(storageKey: string): string | null {
   const stored = storedIdentity(storageKey);
-  if (!stored || tombstonedJoinKeys.has(`${storageKey}\0${stored}`)) {
-    return null;
+  if (stored === undefined) return null;
+  const tomb = tombstonedJoinKeys.get(storageKey);
+  if (tomb !== undefined) {
+    if (stored === tomb) return null;
+    // 持久儲存已被清空或換成其他分頁的新值，對應墓碑已過時。
+    tombstonedJoinKeys.delete(storageKey);
   }
   return stored;
 }
@@ -173,10 +247,19 @@ function readStoredJoinKey(storageKey: string): string | null {
 function removeStoredJoinKey(storageKey: string, expectedRaw: string) {
   try {
     const store = backend("local");
-    if (!store || store.getItem(storageKey) !== expectedRaw) return;
+    if (!store) return;
+    if (store.getItem(storageKey) !== expectedRaw) {
+      if (tombstonedJoinKeys.get(storageKey) === expectedRaw) {
+        tombstonedJoinKeys.delete(storageKey);
+      }
+      return;
+    }
     store.removeItem(storageKey);
+    if (tombstonedJoinKeys.get(storageKey) === expectedRaw) {
+      tombstonedJoinKeys.delete(storageKey);
+    }
   } catch {
-    tombstonedJoinKeys.add(`${storageKey}\0${expectedRaw}`);
+    tombstonedJoinKeys.set(storageKey, expectedRaw);
   }
 }
 
@@ -218,7 +301,7 @@ export const pendingJoinKey = {
       if (store) {
         store.setItem(storageKey, raw);
         pendingJoinMemory.delete(storageKey);
-        tombstonedJoinKeys.delete(`${storageKey}\0${raw}`);
+        tombstonedJoinKeys.delete(storageKey);
         return true;
       }
     } catch {
@@ -238,7 +321,7 @@ export const pendingJoinKey = {
       removeStoredJoinKey(storageKey, stored);
     }
   },
-  /** 清除所有邀請碼已逾期或格式損壞的待完成鍵，避免儲存項累積。 */
+  /** 補刪先前刪除失敗的墓碑舊值，並清除所有邀請碼已逾期或格式損壞的待完成鍵。 */
   prune(ttlMs: number, now = Date.now()) {
     for (const [storageKey, raw] of pendingJoinMemory) {
       const parsed = parseJoinKeyEntry(raw);
@@ -246,10 +329,18 @@ export const pendingJoinKey = {
         pendingJoinMemory.delete(storageKey);
       }
     }
+    // 先重試清理因暫時性刪除失敗而留下的舊值（仍是原值才刪，避免誤刪新值）。
+    for (const [storageKey, expectedRaw] of [...tombstonedJoinKeys]) {
+      removeStoredJoinKey(storageKey, expectedRaw);
+    }
     for (const storageKey of keys("local")) {
       if (!/^join:.+:key$/.test(storageKey)) continue;
-      const stored = readStoredJoinKey(storageKey);
-      if (stored === null) continue;
+      const stored = storedIdentity(storageKey);
+      if (!stored) continue;
+      if (tombstonedJoinKeys.get(storageKey) === stored) {
+        removeStoredJoinKey(storageKey, stored);
+        continue;
+      }
       const parsed = parseJoinKeyEntry(stored);
       if (!parsed || now - parsed.createdAt >= ttlMs) {
         removeStoredJoinKey(storageKey, stored);

@@ -70,11 +70,40 @@ export function useRoom(roomId: string) {
 
   useEffect(() => {
     if (!client) return;
-    const offMessage = client.onMessage((message) =>
-      dispatch({ kind: "message", message }),
-    );
+    const offMessage = client.onMessage((message) => {
+      if (
+        (message.type === "room:snapshot" || message.type === "room:updated") &&
+        message.room.inviteCode !== undefined
+      ) {
+        const latest = roomInviteCode.sync(
+          roomId,
+          message.room.inviteCode,
+          message.room.inviteCodeVersion ?? 0,
+        );
+        dispatch({
+          kind: "message",
+          message: {
+            ...message,
+            room: {
+              ...message.room,
+              inviteCode: latest.inviteCode,
+              inviteCodeVersion: latest.version,
+            },
+          },
+        });
+        return;
+      }
+      dispatch({ kind: "message", message });
+    });
     const offState = client.onState((state) =>
       dispatch({ kind: "connection", state }),
+    );
+    const offInvite = roomInviteCode.subscribe(roomId, (latest) =>
+      dispatch({
+        kind: "invite-code",
+        inviteCode: latest.inviteCode,
+        inviteCodeVersion: latest.version,
+      }),
     );
     // 在 start() 前掛上，才能緩衝驗證後馬上到的信令。
     const detachViewer = viewer?.attach();
@@ -83,17 +112,22 @@ export function useRoom(roomId: string) {
     return () => {
       offMessage();
       offState();
+      offInvite();
       detachViewer?.();
       detachHost?.();
       client.stop();
     };
-  }, [client, viewer, host]);
+  }, [client, viewer, host, roomId]);
 
-  // 記住房主看到的邀請碼，房主開自己的邀請連結時才認得出是這一房。
+  // 記住房主看到的最新邀請碼與版本，房主開自己的邀請連結或跨分頁換碼時不會被舊碼倒退覆蓋。
   const inviteCode = view.you?.role === "host" ? view.room?.inviteCode : null;
+  const inviteCodeVersion =
+    view.you?.role === "host" ? (view.room?.inviteCodeVersion ?? 0) : null;
   useEffect(() => {
-    if (inviteCode) roomInviteCode.set(roomId, inviteCode);
-  }, [roomId, inviteCode]);
+    if (inviteCode && inviteCodeVersion !== null) {
+      roomInviteCode.sync(roomId, inviteCode, inviteCodeVersion);
+    }
+  }, [roomId, inviteCode, inviteCodeVersion]);
 
   const actions = useMemo(
     () => ({
@@ -104,14 +138,22 @@ export function useRoom(roomId: string) {
       async regenerateInviteCode() {
         if (!token) throw new Error("no token");
         const result = await regenerateInviteCode(roomId, token);
-        // WebSocket 斷線時收不到 room:updated，直接用 REST 回應更新；
-        // 若畫面已採用相同或更新的版本，由 reducer 忽略。
+        // 先和同源共用儲存核對版本：斷線期間另一分頁可能已換到更新的碼，
+        // 一律採用版本較高的有效碼，絕不把共用對照與畫面蓋回失效舊碼。
+        const latest = roomInviteCode.sync(
+          roomId,
+          result.inviteCode,
+          result.inviteCodeVersion,
+        );
         dispatch({
           kind: "invite-code",
-          inviteCode: result.inviteCode,
-          inviteCodeVersion: result.inviteCodeVersion,
+          inviteCode: latest.inviteCode,
+          inviteCodeVersion: latest.version,
         });
-        return result;
+        return {
+          inviteCode: latest.inviteCode,
+          inviteCodeVersion: latest.version,
+        };
       },
       clearError: () => dispatch({ kind: "clear-error" }),
     }),

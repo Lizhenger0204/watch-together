@@ -19,6 +19,9 @@ import {
 // 結果未明時重試與接手分頁沿用同一把鍵；成功保存、沿用或確定未配位時條件清除。
 
 const keyStorage = `join:${CODE}:key`;
+/** 用布林判斷待完成鍵是否存在，避免斷言失敗時在輸出中印出金鑰內容。 */
+const hasStoredKey = (inviteCode = CODE) =>
+  localStorage.getItem(`join:${inviteCode}:key`) !== null;
 
 beforeEach(() => {
   resetMemoryStorage();
@@ -97,7 +100,7 @@ describe("加入冪等鍵", () => {
     expect(server.redirects).toEqual(["error", "error"]);
     expect(joinKeySchema.safeParse(server.sent[0]).success).toBe(true);
     // 身份存好後刪除鍵；下一次加入是新的一次。
-    expect(localStorage.getItem(keyStorage)).toBeNull();
+    expect(hasStoredKey()).toBe(false);
   });
 
   test("分頁在保存身份前關閉：接手的分頁讀到同一把鍵", async () => {
@@ -114,7 +117,7 @@ describe("加入冪等鍵", () => {
     expect(server.seats()).toBe(1);
     expect(server.sent[1] === server.sent[0]).toBe(true);
     expect(Boolean(storage.roomToken.get(ROOM))).toBe(true);
-    expect(localStorage.getItem(keyStorage)).toBeNull();
+    expect(hasStoredKey()).toBe(false);
   });
 
   test("超過期限的鍵不再使用並清掉其他邀請碼的逾期鍵", async () => {
@@ -127,7 +130,7 @@ describe("加入冪等鍵", () => {
     vi.setSystemTime(1_000_000 + JOIN_KEY_TTL_MS);
     await joinKeepingIdentity(CODE, "朋友");
     expect(server.sent[1] === server.sent[0]).toBe(false);
-    expect(localStorage.getItem(`join:${ROTATED}:key`)).toBeNull();
+    expect(hasStoredKey(ROTATED)).toBe(false);
   });
 
   test("成功加入後再加入另一房：每次按加入都是新的鍵", async () => {
@@ -150,7 +153,7 @@ describe("加入冪等鍵", () => {
       await expect(joinKeepingIdentity(CODE, "朋友")).rejects.toMatchObject({
         code,
       });
-      expect(localStorage.getItem(keyStorage)).toBeNull();
+      expect(hasStoredKey()).toBe(false);
       await joinKeepingIdentity(CODE, "朋友");
       expect(server.sent[1] === server.sent[0]).toBe(false);
     },
@@ -166,14 +169,14 @@ describe("加入冪等鍵", () => {
     await expect(joinKeepingIdentity(CODE, "朋友")).rejects.toMatchObject({
       code: "RATE_LIMITED",
     });
-    expect(localStorage.getItem(keyStorage)).not.toBeNull();
+    expect(hasStoredKey()).toBe(true);
     await expect(joinKeepingIdentity(CODE, "朋友")).resolves.toEqual({
       roomId: ROOM,
       reused: false,
     });
     expect(server.seats()).toBe(1);
     expect(server.sent[2] === server.sent[0]).toBe(true);
-    expect(localStorage.getItem(keyStorage)).toBeNull();
+    expect(hasStoredKey()).toBe(false);
   });
 
   test("換碼後透過 existingRoomId 成功沿用身份：不留待完成鍵", async () => {
@@ -184,7 +187,7 @@ describe("加入冪等鍵", () => {
       roomId: ROOM,
       reused: true,
     });
-    expect(localStorage.getItem(`join:${ROTATED}:key`)).toBeNull();
+    expect(hasStoredKey(ROTATED)).toBe(false);
   });
 
   test("寫入共用儲存持續失敗時：成功加入後清除記憶體鍵；鍵已持久化但憑證存不進去時保留持久鍵", async () => {
@@ -198,7 +201,7 @@ describe("加入冪等鍵", () => {
     });
     denyAll.mockRestore();
     // 鍵沒持久化：成功後記憶體鍵已清掉，清掉憑證再加入會產生新鍵。
-    expect(pendingJoinKey.get(CODE, JOIN_KEY_TTL_MS)).toBeNull();
+    expect(pendingJoinKey.get(CODE, JOIN_KEY_TTL_MS) === null).toBe(true);
     roomToken.clear(ROOM);
 
     // 鍵寫得進去，但之後寫憑證失敗：保留已持久化的鍵，讓重整或別的分頁仍可取回同一席。
@@ -218,6 +221,6 @@ describe("加入冪等鍵", () => {
     });
     denySecond.mockRestore();
     expect(server.sent[1] === server.sent[0]).toBe(false);
-    expect(localStorage.getItem(keyStorage)).not.toBeNull();
+    expect(hasStoredKey()).toBe(true);
   });
 });

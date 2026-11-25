@@ -1,8 +1,10 @@
 import {
   JOIN_KEY_TTL_MS,
   createRoomResponseSchema,
+  errorResponseSchema,
   joinRoomResponseSchema,
   regenerateInviteCodeResponseSchema,
+  type ErrorCode,
 } from "@project/shared";
 import { env, runInDurableObject } from "cloudflare:test";
 import { expect, test, vi } from "vitest";
@@ -213,6 +215,22 @@ test("當時配置的成員已被踢出：重放照一般新加入處理", async
   expect(records.map((r) => r.memberId)).toEqual([again.memberId]);
 });
 
+/** 驗證錯誤回應時不把整份 body 丟進 toEqual，避免意外回 200 時印出 memberToken。 */
+function expectErrorResponse(
+  res: { status: number; body: unknown },
+  status: number,
+  code: ErrorCode,
+) {
+  expect(res.status).toBe(status);
+  const parsed = errorResponseSchema.safeParse(res.body);
+  const expected = errorBody(code).error;
+  expect(
+    parsed.success &&
+      parsed.data.error.code === expected.code &&
+      parsed.data.error.message === expected.message,
+  ).toBe(true);
+}
+
 test("重新產生邀請碼後，舊碼帶同一把鍵也回相同的 404", async () => {
   const { inviteCode, roomId, hostToken } = await room();
   const joinKey = generateToken();
@@ -223,10 +241,11 @@ test("重新產生邀請碼後，舊碼帶同一把鍵也回相同的 404", asyn
     hostToken,
   );
   expect(res.status).toBe(200);
-  expect(await join({ inviteCode, joinKey })).toEqual({
-    status: 404,
-    body: errorBody("ROOM_NOT_FOUND"),
-  });
+  expectErrorResponse(
+    await join({ inviteCode, joinKey }),
+    404,
+    "ROOM_NOT_FOUND",
+  );
 });
 
 test("重新產生邀請碼後，舊碼配發的紀錄作廢：新碼帶舊鍵受鎖房與排除名單限制、原成員可沿用，且換碼版本遞增", async () => {
@@ -335,10 +354,11 @@ test("重新產生邀請碼後，舊碼配發的紀錄作廢：新碼帶舊鍵�
 
 test("鍵格式錯誤回 400；沿用請求忽略鍵", async () => {
   const { roomId, inviteCode, hostToken, memberId } = await room();
-  expect(await join({ inviteCode, joinKey: "short" })).toEqual({
-    status: 400,
-    body: errorBody("BAD_REQUEST"),
-  });
+  expectErrorResponse(
+    await join({ inviteCode, joinKey: "short" }),
+    400,
+    "BAD_REQUEST",
+  );
   const reused = await post(
     joinPath,
     {
