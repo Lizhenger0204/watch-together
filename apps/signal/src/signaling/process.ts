@@ -12,6 +12,7 @@ import {
   type Online,
   type RoomState,
 } from "../room/room";
+import type { ChatRateLimiter } from "./chat-rate-limit";
 
 // 信令與房間事件的純邏輯：輸入目前狀態與事件，輸出新狀態與要執行的副作用。
 // runtime（Durable Object 或之後的 Node 版本）只負責執行副作用。
@@ -200,12 +201,18 @@ export function onAuth(
 
 // ── 已驗證連線的訊息 ───────────────────────────────────────
 
+export type MessageDeps = {
+  generateId?: () => string;
+  chatLimiter?: ChatRateLimiter;
+};
+
 export function onMessage(
   state: RoomState,
   senderId: string,
   message: Exclude<ClientMessage, { type: "auth" }>,
   online: Online,
   now: number,
+  deps?: MessageDeps,
 ): Outcome {
   const sender = findMember(state, senderId);
   const self = to(senderId);
@@ -264,6 +271,7 @@ export function onMessage(
         };
       }
       const next = removeMember(state, target.memberId);
+      deps?.chatLimiter?.forget(target.memberId);
       const onlineAfter = new Set(online);
       onlineAfter.delete(target.memberId);
       return {
@@ -355,6 +363,33 @@ export function onMessage(
             memberId: senderId,
             status,
           }),
+        ],
+      };
+    }
+
+    case "chat:send": {
+      if (deps?.chatLimiter && !deps.chatLimiter.allow(senderId, now)) {
+        return {
+          state,
+          effects: [
+            fail(self, reqId, "RATE_LIMITED", "發言太頻繁了，請稍後再試"),
+          ],
+        };
+      }
+      const chatMessage: ServerMessage = {
+        type: "chat:message",
+        id: deps?.generateId?.() ?? crypto.randomUUID(),
+        memberId: sender.memberId,
+        nickname: sender.nickname,
+        role: sender.role,
+        text: message.text,
+        sentAt: now,
+      };
+      return {
+        state,
+        effects: [
+          ...ok(self, reqId),
+          ...[...online].map((id) => send(to(id), chatMessage)),
         ],
       };
     }

@@ -1,4 +1,9 @@
-import { PROTOCOL_VERSION, parseClientMessage } from "@project/shared";
+import {
+  CHAT_RATE_LIMIT_MAX,
+  CHAT_RATE_LIMIT_WINDOW_MS,
+  PROTOCOL_VERSION,
+  parseClientMessage,
+} from "@project/shared";
 import { DurableObject } from "cloudflare:workers";
 import type { RoomMember } from "../../app";
 import { readRoomConfig, type RoomConfig } from "../../config";
@@ -29,6 +34,7 @@ import {
   onMessage,
   type Effect,
 } from "../../signaling/process";
+import { ChatRateLimiter } from "../../signaling/chat-rate-limit";
 import { INVITE_DIRECTORY_NAME, type Env } from "./env";
 import { roomClosedSocket } from "./room-closed-socket";
 
@@ -80,6 +86,10 @@ export class RoomDO extends DurableObject<Env> {
   private readonly changes = new SerialQueue();
   private readonly lifecycle = new SerialQueue();
   private readonly config: RoomConfig;
+  private readonly chatLimiter = new ChatRateLimiter({
+    limit: CHAT_RATE_LIMIT_MAX,
+    windowMs: CHAT_RATE_LIMIT_WINDOW_MS,
+  });
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -440,6 +450,7 @@ export class RoomDO extends DurableObject<Env> {
       message,
       this.online(),
       Date.now(),
+      { generateId, chatLimiter: this.chatLimiter },
     );
     if (outcome.state !== before) await this.saveTransition(outcome.state);
     this.apply(outcome.effects, ws);

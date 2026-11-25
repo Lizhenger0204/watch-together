@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { createRoomState, type RoomState } from "../src/room/room";
+import { ChatRateLimiter } from "../src/signaling/chat-rate-limit";
 import {
   CLOSE,
   onAuth,
@@ -433,6 +434,123 @@ describe("房主操作", () => {
       },
     ]);
     expect(sentTo(outcome.effects, "b")).toEqual([]);
+  });
+});
+
+describe("聊天室（chat:send）", () => {
+  const online = new Set(["host", "a"]);
+
+  test("房主與收看者都可發言，廣播給所有在線成員（含自己）並忽略離線者", () => {
+    const state = roomWith();
+    const fromHost = onMessage(
+      state,
+      "host",
+      { type: "chat:send", reqId: "c1", text: "準備開播" },
+      online,
+      T0 + 10,
+      { generateId: () => "msg-1" },
+    );
+    expect(fromHost.state).toBe(state);
+    const expected = {
+      type: "chat:message",
+      id: "msg-1",
+      memberId: "host",
+      nickname: "房主",
+      role: "host",
+      text: "準備開播",
+      sentAt: T0 + 10,
+    };
+    expect(sentTo(fromHost.effects, "host")).toEqual([
+      { type: "ack", reqId: "c1", ok: true },
+      expected,
+    ]);
+    expect(sentTo(fromHost.effects, "a")).toEqual([expected]);
+    expect(sentTo(fromHost.effects, "b")).toEqual([]);
+
+    const fromViewer = onMessage(
+      state,
+      "a",
+      { type: "chat:send", text: "收到！" },
+      online,
+      T0 + 20,
+      { generateId: () => "msg-2" },
+    );
+    expect(sentTo(fromViewer.effects, "host")).toEqual([
+      {
+        type: "chat:message",
+        id: "msg-2",
+        memberId: "a",
+        nickname: "A",
+        role: "member",
+        text: "收到！",
+        sentAt: T0 + 20,
+      },
+    ]);
+  });
+
+  test("被踢或非房間成員送 chat:send：關閉連線，不廣播", () => {
+    const state = roomWith();
+    const kicked = onMessage(
+      state,
+      "host",
+      { type: "room:kick", memberId: "a" },
+      online,
+      T0,
+    ).state;
+    const outcome = onMessage(
+      kicked,
+      "a",
+      { type: "chat:send", text: "我還想講話" },
+      new Set(["host", "a"]),
+      T0 + 1,
+    );
+    expect(sentTo(outcome.effects, "host")).toEqual([]);
+    expect(outcome.effects).toEqual([
+      {
+        kind: "close",
+        to: { memberId: "a" },
+        code: CLOSE.UNAUTHORIZED,
+        reason: "unknown_member",
+      },
+    ]);
+  });
+
+  test("超過聊天限流：拒絕並不廣播（帶 reqId 回 ack、不帶回 error）", () => {
+    const state = roomWith();
+    const limiter = new ChatRateLimiter({ limit: 2, windowMs: 10_000 });
+    onMessage(state, "a", { type: "chat:send", text: "1" }, online, T0, {
+      chatLimiter: limiter,
+    });
+    onMessage(state, "a", { type: "chat:send", text: "2" }, online, T0 + 100, {
+      chatLimiter: limiter,
+    });
+
+    const withReq = onMessage(
+      state,
+      "a",
+      { type: "chat:send", reqId: "r3", text: "3" },
+      online,
+      T0 + 200,
+      { chatLimiter: limiter },
+    );
+    expect(sentTo(withReq.effects, "a")).toEqual([
+      { type: "ack", reqId: "r3", ok: false, code: "RATE_LIMITED" },
+    ]);
+    expect(sentTo(withReq.effects, "host")).toEqual([]);
+
+    const withoutReq = onMessage(
+      state,
+      "a",
+      { type: "chat:send", text: "4" },
+      online,
+      T0 + 300,
+      { chatLimiter: limiter },
+    );
+    expect(sentTo(withoutReq.effects, "a")[0]).toMatchObject({
+      type: "error",
+      code: "RATE_LIMITED",
+    });
+    expect(sentTo(withoutReq.effects, "host")).toEqual([]);
   });
 });
 
