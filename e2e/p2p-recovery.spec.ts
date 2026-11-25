@@ -1,5 +1,10 @@
 import { expect } from "@playwright/test";
-import { beginWatching, expectPeers, expectPlaying } from "./p2p-media";
+import {
+  beginWatching,
+  expectPeers,
+  expectPlaying,
+  observePeers,
+} from "./p2p-media";
 import { expectWaiting, openLiveRoom, playMovie, startLive } from "./p2p-room";
 import { test } from "./room-pages";
 
@@ -86,4 +91,64 @@ test("三方重新整理、轉發不可用與踢人後的 P2P 播放", async ({ 
     await expectPlaying(second);
     await expectPeers(second, 1, created);
   });
+});
+
+test("房主選片前顯示片名，確認離開房間後返回再選片須手動開播", async ({
+  newRoomPage,
+}) => {
+  const [host, viewer] = await Promise.all([newRoomPage(), newRoomPage()]);
+  await Promise.all([host, viewer].map(observePeers));
+  await host.goto("/");
+  await host.getByLabel("你的暱稱").first().fill("房主");
+  await host.getByRole("button", { name: "建立房間", exact: true }).click();
+  const code = host.getByTestId("invite-code");
+  await expect(code).toHaveText(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+  const invite = await code.innerText();
+
+  // 未選片時顯示提示，選片後開播前即顯示本地片名。
+  await expect(
+    host.getByRole("heading", { name: "選擇要播放的影片", exact: true }),
+  ).toBeVisible();
+  await playMovie(host, "h264-aac");
+  await expect(
+    host.getByRole("heading", { name: "h264-aac", exact: true }),
+  ).toBeVisible();
+
+  await startLive(host, "h264-aac");
+  await viewer.goto(`/join/${invite.replace("-", "")}`);
+  await viewer.getByLabel("你的暱稱").fill("朋友");
+  await viewer.getByRole("button", { name: "加入", exact: true }).click();
+  await beginWatching(viewer);
+  await expectPlaying(viewer);
+
+  // 取消離房確認：維持直播。
+  host.once("dialog", (dialog) => dialog.dismiss());
+  await host.getByRole("button", { name: "離開房間", exact: true }).click();
+  await expect(
+    host.getByRole("heading", { name: "直播中：h264-aac", exact: true }),
+  ).toBeVisible();
+
+  // 確定離房：回到首頁、保留身份但撤銷開播意圖。
+  host.once("dialog", (dialog) => dialog.accept());
+  await host.getByRole("button", { name: "離開房間", exact: true }).click();
+  await expect(host).toHaveURL("/");
+
+  // 返回原房間並重新選片：應顯示片名並等待手動開播，不得自動對外直播。
+  await host.goBack();
+  await expect(host).toHaveURL(/\/rooms\//);
+  await expect(
+    host.getByRole("heading", { name: "選擇要播放的影片", exact: true }),
+  ).toBeVisible();
+  await playMovie(host, "h264-aac");
+  await expect(
+    host.getByRole("heading", { name: "h264-aac", exact: true }),
+  ).toBeVisible();
+  await expect(
+    host.getByRole("button", { name: "開始直播", exact: true }),
+  ).toBeEnabled();
+  await expectWaiting(viewer);
+
+  // 手動點擊開始直播後才對外恢復播放。
+  await startLive(host, "h264-aac");
+  await expectPlaying(viewer);
 });

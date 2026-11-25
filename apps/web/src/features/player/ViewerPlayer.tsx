@@ -144,7 +144,7 @@ export function ViewerPlayer({
         {!armed && !status.reconnect ? (
           <button
             type="button"
-            className="absolute inset-0 z-10 grid place-items-center bg-black/50 text-white transition-colors hover:bg-black/40 focus-visible:ring-2 focus-visible:ring-[#0095d9] focus-visible:outline-none focus-visible:ring-inset"
+            className="absolute inset-0 z-10 grid place-items-center bg-black/50 text-white transition-colors hover:bg-black/40 focus-visible:ring-2 focus-visible:ring-[#0072b2] focus-visible:outline-none focus-visible:ring-inset"
             onClick={() => {
               setArmed(true);
               playIfReady(videoRef.current, () => setArmed(false));
@@ -185,7 +185,7 @@ export function ViewerPlayer({
                 {status.reconnect && (
                   <button
                     type="button"
-                    className="inline-flex min-h-9 items-center rounded bg-[#0095d9] px-4 text-sm font-medium text-white hover:bg-[#007cb8] focus-visible:ring-2 focus-visible:ring-[#0095d9] focus-visible:outline-none"
+                    className="inline-flex min-h-9 items-center rounded bg-[#0072b2] px-4 text-sm font-medium text-white hover:bg-[#005a8d] focus-visible:ring-2 focus-visible:ring-[#0072b2] focus-visible:outline-none"
                     onClick={() => {
                       setArmed(true);
                       viewer.reconnect();
@@ -206,7 +206,7 @@ export function ViewerPlayer({
               type="button"
               aria-label={muted ? "取消靜音" : "靜音"}
               title={muted ? "取消靜音" : "靜音"}
-              className="inline-flex size-7 items-center justify-center text-white/90 transition-colors hover:text-white focus-visible:ring-2 focus-visible:ring-[#0095d9] focus-visible:outline-none"
+              className="inline-flex size-7 items-center justify-center text-white/90 transition-colors hover:text-white focus-visible:ring-2 focus-visible:ring-[#0072b2] focus-visible:outline-none"
               aria-pressed={muted}
               onClick={() => setMuted(!muted)}
             >
@@ -237,7 +237,7 @@ export function ViewerPlayer({
             type="button"
             aria-label={isFullscreen ? "退出全螢幕" : "全螢幕"}
             title={isFullscreen ? "退出全螢幕" : "全螢幕"}
-            className="inline-flex size-7 items-center justify-center text-white/90 transition-colors hover:text-white focus-visible:ring-2 focus-visible:ring-[#0095d9] focus-visible:outline-none"
+            className="inline-flex size-7 items-center justify-center text-white/90 transition-colors hover:text-white focus-visible:ring-2 focus-visible:ring-[#0072b2] focus-visible:outline-none"
             onClick={() => {
               const frame = frameRef.current;
               if (!frame) return;

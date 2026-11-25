@@ -63,7 +63,7 @@ export function InviteCodeCard({
         <div className="min-w-0">
           {hostName && (
             <p className="truncate text-sm text-zinc-900">
-              <span className="font-semibold text-[#0095d9]">{hostName}</span>{" "}
+              <span className="font-semibold text-[#0072b2]">{hostName}</span>{" "}
               正在主持
             </p>
           )}
@@ -73,7 +73,7 @@ export function InviteCodeCard({
         </div>
         <button
           type="button"
-          className="inline-flex shrink-0 items-center gap-1 rounded px-2 py-1 text-xs font-medium text-[#0095d9] transition-colors hover:bg-sky-50 focus-visible:ring-2 focus-visible:ring-[#0095d9] focus-visible:outline-none"
+          className="inline-flex shrink-0 items-center gap-1 rounded px-2 py-1 text-xs font-medium text-[#0072b2] transition-colors hover:bg-sky-50 focus-visible:ring-2 focus-visible:ring-[#0072b2] focus-visible:outline-none"
           onClick={() => void copy(joinUrl(inviteCode), "邀請連結")}
         >
           <Share2 className="size-3.5" strokeWidth={1.75} />
@@ -96,7 +96,7 @@ export function InviteCodeCard({
             type="button"
             aria-label="複製邀請碼"
             title="複製邀請碼"
-            className="inline-flex size-7 items-center justify-center rounded text-zinc-600 transition-colors hover:bg-white hover:text-zinc-900 focus-visible:ring-2 focus-visible:ring-[#0095d9] focus-visible:outline-none"
+            className="inline-flex size-7 items-center justify-center rounded text-zinc-600 transition-colors hover:bg-white hover:text-zinc-900 focus-visible:ring-2 focus-visible:ring-[#0072b2] focus-visible:outline-none"
             onClick={() => void copy(formatInviteCode(inviteCode), "邀請碼")}
           >
             <Copy className="size-3.5" strokeWidth={1.75} />
@@ -106,7 +106,7 @@ export function InviteCodeCard({
             aria-label="重新產生邀請碼"
             title="重新產生邀請碼"
             disabled={busy}
-            className="inline-flex size-7 items-center justify-center rounded text-zinc-600 transition-colors hover:bg-white hover:text-zinc-900 focus-visible:ring-2 focus-visible:ring-[#0095d9] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40"
+            className="inline-flex size-7 items-center justify-center rounded text-zinc-600 transition-colors hover:bg-white hover:text-zinc-900 focus-visible:ring-2 focus-visible:ring-[#0072b2] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40"
             onClick={() => void regenerate()}
           >
             <RefreshCw className="size-3.5" strokeWidth={1.75} />
@@ -114,7 +114,7 @@ export function InviteCodeCard({
         </div>
       </div>
 
-      <p className="mt-1.5 text-xs text-[#0095d9] empty:hidden" role="status">
+      <p className="mt-1.5 text-xs text-[#0072b2] empty:hidden" role="status">
         {shown}
       </p>
     </section>

@@ -75,7 +75,7 @@ export function StreamSettings({
           </span>
           <input
             type="checkbox"
-            className="size-4 accent-[#0095d9]"
+            className="size-4 accent-[#0072b2]"
             checked={room.locked}
             onChange={(event) => onLockedChange(event.currentTarget.checked)}
           />

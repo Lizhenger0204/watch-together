@@ -121,10 +121,10 @@ export function HostSourcePlayer({
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="absolute inset-x-0 top-0 bottom-12 grid place-items-center text-zinc-300 transition-colors hover:text-white focus-visible:ring-2 focus-visible:ring-[#0095d9] focus-visible:outline-none focus-visible:ring-inset"
+            className="absolute inset-x-0 top-0 bottom-12 grid place-items-center text-zinc-300 transition-colors hover:text-white focus-visible:ring-2 focus-visible:ring-[#0072b2] focus-visible:outline-none focus-visible:ring-inset"
           >
             <span className="grid justify-items-center gap-2 px-4 text-center">
-              <Film className="size-8 text-zinc-400" strokeWidth={1.5} />
+              <Film className="size-8 text-zinc-400" strokeWidth={1.75} />
               <span className="text-sm font-medium">點擊選擇本機影片</span>
             </span>
           </button>
@@ -152,7 +152,7 @@ export function HostSourcePlayer({
                 type="button"
                 aria-label={ready && playing ? "暫停" : "播放"}
                 title={ready && playing ? "暫停" : "播放"}
-                className="inline-flex size-7 items-center justify-center text-white/90 transition-colors hover:text-white focus-visible:ring-2 focus-visible:ring-[#0095d9] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40"
+                className="inline-flex size-7 items-center justify-center text-white/90 transition-colors hover:text-white focus-visible:ring-2 focus-visible:ring-[#0072b2] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40"
                 disabled={!ready}
                 onClick={() => {
                   const video = videoRef.current;
@@ -183,7 +183,7 @@ export function HostSourcePlayer({
                   type="button"
                   aria-label={volume === 0 ? "取消靜音" : "靜音"}
                   title={volume === 0 ? "取消靜音" : "靜音"}
-                  className="inline-flex size-7 items-center justify-center text-white/90 transition-colors hover:text-white focus-visible:ring-2 focus-visible:ring-[#0095d9] focus-visible:outline-none"
+                  className="inline-flex size-7 items-center justify-center text-white/90 transition-colors hover:text-white focus-visible:ring-2 focus-visible:ring-[#0072b2] focus-visible:outline-none"
                   onClick={toggleMute}
                 >
                   {volume === 0 ? (
@@ -215,7 +215,7 @@ export function HostSourcePlayer({
               type="button"
               aria-label={isFullscreen ? "退出全螢幕" : "全螢幕"}
               title={isFullscreen ? "退出全螢幕" : "全螢幕"}
-              className="inline-flex size-7 items-center justify-center text-white/90 transition-colors hover:text-white focus-visible:ring-2 focus-visible:ring-[#0095d9] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40"
+              className="inline-flex size-7 items-center justify-center text-white/90 transition-colors hover:text-white focus-visible:ring-2 focus-visible:ring-[#0072b2] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40"
               disabled={!ready || !document.fullscreenEnabled}
               onClick={() => {
                 const player = playerRef.current;
@@ -251,7 +251,7 @@ export function HostSourcePlayer({
               ))}
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <label className="inline-flex min-h-9 cursor-pointer items-center gap-1.5 rounded border border-zinc-300 bg-white px-3 text-sm font-medium text-zinc-800 transition-colors focus-within:ring-2 focus-within:ring-[#0095d9] hover:bg-zinc-50">
+            <label className="inline-flex min-h-9 cursor-pointer items-center gap-1.5 rounded border border-zinc-300 bg-white px-3 text-sm font-medium text-zinc-800 transition-colors focus-within:ring-2 focus-within:ring-[#0072b2] hover:bg-zinc-50">
               <FolderOpen className="size-4 text-zinc-500" strokeWidth={1.75} />
               選擇影片
               <input
@@ -282,7 +282,7 @@ export function HostSourcePlayer({
           {check.status === "warning" && (
             <button
               type="button"
-              className="mt-1.5 text-xs font-medium text-[#0095d9] underline-offset-2 hover:underline"
+              className="mt-1.5 text-xs font-medium text-[#0072b2] underline-offset-2 hover:underline"
               onClick={continueWithoutAudio}
             >
               繼續播放無聲影片

@@ -40,7 +40,7 @@ export function MemberList({
       <h3 className="mb-2 text-xs font-semibold text-zinc-500">
         成員（{online} 人在線）
       </h3>
-      <ul className="divide-y divide-zinc-100">
+      <ul className="divide-y divide-zinc-100 lg:max-h-40 lg:overflow-y-auto">
         {members.map((member) => {
           const status =
             member.role === "member" && member.online
@@ -59,12 +59,12 @@ export function MemberList({
                 <p className="truncate text-sm text-zinc-900">
                   {member.nickname}
                   {member.role === "host" && (
-                    <span className="ml-1.5 text-xs font-medium text-[#0095d9]">
+                    <span className="ml-1.5 text-xs font-medium text-[#0072b2]">
                       房主
                     </span>
                   )}
                   {member.memberId === youId && (
-                    <span className="ml-1 text-xs text-zinc-400">（你）</span>
+                    <span className="ml-1 text-xs text-zinc-500">（你）</span>
                   )}
                 </p>
                 {isHost && status && (
@@ -74,7 +74,7 @@ export function MemberList({
               {isHost && member.role === "member" && (
                 <button
                   type="button"
-                  className="shrink-0 rounded px-2 py-1 text-xs text-zinc-500 transition-colors hover:bg-red-50 hover:text-red-600 focus-visible:ring-2 focus-visible:ring-[#0095d9] focus-visible:outline-none"
+                  className="shrink-0 rounded px-2 py-1 text-xs text-zinc-500 transition-colors hover:bg-red-50 hover:text-red-600 focus-visible:ring-2 focus-visible:ring-[#0072b2] focus-visible:outline-none"
                   onClick={() => {
                     if (
                       window.confirm(

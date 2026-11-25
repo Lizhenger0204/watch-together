@@ -10,7 +10,7 @@ type Variant = "primary" | "secondary" | "danger" | "ghost";
 
 const VARIANT: Record<Variant, string> = {
   primary:
-    "bg-[#0095d9] text-white hover:bg-[#007cb8] disabled:bg-zinc-200 disabled:text-zinc-400",
+    "bg-[#0072b2] text-white hover:bg-[#005a8d] disabled:bg-zinc-200 disabled:text-zinc-400",
   secondary:
     "border border-zinc-300 bg-white text-zinc-800 hover:bg-zinc-50 disabled:border-zinc-200 disabled:text-zinc-400",
   danger:
@@ -27,7 +27,7 @@ export function Button({
   return (
     <button
       type="button"
-      className={`inline-flex min-h-9 items-center justify-center gap-1.5 rounded px-3.5 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:ring-[#0095d9] focus-visible:ring-offset-1 focus-visible:outline-none disabled:cursor-not-allowed ${VARIANT[variant]} ${className}`}
+      className={`inline-flex min-h-9 items-center justify-center gap-1.5 rounded px-3.5 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:ring-[#0072b2] focus-visible:ring-offset-1 focus-visible:outline-none disabled:cursor-not-allowed ${VARIANT[variant]} ${className}`}
       {...props}
     />
   );
@@ -74,7 +74,7 @@ export function TextField({
     <label className={`grid gap-1.5 ${className}`}>
       <span className="text-sm font-medium text-zinc-700">{label}</span>
       <input
-        className="h-10 rounded border border-zinc-300 bg-white px-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-[#0095d9] focus:ring-1 focus:ring-[#0095d9] focus:outline-none"
+        className="h-10 rounded border border-zinc-300 bg-white px-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-[#0072b2] focus:ring-1 focus:ring-[#0072b2] focus:outline-none"
         {...props}
       />
       {hint && <span className="text-xs text-zinc-500">{hint}</span>}
@@ -131,9 +131,9 @@ export function Segmented<T extends string>({
             type="button"
             aria-pressed={option.value === value}
             onClick={() => onChange(option.value)}
-            className={`rounded-xs px-2 py-1.5 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-[#0095d9] focus-visible:outline-none disabled:cursor-not-allowed ${
+            className={`rounded-xs px-2 py-1.5 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-[#0072b2] focus-visible:outline-none disabled:cursor-not-allowed ${
               option.value === value
-                ? "bg-[#0095d9] text-white"
+                ? "bg-[#0072b2] text-white"
                 : "text-zinc-600 hover:bg-white hover:text-zinc-900"
             }`}
           >

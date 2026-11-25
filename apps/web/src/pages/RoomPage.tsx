@@ -70,7 +70,11 @@ function useActionError() {
   return { error, run, clear: () => setError("") };
 }
 
-function hostTitle(phase: HostPhase, liveTitle: string | null) {
+function hostTitle(
+  phase: HostPhase,
+  liveTitle: string | null,
+  localTitle: string,
+) {
   switch (phase) {
     case "live":
       return `直播中：${liveTitle ?? ""}`;
@@ -83,7 +87,7 @@ function hostTitle(phase: HostPhase, liveTitle: string | null) {
     case "waiting":
       return "直播暫停中";
     default:
-      return "選擇要播放的影片";
+      return localTitle || "選擇要播放的影片";
   }
 }
 
@@ -150,7 +154,7 @@ function HostView({
           source={source}
           belowTitle={
             <h2 className="min-w-0 text-base font-semibold wrap-anywhere text-zinc-900">
-              {hostTitle(phase, view.stream.title)}
+              {hostTitle(phase, view.stream.title, sourceTitle)}
             </h2>
           }
           belowAction={
@@ -269,7 +273,7 @@ function ViewerView({ room }: { room: Room }) {
               <h2 className="min-w-0 flex-1 text-base font-semibold wrap-anywhere text-zinc-900">
                 {view.stream.title}
               </h2>
-              <span className="shrink-0 text-xs font-medium text-[#0095d9]">
+              <span className="shrink-0 text-xs font-medium text-[#0072b2]">
                 直播中
               </span>
             </>
@@ -282,7 +286,7 @@ function ViewerView({ room }: { room: Room }) {
       <aside className="flex flex-col divide-y divide-zinc-200 bg-white">
         <div className="px-4 py-3.5">
           <p className="truncate text-sm text-zinc-900">
-            <span className="font-semibold text-[#0095d9]">
+            <span className="font-semibold text-[#0072b2]">
               {host?.nickname ?? "房主"}
             </span>{" "}
             正在主持
@@ -370,12 +374,17 @@ export function RoomPage({ roomId }: { roomId: string }) {
     ) {
       return;
     }
+    if (view.you?.role === "host") {
+      // 房主確認離開房間時撤銷開播意圖，但保留房主憑證，避免返回選片時自動對外開播。
+      room.host?.setIntent(false);
+    }
     navigate("/");
   }
 
   return (
     <Layout
       flush
+      onBrandClick={leaveRoom}
       headerRight={
         <Button
           variant="ghost"

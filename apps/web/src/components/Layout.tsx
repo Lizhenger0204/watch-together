@@ -7,12 +7,15 @@ export function Layout({
   wide = false,
   flush = false,
   headerRight,
+  onBrandClick,
 }: {
   children: ReactNode;
   wide?: boolean;
   /** 房間頁使用：移除外層卡片留白，讓影片與右側欄貼齊分割線展開。 */
   flush?: boolean;
   headerRight?: ReactNode;
+  /** 覆寫點擊左上角品牌連結的動作（例如直播中離房防誤觸確認）。 */
+  onBrandClick?: () => void;
 }) {
   const container = flush
     ? "mx-auto w-full max-w-[1440px]"
@@ -28,11 +31,12 @@ export function Layout({
             href="/"
             onClick={(event) => {
               event.preventDefault();
-              navigate("/");
+              if (onBrandClick) onBrandClick();
+              else navigate("/");
             }}
-            className="inline-flex items-center gap-2 text-sm font-semibold text-zinc-900 hover:text-[#0095d9]"
+            className="inline-flex items-center gap-2 text-sm font-semibold text-zinc-900 hover:text-[#0072b2]"
           >
-            <Tv className="size-4 text-[#0095d9]" strokeWidth={1.75} />
+            <Tv className="size-4 text-[#0072b2]" strokeWidth={1.75} />
             遠端同步播放器
           </a>
           {headerRight && (
