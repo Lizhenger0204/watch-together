@@ -1,5 +1,7 @@
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { resetMemoryStorage, roomToken } from "../../lib/storage";
 import {
+  forgetRoomIdentity,
   formatMbps,
   initialRoomView,
   roomExit,
@@ -218,6 +220,54 @@ describe("roomExit", () => {
     const unknown = roomExit(closed("room_closed"))?.notice;
     expect(unknown).toContain("房主關閉");
     expect(unknown).toContain("24 小時");
+  });
+});
+
+describe("forgetRoomIdentity", () => {
+  const ROOM = crypto.randomUUID();
+  const key = `room:${ROOM}:token`;
+  const shared = new Map<string, string>();
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetMemoryStorage();
+    shared.clear();
+  });
+  const stubStorage = () =>
+    vi.stubGlobal("localStorage", {
+      get length() {
+        return shared.size;
+      },
+      key: (i: number) => [...shared.keys()][i] ?? null,
+      getItem: (k: string) => shared.get(k) ?? null,
+      setItem: (k: string, v: string) => void shared.set(k, v),
+      removeItem: (k: string) => void shared.delete(k),
+    });
+
+  test("舊分頁收到 4401：只清自己的憑證，保留另一分頁剛寫入的新憑證", () => {
+    stubStorage();
+    const old = crypto.randomUUID();
+    const fresh = crypto.randomUUID();
+    roomToken.set(ROOM, old);
+    shared.set(key, fresh); // 另一分頁重新加入
+    forgetRoomIdentity(ROOM, old);
+    expect(shared.get(key)).toBe(fresh);
+    expect(roomToken.get(ROOM)).toBe(fresh);
+  });
+
+  test("共用儲存仍是自己的憑證：清掉", () => {
+    stubStorage();
+    const token = crypto.randomUUID();
+    roomToken.set(ROOM, token);
+    forgetRoomIdentity(ROOM, token);
+    expect(shared.has(key)).toBe(false);
+    expect(roomToken.get(ROOM)).toBeNull();
+  });
+
+  test("本機 token 格式損壞（null）：整份清掉", () => {
+    stubStorage();
+    shared.set(key, "broken");
+    forgetRoomIdentity(ROOM, null);
+    expect(shared.has(key)).toBe(false);
   });
 });
 

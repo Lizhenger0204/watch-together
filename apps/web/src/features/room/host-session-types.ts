@@ -58,6 +58,10 @@ export type HostSessionOptions = {
   initialIntent: boolean;
   /** 意圖改變時呼叫（由 hook 寫回 liveIntent）。 */
   onIntentChange?: (on: boolean) => void;
+  /** 房主明確按「停止直播」時呼叫（由 hook 讓其他分頁保存的開播意圖一併失效）。 */
+  onExplicitStop?: () => void;
+  /** 每次重新驗證時確認分頁保存的意圖仍有效（另一分頁明確停播後回 false）。 */
+  intentStillValid?: () => boolean;
   createTransport?: CreateHostTransport;
   /** 逾時等計時器（預設瀏覽器 timers）。 */
   timers?: SessionTimers;

@@ -79,6 +79,16 @@ export class FakeClient implements HostSessionClient {
     });
   }
 
+  /** 回第一筆符合的請求（測試同名請求的先後）。 */
+  async ackFirst(match: string, error?: unknown) {
+    const index = this.requests.findIndex((r) => label(r.message) === match);
+    if (index < 0) throw new Error(`沒有送出 ${match}`);
+    const [entry] = this.requests.splice(index, 1);
+    if (error) entry!.reject(error);
+    else entry!.resolve();
+    await flush();
+  }
+
   emit(message: ServerMessage) {
     this.messageHandlers.forEach((handler) => handler(message));
   }
@@ -233,7 +243,11 @@ export function roomUpdated(
 }
 
 export function setup(
-  options: { intent?: boolean; createTransport?: CreateHostTransport } = {},
+  options: {
+    intent?: boolean;
+    createTransport?: CreateHostTransport;
+    intentStillValid?: () => boolean;
+  } = {},
 ) {
   const log: string[] = [];
   const client = new FakeClient(log);
@@ -245,12 +259,15 @@ export function setup(
     return transport;
   };
   const onIntentChange = vi.fn();
+  const onExplicitStop = vi.fn();
   const session = new HostSession({
     client,
     roomId: "room",
     token: "host-token",
     initialIntent: options.intent ?? true,
     onIntentChange,
+    onExplicitStop,
+    intentStillValid: options.intentStillValid,
     createTransport: options.createTransport ?? factory,
   });
   const detach = session.attach();
@@ -276,6 +293,7 @@ export function setup(
     session,
     detach,
     onIntentChange,
+    onExplicitStop,
     connect,
     goLive,
   };

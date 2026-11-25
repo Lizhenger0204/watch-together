@@ -50,6 +50,54 @@ describe("房主重新連線", () => {
     expect(t.log).toEqual(["destroy"]);
   });
 
+  test("被 4000 取代：舊分頁的開播意圖失效，回來後要手動開播", async () => {
+    const t = setup();
+    await t.goLive();
+    t.client.state({ status: "closed", reason: "replaced" });
+    expect(t.onIntentChange).toHaveBeenLastCalledWith(false);
+    expect(t.session.getView().intent).toBe(false);
+    // 不是房主明確停播：不能讓接手的分頁保存的意圖失效。
+    expect(t.onExplicitStop).not.toHaveBeenCalled();
+  });
+
+  test("其他原因結束連線（離開頁面 stop()）：保留意圖，重新整理後自動恢復", async () => {
+    const t = setup();
+    await t.goLive();
+    t.client.state({ status: "closed", reason: "stopped" });
+    expect(t.onIntentChange).not.toHaveBeenCalledWith(false);
+    expect(t.session.getView().intent).toBe(true);
+  });
+
+  test("重新驗證時另一分頁已明確停播：舊意圖失效，不自動開播", async () => {
+    let valid = true;
+    const t = setup({ intentStillValid: () => valid });
+    await t.goLive();
+    t.client.state({ status: "reconnecting", attempt: 1 });
+    valid = false;
+    t.connect();
+    expect(t.log).toEqual(["destroy"]);
+    expect(t.transports).toHaveLength(1);
+    expect(t.onIntentChange).toHaveBeenLastCalledWith(false);
+    expect(t.session.getView()).toMatchObject({ intent: false, phase: "idle" });
+    expect(t.session.getView().error).toContain("另一個分頁");
+    // 手動開播仍可以。
+    t.session.setIntent(true);
+    expect(t.transports).toHaveLength(2);
+  });
+
+  test("明確按停止才通知其他分頁；開播失敗自動取消意圖不算", async () => {
+    const t = setup();
+    t.connect();
+    t.session.setSource(readySource());
+    t.transports[0]!.gate.reject(new Error("boom"));
+    await flush();
+    expect(t.session.getView().intent).toBe(false);
+    expect(t.onExplicitStop).not.toHaveBeenCalled();
+    t.session.setIntent(true);
+    t.session.setIntent(false);
+    expect(t.onExplicitStop).toHaveBeenCalledTimes(1);
+  });
+
   test("舊代次的 start() 晚 resolve：不送 live:true", async () => {
     const t = setup();
     t.connect();

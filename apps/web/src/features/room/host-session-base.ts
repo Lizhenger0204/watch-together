@@ -5,8 +5,8 @@ import {
   type HostTransport,
   type TransportSignal,
 } from "../transport";
-import { streamTitle } from "./live-intent";
 import type { HostSessionOptions, HostSource, Op } from "./host-session-types";
+import type { TitleSync } from "./host-session-title";
 import type { SessionTimers } from "./viewer-session";
 
 /** 切模式第 2 步：等 `room:updated` 廣播的期限（§6）。 */
@@ -14,8 +14,8 @@ export const MODE_UPDATED_TIMEOUT_MS = 10_000;
 
 /**
  * HostSession 的抽象基類，把兩個「送出請求／建立傳輸」的功能抽出來：
- * - confirmStop／confirmMode／updateTitle：送 stream:status／room:update，等 ack 或廣播，
- *   含逾時與到期語意。
+ * - confirmStop／confirmMode：送 stream:status／room:update，等 ack 或廣播，含逾時與到期語意。
+ *   直播中的片名更新在 host-session-title.ts。
  * - build：依目前狀態建立 host transport 並接上信令與狀態回呼。
  * 這些方法會改動 session 狀態，因此狀態欄位宣告為 abstract，由 HostSession 提供。
  */
@@ -23,9 +23,7 @@ export abstract class HostSessionBase {
   protected abstract source: HostSource;
   protected abstract generation: number;
   protected abstract serverLive: boolean;
-  protected abstract serverTitle: string | null;
-  protected abstract pendingTitle: string | null;
-  protected abstract hasPendingTitle: boolean;
+  protected abstract titles: TitleSync;
   protected abstract stopWaiter: (() => void) | null;
   protected abstract modeWaiter: { mode: Mode; resolve: () => void } | null;
   protected abstract modeTimer: unknown;
@@ -46,8 +44,13 @@ export abstract class HostSessionBase {
   protected abstract showError(error: unknown): void;
   protected abstract failLive(): void;
 
-  /** 送停播；同一 reqId 的 ack 或之後的 live:false 廣播先到者為確認。 */
+  /**
+   * 送停播；同一 reqId 的 ack 或之後的 live:false 廣播先到者為確認。
+   * 開始停播就讓還沒確認的片名請求作廢。ack 晚到（已由廣播確認、或已被重新驗證作廢）時
+   * 不寫入 serverLive：那時伺服器可能已經重新開播。
+   */
   protected confirmStop(): Promise<void> {
+    this.titles.invalidate();
     return new Promise((resolve, reject) => {
       let settled = false;
       const onBroadcast = () => settle(resolve);
@@ -62,8 +65,10 @@ export abstract class HostSessionBase {
         .request({ type: "stream:status", live: false, title: null })
         .then(
           () => {
-            this.serverLive = false;
-            this.serverTitle = null;
+            if (!settled && this.stopWaiter === onBroadcast) {
+              this.serverLive = false;
+              this.titles.server = null;
+            }
             settle(resolve);
           },
           (error: unknown) => settle(() => reject(error)),
@@ -90,39 +95,6 @@ export abstract class HostSessionBase {
           reject(error);
         });
     });
-  }
-
-  /**
-   * 送出目前片名。已送過同一個、或伺服器已是同一個且沒有未確認的變更，就不重送。
-   * `pendingTitle` 用 null 代表「沒有待送的片名」，但 null 本身也是合法片名（空白片名），
-   * 所以另外用 `hasPendingTitle` 區分「有 null 待送」和「沒有待送」。
-   */
-  protected updateTitle(): void {
-    const title = streamTitle(this.source.title);
-    if (this.hasPendingTitle && title === this.pendingTitle) return;
-    if (!this.hasPendingTitle && title === this.serverTitle) return;
-    const gen = this.generation;
-    this.pendingTitle = title;
-    this.hasPendingTitle = true;
-    this.options.client
-      .request({ type: "stream:status", live: true, title })
-      .then(
-        () => {
-          if (gen !== this.generation || !this.hasPendingTitle) return;
-          if (this.pendingTitle !== title) return;
-          this.pendingTitle = null;
-          this.hasPendingTitle = false;
-          this.serverTitle = title;
-          this.publish();
-        },
-        (error: unknown) => {
-          if (gen !== this.generation || !this.hasPendingTitle) return;
-          if (this.pendingTitle !== title) return;
-          this.pendingTitle = null;
-          this.hasPendingTitle = false;
-          this.showError(error);
-        },
-      );
   }
 
   /** 依目前狀態建立 host transport，接上信令轉送與狀態／錯誤回呼。 */

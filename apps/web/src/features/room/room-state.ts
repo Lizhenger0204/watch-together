@@ -10,6 +10,7 @@ import {
   type StreamInfo,
 } from "@project/shared";
 import type { ConnectionState } from "../../lib/signal";
+import { roomToken } from "../../lib/storage";
 import {
   estimateTotalUploadBitrate,
   shouldWarnTotalUpload,
@@ -164,6 +165,15 @@ export function roomExit(view: RoomView): RoomExit | null {
     return { notice: "你在這個房間的身份已失效，請重新用邀請碼加入。" };
   }
   return null;
+}
+
+/**
+ * 離開房間（roomExit）時清掉本機身份。只清本分頁連線用的那份憑證：共用儲存裡可能已是
+ * 另一分頁剛換到的新憑證（例如舊分頁收到 4401 時）。token 格式損壞（null）就整份清掉。
+ */
+export function forgetRoomIdentity(roomId: string, token: string | null) {
+  if (token) roomToken.clearIfCurrent(roomId, token);
+  else roomToken.clear(roomId);
 }
 
 /**

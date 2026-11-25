@@ -64,6 +64,8 @@ export function useRoom(roomId: string) {
             token,
             initialIntent: liveIntent.get(roomId),
             onIntentChange: (on) => liveIntent.set(roomId, on),
+            onExplicitStop: () => liveIntent.stopEverywhere(roomId),
+            intentStillValid: () => liveIntent.get(roomId),
           })
         : null,
     [client, roomId, token],
@@ -118,6 +120,8 @@ export function useRoom(roomId: string) {
   );
 
   return {
+    /** 這個分頁連線用的憑證（機密，不可寫進 log、URL 或畫面）。 */
+    token,
     hasToken: token !== null,
     corrupted,
     view,

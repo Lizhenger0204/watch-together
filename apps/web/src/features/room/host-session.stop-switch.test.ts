@@ -61,6 +61,31 @@ describe("停播", () => {
     expect(t.session.getView().phase).toBe("live");
   });
 
+  test("停播已由廣播確認、重新開播後，晚到的停播 ack 不覆寫直播狀態", async () => {
+    const t = setup();
+    await t.goLive();
+    t.session.setIntent(false);
+    t.client.emit({
+      type: "stream:status",
+      live: false,
+      title: null,
+      startedAt: null,
+    });
+    await flush();
+    t.session.setIntent(true);
+    t.transports[1]!.gate.resolve();
+    await flush();
+    await t.client.ack("stream:status live 電影");
+    expect(t.session.getView().phase).toBe("live");
+
+    await t.client.ack("stream:status off"); // 第一次停播的 ack 現在才到
+    expect(t.session.getView().phase).toBe("live");
+    t.log.length = 0;
+    t.session.setIntent(false);
+    // 伺服器仍在直播：要送 live:false，不能直接拆掉。
+    expect(t.log).toEqual(["stream:status off"]);
+  });
+
   test("重開前等停播確認時又按停止：確認後不送 live:true", async () => {
     const t = setup();
     await t.goLive();

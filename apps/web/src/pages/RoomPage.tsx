@@ -11,6 +11,7 @@ import {
 } from "../features/room";
 import type { HostPhase } from "../features/room/host-session-types";
 import {
+  forgetRoomIdentity,
   formatMbps,
   roomExit,
   uploadHint,
@@ -271,12 +272,14 @@ export function RoomPage({ roomId }: { roomId: string }) {
     : roomExit(view);
   const exitNotice = exit?.notice;
 
-  // 房間關閉、被踢、身份失效：token 已經沒用，清掉並回首頁顯示原因。
+  // 房間關閉、被踢、身份失效：這份 token 已經沒用，清掉並回首頁顯示原因。
+  // 只清本分頁用的那份，另一分頁可能已經換到新的憑證。
+  const { token } = room;
   useEffect(() => {
     if (!exitNotice) return;
-    roomToken.clear(roomId);
+    forgetRoomIdentity(roomId, token);
     navigate("/", { replace: true, notice: exitNotice });
-  }, [exitNotice, roomId]);
+  }, [exitNotice, roomId, token]);
 
   if (exit) return null;
 

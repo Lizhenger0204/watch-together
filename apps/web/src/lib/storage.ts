@@ -104,10 +104,20 @@ export const roomToken = {
     const value = readIdentity(tokenKey(roomId));
     return value !== null && storedIdentity(tokenKey(roomId)) === value;
   },
+  /** 列出持有憑證的房號：共用儲存與本分頁記憶體（例如存不進去的房主憑證）都算。 */
+  rooms(): string[] {
+    const ids: string[] = [];
+    for (const key of keys("local")) {
+      const id = /^room:(.+):token$/.exec(key)?.[1];
+      if (id && readIdentity(key) !== null) ids.push(id);
+    }
+    return ids;
+  },
   clear: (roomId: string) => {
     writeIdentity(tokenKey(roomId), null);
     writeIdentity(inviteKey(roomId), null);
     write("session", liveIntentKey(roomId), null);
+    write("local", liveStopKey(roomId), null);
   },
   clearIfCurrent(roomId: string, token: string) {
     const key = tokenKey(roomId);
@@ -140,12 +150,40 @@ export const roomInviteCode = {
 };
 
 const liveIntentKey = (roomId: string) => `room:${roomId}:live`;
+const liveStopKey = (roomId: string) => `room:${roomId}:stopped`;
 
-/** 房主「想要開播」的意圖，只存在這個分頁（重新整理後保留、關分頁就沒了）。 */
+/** 最後一次明確停播的標記（共用儲存，每次重讀才看得到其他分頁剛寫的值）。 */
+function stopMarker(roomId: string) {
+  const key = liveStopKey(roomId);
+  try {
+    const stored = backend("local")?.getItem(key);
+    if (stored != null) return stored;
+  } catch {
+    // 讀不到就只看記憶體
+  }
+  return memory.local.get(key) ?? "";
+}
+
+/**
+ * 房主「想要開播」的意圖，只存在這個分頁（重新整理後保留、關分頁就沒了）。
+ * 值記著設定當時的停播標記：之後任何分頁明確停播（stopEverywhere）就失效，
+ * 被取代或斷線的舊分頁回來時不會自動開播。
+ */
 export const liveIntent = {
-  get: (roomId: string) => read("session", liveIntentKey(roomId)) === "1",
+  get: (roomId: string) =>
+    read("session", liveIntentKey(roomId)) === `1:${stopMarker(roomId)}`,
   set: (roomId: string, on: boolean) =>
-    write("session", liveIntentKey(roomId), on ? "1" : null),
+    write(
+      "session",
+      liveIntentKey(roomId),
+      on ? `1:${stopMarker(roomId)}` : null,
+    ),
+  /** 房主明確按「停止直播」：其他分頁保存的開播意圖一併失效。 */
+  stopEverywhere(roomId: string) {
+    const marker = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    write("local", liveStopKey(roomId), marker);
+    write("session", liveIntentKey(roomId), null);
+  },
 };
 
 export const savedNickname = {

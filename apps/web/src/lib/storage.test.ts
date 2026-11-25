@@ -155,6 +155,64 @@ describe("roomToken", () => {
   });
 });
 
+describe("roomToken.rooms", () => {
+  test("列出記憶體與 localStorage 中持有憑證的房號，不含已清除的", () => {
+    const storage = new MemoryStorage();
+    vi.stubGlobal("localStorage", storage);
+    const [stored, memoryOnly, cleared] = [
+      crypto.randomUUID(),
+      crypto.randomUUID(),
+      crypto.randomUUID(),
+    ] as const;
+    storage.setItem(`room:${stored}:token`, "a");
+    const denied = vi.spyOn(storage, "setItem").mockImplementation(() => {
+      throw new Error("quota");
+    });
+    roomToken.set(memoryOnly, "b"); // 例如建房時存不進去的房主憑證
+    denied.mockRestore();
+    roomToken.set(cleared, "c");
+    roomToken.clear(cleared);
+    expect(roomToken.rooms().sort()).toEqual([stored, memoryOnly].sort());
+  });
+
+  test("沒有 localStorage 時也列出本分頁記憶體中的房號", () => {
+    vi.stubGlobal("localStorage", new BrokenStorage());
+    roomToken.set(ROOM, "token");
+    expect(roomToken.rooms()).toEqual([ROOM]);
+  });
+});
+
+describe("liveIntent", () => {
+  test("重新整理後保留本分頁的開播意圖", () => {
+    vi.stubGlobal("localStorage", new MemoryStorage());
+    vi.stubGlobal("sessionStorage", new MemoryStorage());
+    liveIntent.set(ROOM, true);
+    resetMemoryStorage();
+    expect(liveIntent.get(ROOM)).toBe(true);
+  });
+
+  test("另一分頁明確停播後，本分頁保存的意圖失效；之後重新設定才有效", async () => {
+    vi.stubGlobal("localStorage", new MemoryStorage());
+    const tab = new MemoryStorage();
+    vi.stubGlobal("sessionStorage", tab);
+    liveIntent.set(ROOM, true);
+
+    vi.resetModules();
+    const other = await import("./storage");
+    vi.stubGlobal("sessionStorage", new MemoryStorage());
+    other.liveIntent.set(ROOM, true);
+    other.liveIntent.stopEverywhere(ROOM);
+    expect(other.liveIntent.get(ROOM)).toBe(false);
+
+    vi.stubGlobal("sessionStorage", tab);
+    expect(liveIntent.get(ROOM)).toBe(false);
+    resetMemoryStorage(); // 重新整理也一樣
+    expect(liveIntent.get(ROOM)).toBe(false);
+    liveIntent.set(ROOM, true);
+    expect(liveIntent.get(ROOM)).toBe(true);
+  });
+});
+
 describe("roomInviteCode", () => {
   test("重新整理後仍能從 localStorage 找回邀請碼對應的房間", () => {
     vi.stubGlobal("localStorage", new MemoryStorage());
