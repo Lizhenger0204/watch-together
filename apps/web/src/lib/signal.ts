@@ -106,11 +106,12 @@ export class SignalClient {
   private socket: SocketLike | null = null;
   private state: ConnectionState = { status: "connecting" };
   private attempt = 0;
+  private started = false;
   private stopped = false;
   private reconnectTimer: unknown = null;
   private pingTimer: unknown = null;
   private nextReqId = 1;
-  /** 每次收到 room:snapshot 加一；確認身份的結果回來時用來判斷是否已經過時。 */
+  /** 每次收到 room:snapshot 或主動 start()／resync() 加一；確認身份的結果回來時用來判斷是否已經過時。 */
   private session = 0;
   private readonly pending = new Map<
     string,
@@ -151,7 +152,16 @@ export class SignalClient {
   }
 
   start() {
+    if (this.started && !this.stopped && this.state.status !== "closed") return;
+    this.started = true;
     this.stopped = false;
+    this.timers.clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    const socket = this.socket;
+    this.teardown();
+    socket?.close(1000, "restart");
+    this.attempt = 0;
+    this.session += 1;
     this.open();
   }
 
@@ -159,17 +169,18 @@ export class SignalClient {
     this.stopped = true;
     this.timers.clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
-    this.socket?.close(1000, "bye");
+    const socket = this.socket;
     this.teardown();
+    socket?.close(1000, "bye");
     this.setState({ status: "closed", reason: "stopped" });
   }
 
   /**
    * 關閉目前連線並立即開啟新連線重新驗證，以取得最新 room:snapshot。
-   * 已手動停止或因終止關閉碼結束時不做任何事。
+   * 尚未 start()、已手動停止或因終止關閉碼結束時不做任何事。
    */
   resync() {
-    if (this.stopped || this.state.status === "closed") return;
+    if (!this.started || this.stopped || this.state.status === "closed") return;
     this.timers.clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
     const socket = this.socket;
@@ -177,6 +188,8 @@ export class SignalClient {
     this.teardown();
     socket?.close(1000, "resync");
     this.attempt = 0;
+    // 讓先前的 verifyIdentity() 查詢過期，避免舊連線的 4400／重連查詢誤殺新連線。
+    this.session += 1;
     this.open();
   }
 

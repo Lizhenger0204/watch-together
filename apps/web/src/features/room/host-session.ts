@@ -1,5 +1,8 @@
 import type { Mode, Quality, ServerMessage } from "@project/shared";
-import type { ConnectionState } from "../../lib/signal";
+import {
+  SignalDisconnectedError,
+  type ConnectionState,
+} from "../../lib/signal";
 import {
   createHostTransport,
   type CreateHostTransport,
@@ -70,7 +73,11 @@ export class HostSession extends HostSessionFlows {
   /** 等停播確認時，收到 live:false 廣播就呼叫。 */
   protected stopWaiter: (() => void) | null = null;
   /** 切模式第 2 步：收到目標模式的 room:updated 就呼叫。 */
-  protected modeWaiter: { mode: Mode; resolve: () => void } | null = null;
+  protected modeWaiter: {
+    mode: Mode;
+    resolve: () => void;
+    reject: (error: unknown) => void;
+  } | null = null;
   /** modeWaiter 的等待廣播期限計時器。 */
   protected modeTimer: unknown = null;
   /** 切模式第 2 步逾時後的目標模式；非 null 代表正在等 resync() 的 room:snapshot，期間不重建也不再切換。 */
@@ -199,7 +206,7 @@ export class HostSession extends HostSessionFlows {
       this.dropTransport();
       this.op = null;
       this.stopWaiter = null;
-      this.clearModeWaiter();
+      this.clearModeWaiter(new SignalDisconnectedError());
       this.resyncTarget = null;
       // 被取代的舊分頁之後重新整理，不可自動開播把接手的分頁擠掉。
       if (state.reason === "replaced") this.cancelIntent();
@@ -207,7 +214,11 @@ export class HostSession extends HostSessionFlows {
       return;
     }
     // open 要等 room:snapshot 才算重新驗證完成；斷線期間保留傳輸，不發新請求。
-    if (state.status !== "open") this.connected = false;
+    if (state.status !== "open") {
+      this.connected = false;
+      // 已收到 ack 但尚未收到 room:updated 時斷線：取消廣播計時器並以斷線結束，交由自動重連 snapshot 同步。
+      this.clearModeWaiter(new SignalDisconnectedError());
+    }
     this.publish();
   }
 
@@ -437,10 +448,12 @@ export class HostSession extends HostSessionFlows {
     this.options.onIntentChange?.(false);
   }
 
-  private clearModeWaiter() {
+  private clearModeWaiter(error?: unknown) {
+    const waiter = this.modeWaiter;
     this.modeWaiter = null;
     this.timers.clearTimeout(this.modeTimer);
     this.modeTimer = null;
+    if (error !== undefined) waiter?.reject(error);
   }
 
   protected showError(error: unknown) {

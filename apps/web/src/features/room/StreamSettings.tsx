@@ -40,7 +40,7 @@ export function StreamSettings({
 }: {
   room: RoomInfo;
   viewers: number;
-  /** 開播、停播或切換傳送方式進行中：暫時不能改傳送方式與畫質。 */
+  /** 開播、停播、切換傳送方式或重新連線同步中：暫時不能改傳送方式與畫質。 */
   busy?: boolean;
   onModeChange: (mode: Mode) => void;
   onQualityChange: (quality: Quality) => void;

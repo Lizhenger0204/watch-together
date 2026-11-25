@@ -25,7 +25,11 @@ export abstract class HostSessionBase {
   protected abstract serverLive: boolean;
   protected abstract titles: TitleSync;
   protected abstract stopWaiter: (() => void) | null;
-  protected abstract modeWaiter: { mode: Mode; resolve: () => void } | null;
+  protected abstract modeWaiter: {
+    mode: Mode;
+    resolve: () => void;
+    reject: (error: unknown) => void;
+  } | null;
   protected abstract modeTimer: unknown;
   protected abstract options: HostSessionOptions;
   protected abstract timers: SessionTimers;
@@ -85,7 +89,7 @@ export abstract class HostSessionBase {
   /** 送 room:update { mode }，收到該模式的 room:updated 才 resolve；超過期限以 SignalTimeoutError reject。 */
   protected confirmMode(target: Mode): Promise<void> {
     return new Promise((resolve, reject) => {
-      const waiter = { mode: target, resolve };
+      const waiter = { mode: target, resolve, reject };
       this.modeWaiter = waiter;
       this.modeTimer = this.timers.setTimeout(() => {
         if (this.modeWaiter !== waiter) return;

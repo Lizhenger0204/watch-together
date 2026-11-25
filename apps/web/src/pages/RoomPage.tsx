@@ -219,7 +219,7 @@ function HostView({
           <StreamSettings
             room={view.room}
             viewers={viewers}
-            busy={busy}
+            busy={busy || !online}
             onModeChange={(mode) => host.setMode(mode)}
             onQualityChange={(quality) => host.setQuality(quality)}
             onLockedChange={(locked) => run(actions.updateRoom({ locked }))}

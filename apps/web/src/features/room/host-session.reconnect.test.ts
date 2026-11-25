@@ -171,6 +171,10 @@ class MockSocket implements SocketLike {
   receive(message: unknown) {
     this.onmessage?.({ data: JSON.stringify(message) });
   }
+  drop(code: number) {
+    this.readyState = 3;
+    this.onclose?.({ code });
+  }
 }
 
 function wireSnapshot(mode: Mode) {
@@ -309,6 +313,55 @@ describe("整合 SignalClient：切模式第 2 步逾時觸發 resync", () => {
     await flush();
     expect(t.transports).toHaveLength(2);
     expect(t.transports[1]!.options.mode).toBe("relay");
+
+    t.cleanup();
+  });
+
+  test("收到 room:update 成功 ack 後在 room:updated 前斷線：取消廣播計時器，不打斷自動重連的新連線", async () => {
+    const t = setupWithSignalClient();
+    await t.goLiveAndStartSwitch();
+
+    // 伺服器先回 ack ok:true，但在 room:updated 抵達前連線以 1006 中斷。
+    t.sockets[0]!.receive({
+      type: "ack",
+      reqId: t.sockets[0]!.sent.at(-1)!.reqId,
+      ok: true,
+    });
+    await flush();
+    t.sockets[0]!.drop(1006);
+    await flush();
+    expect(t.session.getView()).toEqual({
+      intent: true,
+      phase: "waiting",
+      error: null,
+    });
+
+    // 自動重連開啟第 2 條 socket，但新 snapshot 延遲超過原本 10 秒廣播期限。
+    vi.advanceTimersByTime(1_000);
+    expect(t.sockets).toHaveLength(2);
+    t.sockets[1]!.open();
+    vi.advanceTimersByTime(MODE_UPDATED_TIMEOUT_MS);
+    await flush();
+
+    // 舊的廣播計時器已取消：不得對自動重連的 socket 呼叫 close(1000, "resync")，也不多開第 3 條。
+    expect(t.sockets[1]!.close).not.toHaveBeenCalled();
+    expect(t.sockets).toHaveLength(2);
+    expect(t.session.getView()).toEqual({
+      intent: true,
+      phase: "waiting",
+      error: null,
+    });
+
+    // 新 snapshot 到達後直接依伺服器模式重建。
+    t.sockets[1]!.receive(wireSnapshot("relay"));
+    await flush();
+    expect(t.transports).toHaveLength(2);
+    expect(t.transports[1]!.options.mode).toBe("relay");
+    expect(t.session.getView()).toEqual({
+      intent: true,
+      phase: "starting",
+      error: null,
+    });
 
     t.cleanup();
   });

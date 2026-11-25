@@ -509,4 +509,61 @@ describe("SignalClient", () => {
     expect(states).toEqual(beforeStates);
     expect(states.at(-1)).toBe("closed:stopped");
   });
+
+  test("首次 start() 前呼叫 resync 不建立連線；之後 start() 最多只有一條有效連線", () => {
+    const sockets: FakeSocket[] = [];
+    const { timers } = fakeTimers();
+    const client = new SignalClient({
+      url: "ws://test",
+      token: "secret-token",
+      timers,
+      random: () => 1,
+      createSocket: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+    client.resync();
+    expect(sockets).toHaveLength(0);
+
+    client.start();
+    expect(sockets).toHaveLength(1);
+    // 已啟動時重複呼叫 start() 不應再開第二條 socket。
+    client.start();
+    expect(sockets).toHaveLength(1);
+  });
+
+  test("舊連線驗證前 4400 的 verifyIdentity 結果晚到，不可終止 resync() 建立的新連線", async () => {
+    const resolvers: Array<(v: "valid" | "unauthorized") => void> = [];
+    const verifyIdentity = vi.fn(
+      () => new Promise<"valid" | "unauthorized">((r) => resolvers.push(r)),
+    );
+    const { client, sockets, current, states } = setup({ verifyIdentity });
+
+    // 舊連線在驗證前收到 4400，身份查詢進行中。
+    current().open();
+    current().drop(4400);
+    expect(verifyIdentity).toHaveBeenCalledTimes(1);
+
+    // 主動 resync() 建立新連線。
+    client.resync();
+    expect(sockets).toHaveLength(2);
+    const nextSocket = current();
+    expect(states.at(-1)).toBe("connecting");
+
+    // 舊查詢在新 snapshot 抵達前完成：必須被忽略，不可關掉新連線。
+    resolvers[0]!("valid");
+    await flushMicrotasks();
+    expect(nextSocket.close).not.toHaveBeenCalled();
+    expect(states.at(-1)).toBe("connecting");
+
+    // 新連線自己若在驗證前遇到 4400，仍會依終止關閉碼處理。
+    nextSocket.open();
+    nextSocket.drop(4400);
+    expect(verifyIdentity).toHaveBeenCalledTimes(2);
+    resolvers[1]!("valid");
+    await flushMicrotasks();
+    expect(states.at(-1)).toBe("closed:bad_request");
+  });
 });
