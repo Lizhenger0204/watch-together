@@ -40,6 +40,9 @@ export const nicknameSchema = z.string().trim().min(1).max(NICKNAME_MAX_LENGTH);
 
 export const tokenSchema = z.string().min(16).max(256);
 
+/** 加入冪等鍵：32 bytes 隨機值的 base64url。機密，與 token 同等對待。 */
+export const joinKeySchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
+
 export const roomInfoSchema = z.object({
   roomId: idSchema,
   locked: z.boolean(),

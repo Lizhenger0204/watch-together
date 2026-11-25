@@ -5,6 +5,7 @@ import {
   iceServerSchema,
   idSchema,
   inviteCodeSchema,
+  joinKeySchema,
   nicknameSchema,
   tokenSchema,
 } from "./common";
@@ -43,6 +44,8 @@ export const joinRoomRequestSchema = z.object({
     .array(roomUuidSchema)
     .max(JOIN_MAX_EXCLUDED_ROOMS)
     .optional(),
+  /** 同一次加入重試時沿用已配置的席位；沿用請求（existingRoomId）忽略此欄。 */
+  joinKey: joinKeySchema.optional(),
 });
 export type JoinRoomRequest = z.infer<typeof joinRoomRequestSchema>;
 export const joinRoomResponseSchema = z.object({

@@ -7,6 +7,8 @@ export const INVITE_CODE_LENGTH = 8;
 export const NICKNAME_MAX_LENGTH = 24;
 export const JOIN_MAX_EXCLUDED_ROOMS = 16;
 export const JOIN_MAX_BODY_BYTES = 2_048;
+/** 加入冪等鍵：配置席位後多久內，同一把鍵重試會取回同一份結果（protocol.md「加入冪等」）。 */
+export const JOIN_KEY_TTL_MS = 5 * 60_000;
 export const TITLE_MAX_LENGTH = 200;
 /** SDP 一般在數 KB 內，設上限避免惡意大訊息。 */
 export const SDP_MAX_LENGTH = 64 * 1024;

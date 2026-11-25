@@ -208,6 +208,19 @@ describe("REST 與常數", () => {
     ).toBe(false);
   });
 
+  test("joinKey 是 43 字元的 base64url，其他格式不合法", () => {
+    const input = { inviteCode: "ABCDEFGH", nickname: "朋友" };
+    const joinKey = "Ab-_".repeat(10) + "xyz";
+    expect(joinRoomRequestSchema.parse({ ...input, joinKey })).toEqual({
+      ...input,
+      joinKey,
+    });
+    for (const bad of [joinKey.slice(1), joinKey + "a", "+".repeat(43), 1])
+      expect(
+        joinRoomRequestSchema.safeParse({ ...input, joinKey: bad }).success,
+      ).toBe(false);
+  });
+
   test("暱稱會 trim，空白暱稱不合法", () => {
     expect(createRoomRequestSchema.parse({ nickname: "  小明 " })).toEqual({
       nickname: "小明",
