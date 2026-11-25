@@ -70,7 +70,15 @@ test("轉發模式透過 SFU 替身播放影音，切回 P2P 後清理資源並�
       await expectPlaying(...viewers);
       await expectAudioPlaying(...viewers);
 
-      // 恢復 P2P 影音後再核對全部 DELETE 請求，確保無重複、遺漏或刪錯資源。
+      // 恢復 P2P 影音後再核對全部請求紀錄，確保無缺授權、重複、遺漏或刪錯資源。
+      expect(sfu.stats()).toMatchObject({
+        whipRequests: 1,
+        whepRequests: 2,
+        viewerWhip: 0,
+        hostWhep: 0,
+        missingAuth: 0,
+        badContentType: 0,
+      });
       expect([...sfu.stats().deleteRequests].sort()).toEqual(
         [...created].sort(),
       );

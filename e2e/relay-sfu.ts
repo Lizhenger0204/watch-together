@@ -236,27 +236,32 @@ export async function createRelaySfu(browser: Browser): Promise<RelaySfu> {
         const roomId = decodeURIComponent(match[1]!);
         const endpoint = match[2]!;
         const resourceId = match[3];
-        const auth = request.headers().authorization ?? "";
-        if (!auth.startsWith("Bearer ") || auth.length <= "Bearer ".length) {
-          recorded.missingAuth += 1;
-          return route.fulfill({ status: 401 });
-        }
+        const method = request.method();
 
-        if (
-          request.method() === "POST" &&
-          (endpoint === "whip" || endpoint === "whep")
-        ) {
-          const contentType = request.headers()["content-type"] ?? "";
-          if (!contentType.toLowerCase().includes("application/sdp")) {
-            recorded.badContentType += 1;
-            return route.fulfill({ status: 400 });
-          }
+        // 在授權與標頭檢查前先記次，確保 401／400 的多餘或錯誤請求不會漏計。
+        if (method === "POST" && (endpoint === "whip" || endpoint === "whep")) {
           if (endpoint === "whip") {
             recorded.whipRequests += 1;
             if (role !== "host") recorded.viewerWhip += 1;
           } else {
             recorded.whepRequests += 1;
             if (role !== "viewer") recorded.hostWhep += 1;
+          }
+        } else if (method === "DELETE" && resourceId) {
+          recorded.deleteRequests.push(pathname);
+        }
+
+        const auth = request.headers().authorization ?? "";
+        if (!auth.startsWith("Bearer ") || auth.length <= "Bearer ".length) {
+          recorded.missingAuth += 1;
+          return route.fulfill({ status: 401 });
+        }
+
+        if (method === "POST" && (endpoint === "whip" || endpoint === "whep")) {
+          const contentType = request.headers()["content-type"] ?? "";
+          if (!contentType.toLowerCase().includes("application/sdp")) {
+            recorded.badContentType += 1;
+            return route.fulfill({ status: 400 });
           }
 
           const offerSdp = request.postData() ?? "";
@@ -295,8 +300,7 @@ export async function createRelaySfu(browser: Browser): Promise<RelaySfu> {
           });
         }
 
-        if (request.method() === "DELETE" && resourceId) {
-          recorded.deleteRequests.push(pathname);
+        if (method === "DELETE" && resourceId) {
           const ok = await sfuPage.evaluate(
             ({ room, id }) => window.__relaySfu?.remove(room, id) ?? false,
             { room: roomId, id: resourceId },
