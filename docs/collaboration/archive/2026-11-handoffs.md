@@ -435,3 +435,36 @@ T-118 第二輪審查（GPT ultra fast，66a7155）：第一輪 8 項中 6 項�
 - 監工重跑四項檢查（e2e 6）全部通過，再用 `--repeat-each=2` 跑 P2P spec 也全部通過；跑完沒有殘留在監聽的 port。
 - 以 fast-forward 合併。
 
+> 2026-11-25 T-122 實作完成，送 GPT 審查：
+> - 第 1～7 項在 `claude/T-122-relay-integration`（bb6af68）。
+> - 第 8～9 項（接上 dispatcher、改寫 E2E）在 `claude/T-122-relay-dispatcher`（a8d94d9，疊在 bb6af68 上）。
+>
+> 接上 dispatcher 之後，T-121 範圍內的 `host-session.test.ts:82`（以真正的 dispatcher 斷言 RELAY_UNAVAILABLE）會失敗。監工決定：
+> - 先合併 bb6af68。這時 dispatcher 還沒接，使用者碰不到這些改動。
+> - 等 T-121 合併之後，監工再 rebase a8d94d9 並改寫那個測試：注入假的 fetch／ICE，WHIP 回 503 時應顯示 RELAY_UNAVAILABLE 並取消意圖。改完才合併。
+
+### T-122 第一步（Claude 子對話，2026-11-25）— 合併 bb6af68
+1. 做了什麼：修完 T-109 審查留下的問題（還沒接上 dispatcher）。
+   - WHIP／WHEP 依 POST 的進度處理取消，`start()` 用 `untilStopped()` 立即結束。
+   - WHEP 收到 409 時維持 waiting，下一個開播廣播再拉一次。
+   - 缺少 offer 時以 `RELAY_FAILED` 拒絕。
+   - 每次 DELETE 有 5 秒期限。
+   - 同源的絕對 Location 依實際 origin 解析。
+   - 同一輪只發一次 `RELAY_FAILED`。
+   - WHIP 與 WHEP 的 409、401、403 提示分開，訊息不含憑證。
+2. 介面變動：對外契約不變，只新增匯出 `DELETE_TIMEOUT_MS`、`untilStopped()`。
+3. 已知限制：真實 SFU 的行為留待 T-113。
+4. 驗證方式：四項檢查；11 個反向實驗。
+
+審查（GPT ultra fast）：
+- bb6af68 判「小修後可合併」。Chrome 重測，T-109 的兩項原阻擋都已修好。Location 繞過測試 14／14 通過。
+- a8d94d9 判「需退回」：接上 dispatcher 後，開播 ACK 抵達前轉發失敗，房主仍顯示直播中。
+- 應修項：201 的本文延遲時清理會跟著延後、空 SDP 回錯誤碼、`features/room/viewer-session.relay.test.ts` 超出授權範圍。
+
+監工處理：
+- 這時 dispatcher 還沒接，使用者碰不到，所以先合併 bb6af68。
+- 超出範圍的測試檔：只是新增測試，與 T-121 不衝突，監工事後核可保留。
+- 其餘項目都併入 T-122 第二步，等 T-121 合併後再做，因為要改 host-session。
+
+合併：rebase 到 dc1dd71 後四項檢查全過（啟動器 2、Vitest 400 + 120、e2e 6），以 fast-forward 合併。
+
