@@ -1,1 +1,51 @@
 @import "tailwindcss";
+
+:root {
+  --brand: #0095d9;
+  --brand-hover: #007cb8;
+  --surface-subtle: #f5f6f7;
+  color-scheme: light;
+}
+
+body {
+  background-color: #ffffff;
+  color: #18181b;
+}
+
+/* 播放器底部的細線滑桿（進度條與音量），避免顯示瀏覽器預設粗藍條。 */
+.player-range {
+  -webkit-appearance: none;
+  appearance: none;
+  background: rgba(255, 255, 255, 0.35);
+  height: 3px;
+  border-radius: 1px;
+  cursor: pointer;
+}
+
+.player-range:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.player-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 11px;
+  height: 11px;
+  border-radius: 9999px;
+  background: #ffffff;
+  border: none;
+}
+
+.player-range::-moz-range-thumb {
+  width: 11px;
+  height: 11px;
+  border-radius: 9999px;
+  background: #ffffff;
+  border: none;
+}
+
+.player-range:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}

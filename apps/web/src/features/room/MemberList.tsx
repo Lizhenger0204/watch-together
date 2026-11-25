@@ -1,5 +1,4 @@
 import type { Member, MemberStatus } from "@project/shared";
-import { Button, Card } from "../../components/ui";
 
 const STATE_LABEL: Record<MemberStatus["state"], string> = {
   waiting: "等待中",
@@ -37,8 +36,11 @@ export function MemberList({
 }) {
   const online = members.filter((m) => m.online).length;
   return (
-    <Card title={`成員（${online} 人在線）`}>
-      <ul className="grid gap-2">
+    <section className="px-4 py-3.5">
+      <h3 className="mb-2 text-xs font-semibold text-zinc-500">
+        成員（{online} 人在線）
+      </h3>
+      <ul className="divide-y divide-zinc-100">
         {members.map((member) => {
           const status =
             member.role === "member" && member.online
@@ -47,30 +49,32 @@ export function MemberList({
           return (
             <li
               key={member.memberId}
-              className="flex items-center gap-3 rounded-lg bg-white/5 px-3 py-2"
+              className="flex items-center gap-2.5 py-2"
             >
               <span
                 aria-label={member.online ? "在線" : "離線"}
-                className={`size-2.5 shrink-0 rounded-full ${member.online ? "bg-emerald-400" : "bg-zinc-600"}`}
+                className={`size-2 shrink-0 rounded-full ${member.online ? "bg-emerald-600" : "bg-zinc-300"}`}
               />
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm text-white">
+                <p className="truncate text-sm text-zinc-900">
                   {member.nickname}
                   {member.role === "host" && (
-                    <span className="ml-2 text-xs text-violet-300">房主</span>
+                    <span className="ml-1.5 text-xs font-medium text-[#0095d9]">
+                      房主
+                    </span>
                   )}
                   {member.memberId === youId && (
-                    <span className="ml-2 text-xs text-zinc-500">（你）</span>
+                    <span className="ml-1 text-xs text-zinc-400">（你）</span>
                   )}
                 </p>
                 {isHost && status && (
-                  <p className="text-xs text-zinc-400">{status}</p>
+                  <p className="text-xs text-zinc-500">{status}</p>
                 )}
               </div>
               {isHost && member.role === "member" && (
-                <Button
-                  variant="ghost"
-                  className="min-h-8 px-2 text-xs"
+                <button
+                  type="button"
+                  className="shrink-0 rounded px-2 py-1 text-xs text-zinc-500 transition-colors hover:bg-red-50 hover:text-red-600 focus-visible:ring-2 focus-visible:ring-[#0095d9] focus-visible:outline-none"
                   onClick={() => {
                     if (
                       window.confirm(
@@ -81,12 +85,12 @@ export function MemberList({
                   }}
                 >
                   踢出
-                </Button>
+                </button>
               )}
             </li>
           );
         })}
       </ul>
-    </Card>
+    </section>
   );
 }

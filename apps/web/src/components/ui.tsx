@@ -4,17 +4,19 @@ import type {
   ReactNode,
 } from "react";
 
-// 共用 UI 元件。顏色集中在這裡，頁面只組合元件。
+// 共用 UI 元件（DESIGN.md：藍白基本色、扁平低圓角、最多 4 種字號）。
 
 type Variant = "primary" | "secondary" | "danger" | "ghost";
 
 const VARIANT: Record<Variant, string> = {
   primary:
-    "bg-violet-600 text-white hover:bg-violet-500 disabled:bg-violet-600/40",
+    "bg-[#0095d9] text-white hover:bg-[#007cb8] disabled:bg-zinc-200 disabled:text-zinc-400",
   secondary:
-    "bg-white/10 text-zinc-100 hover:bg-white/15 disabled:text-zinc-500",
-  danger: "bg-rose-600/90 text-white hover:bg-rose-500 disabled:bg-rose-600/40",
-  ghost: "text-zinc-300 hover:bg-white/10 hover:text-white",
+    "border border-zinc-300 bg-white text-zinc-800 hover:bg-zinc-50 disabled:border-zinc-200 disabled:text-zinc-400",
+  danger:
+    "bg-red-600 text-white hover:bg-red-700 disabled:bg-red-200 disabled:text-red-400",
+  ghost:
+    "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 disabled:text-zinc-300",
 };
 
 export function Button({
@@ -25,7 +27,7 @@ export function Button({
   return (
     <button
       type="button"
-      className={`inline-flex min-h-10 items-center justify-center gap-2 rounded-lg px-4 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:outline-none disabled:cursor-not-allowed ${VARIANT[variant]} ${className}`}
+      className={`inline-flex min-h-9 items-center justify-center gap-1.5 rounded px-3.5 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:ring-[#0095d9] focus-visible:ring-offset-1 focus-visible:outline-none disabled:cursor-not-allowed ${VARIANT[variant]} ${className}`}
       {...props}
     />
   );
@@ -44,13 +46,13 @@ export function Card({
 }) {
   return (
     <section
-      className={`rounded-2xl border border-white/10 bg-zinc-900/70 p-5 ${className}`}
+      className={`rounded-sm border border-zinc-200 bg-white p-5 ${className}`}
     >
       {(title || action) && (
         <div className="mb-4 flex items-center justify-between gap-3">
-          {/* 標題可能含片名（使用者的檔名，常是沒有空白的長字串），要能斷行，不可撐寬版面 */}
+          {/* 標題可能含片名（無空白的長檔名），要能斷行，不可撐寬版面 */}
           {title && (
-            <h2 className="min-w-0 text-base font-semibold wrap-anywhere text-white">
+            <h2 className="min-w-0 text-base font-semibold wrap-anywhere text-zinc-900">
               {title}
             </h2>
           )}
@@ -70,9 +72,9 @@ export function TextField({
 }: InputHTMLAttributes<HTMLInputElement> & { label: string; hint?: string }) {
   return (
     <label className={`grid gap-1.5 ${className}`}>
-      <span className="text-sm text-zinc-300">{label}</span>
+      <span className="text-sm font-medium text-zinc-700">{label}</span>
       <input
-        className="h-11 rounded-lg border border-white/10 bg-zinc-950 px-3 text-base text-white placeholder:text-zinc-600 focus:border-violet-400 focus:outline-none"
+        className="h-10 rounded border border-zinc-300 bg-white px-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-[#0095d9] focus:ring-1 focus:ring-[#0095d9] focus:outline-none"
         {...props}
       />
       {hint && <span className="text-xs text-zinc-500">{hint}</span>}
@@ -88,21 +90,21 @@ export function Notice({
   children: ReactNode;
 }) {
   const color = {
-    info: "border-sky-400/30 bg-sky-400/10 text-sky-100",
-    warning: "border-amber-400/30 bg-amber-400/10 text-amber-100",
-    error: "border-rose-400/30 bg-rose-400/10 text-rose-100",
+    info: "border-sky-200 bg-sky-50 text-sky-900",
+    warning: "border-amber-200 bg-amber-50 text-amber-900",
+    error: "border-red-200 bg-red-50 text-red-800",
   }[tone];
   return (
     <div
       role={tone === "error" ? "alert" : "status"}
-      className={`rounded-lg border px-3 py-2 text-sm ${color}`}
+      className={`rounded-sm border px-3 py-2 text-sm ${color}`}
     >
       {children}
     </div>
   );
 }
 
-/** 兩到三個選項的切換鈕（模式、畫質）。 */
+/** 兩到三個選項的扁平切換列（傳送方式、畫質）。 */
 export function Segmented<T extends string>({
   label,
   value,
@@ -116,31 +118,30 @@ export function Segmented<T extends string>({
   onChange: (value: T) => void;
   disabled?: boolean;
 }) {
+  const description = options.find((o) => o.value === value)?.description;
   return (
-    <fieldset className="grid gap-2" disabled={disabled}>
-      <legend className="mb-2 text-sm text-zinc-300">{label}</legend>
-      <div className="grid auto-cols-fr grid-flow-col gap-1 rounded-xl bg-zinc-950 p-1">
+    <fieldset className="grid gap-1.5" disabled={disabled}>
+      <legend className="mb-1.5 text-xs font-medium text-zinc-600">
+        {label}
+      </legend>
+      <div className="grid auto-cols-fr grid-flow-col gap-0.5 rounded border border-zinc-200 bg-[#f5f6f7] p-0.5">
         {options.map((option) => (
           <button
             key={option.value}
             type="button"
             aria-pressed={option.value === value}
             onClick={() => onChange(option.value)}
-            className={`rounded-lg px-2 py-2 text-sm transition-colors focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:outline-none disabled:cursor-not-allowed ${
+            className={`rounded-xs px-2 py-1.5 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-[#0095d9] focus-visible:outline-none disabled:cursor-not-allowed ${
               option.value === value
-                ? "bg-violet-600 text-white"
-                : "text-zinc-400 hover:bg-white/5 hover:text-white"
+                ? "bg-[#0095d9] text-white"
+                : "text-zinc-600 hover:bg-white hover:text-zinc-900"
             }`}
           >
             {option.label}
           </button>
         ))}
       </div>
-      {options.find((o) => o.value === value)?.description && (
-        <p className="text-xs leading-relaxed text-zinc-500">
-          {options.find((o) => o.value === value)?.description}
-        </p>
-      )}
+      {description && <p className="text-xs text-zinc-500">{description}</p>}
     </fieldset>
   );
 }

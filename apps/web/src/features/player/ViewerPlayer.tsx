@@ -1,3 +1,4 @@
+import { Maximize, Minimize, Play, Volume2, VolumeX } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { ViewerSession } from "../room/viewer-session";
 import { watchPlaybackProgress } from "./playback-progress";
@@ -46,8 +47,17 @@ export function ViewerPlayer({
   const [armed, setArmed] = useState(false);
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [fullscreenError, setFullscreenError] = useState("");
   const { remoteStream, state } = view;
+
+  useEffect(() => {
+    const onChange = () => {
+      setIsFullscreen(document.fullscreenElement === frameRef.current);
+    };
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
 
   // 空的 MediaStream 先綁進 Chrome，後來只加音軌時，播放器可能會一直等 metadata。
   const connected = state === "playing" || state === "buffering";
@@ -113,10 +123,10 @@ export function ViewerPlayer({
   });
 
   return (
-    <div className="grid gap-2">
+    <div className="grid min-w-0">
       <div
         ref={frameRef}
-        className="relative grid aspect-video grid-cols-[minmax(0,1fr)] overflow-hidden rounded-2xl bg-black fullscreen:rounded-none"
+        className="relative grid aspect-video grid-cols-[minmax(0,1fr)] overflow-hidden bg-black text-white"
         data-testid="viewer-stage"
       >
         <video
@@ -134,7 +144,7 @@ export function ViewerPlayer({
         {!armed && !status.reconnect ? (
           <button
             type="button"
-            className="absolute inset-0 grid place-items-center bg-black/60 text-white transition-colors hover:bg-black/50 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:outline-none focus-visible:ring-inset"
+            className="absolute inset-0 z-10 grid place-items-center bg-black/50 text-white transition-colors hover:bg-black/40 focus-visible:ring-2 focus-visible:ring-[#0095d9] focus-visible:outline-none focus-visible:ring-inset"
             onClick={() => {
               setArmed(true);
               playIfReady(videoRef.current, () => setArmed(false));
@@ -142,12 +152,15 @@ export function ViewerPlayer({
             }}
           >
             <span className="grid justify-items-center gap-2 px-4 text-center">
-              <span className="grid size-16 place-items-center rounded-full bg-violet-600 text-2xl">
-                ▶
+              <span className="grid size-14 place-items-center rounded-full bg-zinc-600/75 text-white">
+                <Play
+                  className="ml-0.5 size-6 fill-current"
+                  strokeWidth={1.75}
+                />
               </span>
-              <span className="text-base font-medium">點擊開始觀看</span>
+              <span className="text-sm font-medium">點擊開始觀看</span>
               {status.text && (
-                <span className="text-sm wrap-anywhere text-zinc-300">
+                <span className="text-xs wrap-anywhere text-zinc-200">
                   {status.text}
                 </span>
               )}
@@ -157,22 +170,22 @@ export function ViewerPlayer({
           status.text && (
             <div
               role={status.tone === "error" ? "alert" : "status"}
-              className={`absolute inset-0 grid place-items-center px-4 text-center ${
-                state === "buffering" ? "pointer-events-none" : "bg-black/70"
+              className={`absolute inset-0 z-10 grid place-items-center px-4 text-center ${
+                state === "buffering" ? "pointer-events-none" : "bg-black/65"
               }`}
             >
               <div className="grid justify-items-center gap-3">
                 <p
-                  className={`wrap-anywhere ${
-                    status.tone === "error" ? "text-rose-200" : "text-zinc-300"
-                  } ${state === "buffering" ? "rounded-lg bg-black/60 px-3 py-1.5" : ""}`}
+                  className={`text-sm wrap-anywhere ${
+                    status.tone === "error" ? "text-red-200" : "text-zinc-200"
+                  } ${state === "buffering" ? "rounded-sm bg-black/70 px-3 py-1.5" : ""}`}
                 >
                   {status.text}
                 </p>
                 {status.reconnect && (
                   <button
                     type="button"
-                    className="inline-flex min-h-10 items-center rounded-lg bg-violet-600 px-4 text-sm font-medium text-white hover:bg-violet-500 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:outline-none"
+                    className="inline-flex min-h-9 items-center rounded bg-[#0095d9] px-4 text-sm font-medium text-white hover:bg-[#007cb8] focus-visible:ring-2 focus-visible:ring-[#0095d9] focus-visible:outline-none"
                     onClick={() => {
                       setArmed(true);
                       viewer.reconnect();
@@ -185,58 +198,73 @@ export function ViewerPlayer({
             </div>
           )
         )}
-      </div>
-      <div className="flex flex-wrap items-center gap-3 text-sm text-zinc-300">
-        <button
-          type="button"
-          className="rounded-lg px-2 py-1 hover:bg-white/10 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:outline-none"
-          aria-pressed={muted}
-          onClick={() => setMuted(!muted)}
-        >
-          {muted ? "取消靜音" : "靜音"}
-        </button>
-        <label className="flex items-center gap-2">
-          音量
-          <input
-            type="range"
-            className="w-28"
-            min={0}
-            max={1}
-            step={0.01}
-            value={volume}
-            onChange={(event) => {
-              const next = event.currentTarget.valueAsNumber;
-              if (videoRef.current) videoRef.current.volume = next;
-              if (audioRef.current) audioRef.current.volume = next;
-              setVolume(next);
+
+        {/* 控制列放在全螢幕容器內，全螢幕觀看時仍可調音量與退出。 */}
+        <div className="absolute inset-x-0 bottom-0 z-20 flex items-center justify-between gap-3 bg-gradient-to-t from-black/80 via-black/45 to-transparent px-3 pt-5 pb-2">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              aria-label={muted ? "取消靜音" : "靜音"}
+              title={muted ? "取消靜音" : "靜音"}
+              className="inline-flex size-7 items-center justify-center text-white/90 transition-colors hover:text-white focus-visible:ring-2 focus-visible:ring-[#0095d9] focus-visible:outline-none"
+              aria-pressed={muted}
+              onClick={() => setMuted(!muted)}
+            >
+              {muted || volume === 0 ? (
+                <VolumeX className="size-4" strokeWidth={1.75} />
+              ) : (
+                <Volume2 className="size-4" strokeWidth={1.75} />
+              )}
+            </button>
+            <input
+              type="range"
+              aria-label="音量"
+              className="player-range w-20 sm:w-24"
+              min={0}
+              max={1}
+              step={0.01}
+              value={muted ? 0 : volume}
+              onChange={(event) => {
+                const next = event.currentTarget.valueAsNumber;
+                if (videoRef.current) videoRef.current.volume = next;
+                if (audioRef.current) audioRef.current.volume = next;
+                setVolume(next);
+                if (next > 0 && muted) setMuted(false);
+              }}
+            />
+          </div>
+          <button
+            type="button"
+            aria-label={isFullscreen ? "退出全螢幕" : "全螢幕"}
+            title={isFullscreen ? "退出全螢幕" : "全螢幕"}
+            className="inline-flex size-7 items-center justify-center text-white/90 transition-colors hover:text-white focus-visible:ring-2 focus-visible:ring-[#0095d9] focus-visible:outline-none"
+            onClick={() => {
+              const frame = frameRef.current;
+              if (!frame) return;
+              setFullscreenError("");
+              if (!document.fullscreenEnabled) {
+                const video = videoRef.current as IosVideo | null;
+                if (video?.webkitEnterFullscreen) video.webkitEnterFullscreen();
+                else setFullscreenError("這個瀏覽器不支援全螢幕。");
+                return;
+              }
+              const action =
+                document.fullscreenElement === frame
+                  ? document.exitFullscreen()
+                  : frame.requestFullscreen();
+              void action.catch(() => setFullscreenError("無法切換全螢幕。"));
             }}
-          />
-        </label>
-        <button
-          type="button"
-          className="ml-auto rounded-lg px-2 py-1 hover:bg-white/10 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:outline-none"
-          onClick={() => {
-            const frame = frameRef.current;
-            if (!frame) return;
-            setFullscreenError("");
-            if (!document.fullscreenEnabled) {
-              const video = videoRef.current as IosVideo | null;
-              if (video?.webkitEnterFullscreen) video.webkitEnterFullscreen();
-              else setFullscreenError("這個瀏覽器不支援全螢幕。");
-              return;
-            }
-            const action =
-              document.fullscreenElement === frame
-                ? document.exitFullscreen()
-                : frame.requestFullscreen();
-            void action.catch(() => setFullscreenError("無法切換全螢幕。"));
-          }}
-        >
-          全螢幕
-        </button>
+          >
+            {isFullscreen ? (
+              <Minimize className="size-4" strokeWidth={1.75} />
+            ) : (
+              <Maximize className="size-4" strokeWidth={1.75} />
+            )}
+          </button>
+        </div>
       </div>
       {fullscreenError && (
-        <p role="alert" className="text-sm text-rose-200">
+        <p role="alert" className="px-4 pt-2 text-xs text-red-600">
           {fullscreenError}
         </p>
       )}

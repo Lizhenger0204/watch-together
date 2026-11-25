@@ -4,22 +4,12 @@ import {
   type Quality,
   type RoomInfo,
 } from "@project/shared";
-import { Card, Notice, Segmented } from "../../components/ui";
+import { Notice, Segmented } from "../../components/ui";
 import { formatMbps, uploadHint } from "./room-state";
 
-const MODE_OPTIONS: { value: Mode; label: string; description: string }[] = [
-  {
-    value: "p2p",
-    label: "P2P 直連",
-    description:
-      "影片從你的電腦直接送到每位朋友。人越多，你的上傳頻寬用得越多。",
-  },
-  {
-    value: "relay",
-    label: "轉發",
-    description:
-      "影片經 Cloudflare 轉發，你只需要上傳一份。適合人多或上傳頻寬不夠時。",
-  },
+const MODE_OPTIONS: { value: Mode; label: string }[] = [
+  { value: "p2p", label: "P2P 直連" },
+  { value: "relay", label: "轉發" },
 ];
 
 const QUALITY_OPTIONS = (Object.keys(QUALITY_PRESETS) as Quality[]).map(
@@ -48,8 +38,9 @@ export function StreamSettings({
 }) {
   const upload = uploadHint(room.mode, room.quality, viewers);
   return (
-    <Card title="播放設定">
-      <div className="grid gap-5">
+    <section className="px-4 py-3.5">
+      <h3 className="mb-3 text-xs font-semibold text-zinc-500">播放設定</h3>
+      <div className="grid gap-4">
         <Segmented
           label="傳送方式"
           value={room.mode}
@@ -70,26 +61,26 @@ export function StreamSettings({
         />
         {upload && (
           <Notice tone={upload.warn ? "warning" : "info"}>
-            {viewers} 位收看者，預估你要上傳 {formatMbps(upload.total)}。
+            {viewers} 位收看者，預估上傳 {formatMbps(upload.total)}。
             {upload.warn &&
               "超過 60 Mbps，建議改用「流暢」畫質或「轉發」模式。"}
           </Notice>
         )}
-        <label className="flex items-center justify-between gap-3 text-sm text-zinc-300">
+        <label className="flex cursor-pointer items-center justify-between gap-3 border-t border-zinc-100 pt-3 text-sm text-zinc-800">
           <span>
             鎖定房間
             <span className="block text-xs text-zinc-500">
-              鎖定後新的人無法加入，已在房內的人不受影響。
+              鎖定後新成員無法加入
             </span>
           </span>
           <input
             type="checkbox"
-            className="size-5 accent-violet-500"
+            className="size-4 accent-[#0095d9]"
             checked={room.locked}
             onChange={(event) => onLockedChange(event.currentTarget.checked)}
           />
         </label>
       </div>
-    </Card>
+    </section>
   );
 }

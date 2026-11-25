@@ -1,6 +1,7 @@
+import { LogOut } from "lucide-react";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { Layout } from "../components/Layout";
-import { Button, Card, Notice } from "../components/ui";
+import { Button, Notice } from "../components/ui";
 import { ViewerPlayer } from "../features/player";
 import { HostSourcePlayer, useLocalSource } from "../features/source";
 import {
@@ -122,22 +123,37 @@ function HostView({
 
   const ready = sourceStatus === "ready";
   const online = view.connection.status === "open";
+  const onlineCount = view.members.filter((m) => m.online).length;
   const viewers = view.members.filter(
     (m) => m.role === "member" && m.online,
   ).length;
+  const hostMember = view.members.find((m) => m.role === "host");
   const { phase } = session;
   const busy =
     phase === "starting" || phase === "stopping" || phase === "switching";
   const upload = view.room
     ? uploadHint(view.room.mode, view.room.quality, viewers)
     : null;
+  const showUploadWarn =
+    (phase === "idle" || phase === "waiting") && Boolean(upload?.warn);
+  const hasStageNotices =
+    phase === "waiting" ||
+    phase === "switching" ||
+    showUploadWarn ||
+    Boolean(session.error) ||
+    Boolean(error);
 
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-      <div className="grid content-start gap-4">
-        <Card
-          title={hostTitle(phase, view.stream.title)}
-          action={
+    <div className="grid grid-cols-[minmax(0,1fr)] lg:min-h-[calc(100dvh-3rem)] lg:grid-cols-[minmax(0,1fr)_320px]">
+      <div className="flex min-w-0 flex-col lg:border-r lg:border-zinc-200">
+        <HostSourcePlayer
+          source={source}
+          belowTitle={
+            <h2 className="min-w-0 text-base font-semibold wrap-anywhere text-zinc-900">
+              {hostTitle(phase, view.stream.title)}
+            </h2>
+          }
+          belowAction={
             session.intent ? (
               <Button
                 variant="danger"
@@ -155,9 +171,11 @@ function HostView({
               </Button>
             )
           }
-        >
-          {phase === "waiting" && (
-            <div className="mb-3">
+        />
+
+        {hasStageNotices && (
+          <div className="grid gap-2 px-4 py-3">
+            {phase === "waiting" && (
               <Notice tone="warning">
                 {!online
                   ? view.connection.status === "connecting"
@@ -169,52 +187,52 @@ function HostView({
                       ? "重新整理後要重新選擇影片。選好並通過檢查後，會自動恢復直播。"
                       : "影片還不能播放（檢查中或需要確認）。可以播放後會自動恢復直播。"}
               </Notice>
-            </div>
-          )}
-          {phase === "switching" && (
-            <div className="mb-3">
+            )}
+            {phase === "switching" && (
               <Notice>正在切換傳送方式，收看者會短暫中斷。</Notice>
-            </div>
-          )}
-          {(phase === "idle" || phase === "waiting") && upload?.warn && (
-            <div className="mb-3">
+            )}
+            {showUploadWarn && upload && (
               <Notice tone="warning">
                 預估上傳 {formatMbps(upload.total)}，超過 60
                 Mbps，建議改用「流暢」畫質或「轉發」模式。
               </Notice>
-            </div>
-          )}
-          <HostSourcePlayer source={source} />
-          {!session.intent && (
-            <p className="mt-3 text-sm text-zinc-500">
-              選好影片並通過檢查後，按「開始直播」。直播期間可以隨時暫停、拖動進度或換片，朋友會看到一樣的畫面。
-            </p>
-          )}
-        </Card>
-        {session.error && (
-          <Notice tone="error">
-            <div className="flex items-start justify-between gap-3">
-              <span className="min-w-0 wrap-anywhere">{session.error}</span>
-              <button
-                type="button"
-                className="shrink-0 text-rose-200 underline-offset-2 hover:underline"
-                onClick={() => host.clearError()}
-              >
-                關閉
-              </button>
-            </div>
-          </Notice>
+            )}
+            {session.error && (
+              <Notice tone="error">
+                <div className="flex items-start justify-between gap-3">
+                  <span className="min-w-0 wrap-anywhere">{session.error}</span>
+                  <button
+                    type="button"
+                    className="shrink-0 text-red-700 underline-offset-2 hover:underline"
+                    onClick={() => host.clearError()}
+                  >
+                    關閉
+                  </button>
+                </div>
+              </Notice>
+            )}
+            {error && <Notice tone="error">{error}</Notice>}
+          </div>
         )}
-        {error && <Notice tone="error">{error}</Notice>}
       </div>
-      <aside className="grid content-start gap-4">
+
+      <aside className="flex flex-col divide-y divide-zinc-200 bg-white">
         {view.room?.inviteCode && (
           <InviteCodeCard
             inviteCode={view.room.inviteCode}
             inviteCodeVersion={view.room.inviteCodeVersion ?? 0}
+            hostName={hostMember?.nickname ?? "房主"}
+            onlineCount={onlineCount}
             onRegenerate={actions.regenerateInviteCode}
           />
         )}
+        <MemberList
+          members={view.members}
+          youId={view.you?.memberId ?? ""}
+          isHost
+          memberStatus={view.memberStatus}
+          onKick={(memberId) => run(actions.kick(memberId))}
+        />
         {view.room && (
           <StreamSettings
             room={view.room}
@@ -225,13 +243,6 @@ function HostView({
             onLockedChange={(locked) => run(actions.updateRoom({ locked }))}
           />
         )}
-        <MemberList
-          members={view.members}
-          youId={view.you?.memberId ?? ""}
-          isHost
-          memberStatus={view.memberStatus}
-          onKick={(memberId) => run(actions.kick(memberId))}
-        />
       </aside>
     </div>
   );
@@ -240,14 +251,10 @@ function HostView({
 function ViewerView({ room }: { room: Room }) {
   const { view, viewer } = room;
   const host = view.members.find((m) => m.role === "host");
+  const onlineCount = view.members.filter((m) => m.online).length;
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
-      <section className="grid grid-cols-[minmax(0,1fr)] content-start gap-3">
-        {view.stream.live && view.stream.title && (
-          <h2 className="font-medium wrap-anywhere text-white">
-            {view.stream.title}
-          </h2>
-        )}
+    <div className="grid grid-cols-[minmax(0,1fr)] lg:min-h-[calc(100dvh-3rem)] lg:grid-cols-[minmax(0,1fr)_300px]">
+      <section className="flex min-w-0 flex-col lg:border-r lg:border-zinc-200">
         {viewer && (
           <ViewerPlayer
             viewer={viewer}
@@ -255,8 +262,33 @@ function ViewerView({ room }: { room: Room }) {
             hostOnline={host?.online ?? false}
           />
         )}
+        {/* 片名顯示在影片正下方（對齊 DESIGN.md §3） */}
+        <div className="flex items-center justify-between gap-3 border-b border-zinc-200 bg-white px-4 py-3">
+          {view.stream.live && view.stream.title ? (
+            <>
+              <h2 className="min-w-0 flex-1 text-base font-semibold wrap-anywhere text-zinc-900">
+                {view.stream.title}
+              </h2>
+              <span className="shrink-0 text-xs font-medium text-[#0095d9]">
+                直播中
+              </span>
+            </>
+          ) : (
+            <p className="text-sm text-zinc-500">尚未開始播放</p>
+          )}
+        </div>
       </section>
-      <aside className="grid content-start gap-4">
+
+      <aside className="flex flex-col divide-y divide-zinc-200 bg-white">
+        <div className="px-4 py-3.5">
+          <p className="truncate text-sm text-zinc-900">
+            <span className="font-semibold text-[#0095d9]">
+              {host?.nickname ?? "房主"}
+            </span>{" "}
+            正在主持
+          </p>
+          <p className="text-xs text-zinc-500">{onlineCount} 人在線</p>
+        </div>
         <MemberList
           members={view.members}
           youId={view.you?.memberId ?? ""}
@@ -291,12 +323,15 @@ export function RoomPage({ roomId }: { roomId: string }) {
   if (!room.hasToken) {
     return (
       <Layout>
-        <Card title="你還沒加入這個房間">
-          <p className="mb-4 text-sm text-zinc-400">
+        <div className="mx-auto max-w-sm border-t border-zinc-200 pt-6">
+          <h1 className="mb-2 text-xl font-bold text-zinc-900">
+            你還沒加入這個房間
+          </h1>
+          <p className="mb-6 text-sm text-zinc-500">
             請向房主索取邀請碼或邀請連結。
           </p>
           <Button onClick={() => navigate("/")}>回首頁輸入邀請碼</Button>
-        </Card>
+        </div>
       </Layout>
     );
   }
@@ -305,30 +340,64 @@ export function RoomPage({ roomId }: { roomId: string }) {
   if (closed) {
     return (
       <Layout>
-        <Card title={closed.title}>
-          <p className="mb-4 text-sm text-zinc-400">{closed.detail}</p>
+        <div className="mx-auto max-w-sm border-t border-zinc-200 pt-6">
+          <h1 className="mb-2 text-xl font-bold text-zinc-900">
+            {closed.title}
+          </h1>
+          <p className="mb-6 text-sm text-zinc-500">{closed.detail}</p>
           <div className="flex gap-2">
             <Button onClick={() => location.reload()}>重新整理</Button>
             <Button variant="secondary" onClick={() => navigate("/")}>
               回首頁
             </Button>
           </div>
-        </Card>
+        </div>
       </Layout>
     );
   }
 
+  const showTopNotices =
+    view.connection.status === "connecting" ||
+    view.connection.status === "reconnecting" ||
+    Boolean(view.lastError) ||
+    !roomToken.persisted(roomId);
+
+  function leaveRoom() {
+    if (
+      view.you?.role === "host" &&
+      view.stream.live &&
+      !window.confirm("目前正在直播中，確定要離開房間嗎？")
+    ) {
+      return;
+    }
+    navigate("/");
+  }
+
   return (
-    <Layout wide>
-      <div className="mb-4 grid gap-3">
-        <ConnectionNotice connection={view.connection} />
-        {view.lastError && <Notice tone="error">{view.lastError}</Notice>}
-        {!roomToken.persisted(roomId) && (
-          <Notice tone="warning">
-            瀏覽器不允許儲存資料，重新整理或關閉分頁後會失去在這個房間的身份。
-          </Notice>
-        )}
-      </div>
+    <Layout
+      flush
+      headerRight={
+        <Button
+          variant="ghost"
+          className="min-h-8 px-2.5 text-xs"
+          onClick={leaveRoom}
+        >
+          <LogOut className="size-3.5" strokeWidth={1.75} />
+          離開房間
+        </Button>
+      }
+    >
+      {showTopNotices && (
+        <div className="grid gap-2 border-b border-zinc-200 bg-white px-4 py-2">
+          <ConnectionNotice connection={view.connection} />
+          {view.lastError && <Notice tone="error">{view.lastError}</Notice>}
+          {!roomToken.persisted(roomId) && (
+            <Notice tone="warning">
+              瀏覽器不允許儲存資料，重新整理或關閉分頁後會失去在這個房間的身份。
+            </Notice>
+          )}
+        </div>
+      )}
       {view.you?.role === "host" && room.host ? (
         <HostView room={room} host={room.host} />
       ) : view.you ? (

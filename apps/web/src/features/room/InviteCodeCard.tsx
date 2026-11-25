@@ -2,17 +2,22 @@ import {
   formatInviteCode,
   type RegenerateInviteCodeResponse,
 } from "@project/shared";
+import { Copy, RefreshCw, Share2 } from "lucide-react";
 import { useState } from "react";
-import { Button, Card, copyText } from "../../components/ui";
+import { copyText } from "../../components/ui";
 import { joinUrl } from "../../lib/router";
 
 export function InviteCodeCard({
   inviteCode,
   inviteCodeVersion = 0,
+  hostName,
+  onlineCount,
   onRegenerate,
 }: {
   inviteCode: string;
   inviteCodeVersion?: number;
+  hostName?: string;
+  onlineCount?: number;
   onRegenerate: () => Promise<RegenerateInviteCodeResponse> | undefined;
 }) {
   const [feedback, setFeedback] = useState("");
@@ -53,37 +58,65 @@ export function InviteCodeCard({
   }
 
   return (
-    <Card title="邀請朋友">
-      <p className="mb-2 text-sm text-zinc-400">把邀請碼或連結傳給朋友：</p>
-      <p
-        className="mb-4 font-mono text-3xl font-semibold tracking-[0.2em] text-white select-all"
-        data-testid="invite-code"
-      >
-        {formatInviteCode(inviteCode)}
-      </p>
-      <div className="flex flex-wrap gap-2">
-        <Button
-          onClick={() => void copy(formatInviteCode(inviteCode), "邀請碼")}
-        >
-          複製邀請碼
-        </Button>
-        <Button
-          variant="secondary"
+    <section className="px-4 py-3.5">
+      <div className="mb-2.5 flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          {hostName && (
+            <p className="truncate text-sm text-zinc-900">
+              <span className="font-semibold text-[#0095d9]">{hostName}</span>{" "}
+              正在主持
+            </p>
+          )}
+          {onlineCount !== undefined && (
+            <p className="text-xs text-zinc-500">{onlineCount} 人在線</p>
+          )}
+        </div>
+        <button
+          type="button"
+          className="inline-flex shrink-0 items-center gap-1 rounded px-2 py-1 text-xs font-medium text-[#0095d9] transition-colors hover:bg-sky-50 focus-visible:ring-2 focus-visible:ring-[#0095d9] focus-visible:outline-none"
           onClick={() => void copy(joinUrl(inviteCode), "邀請連結")}
         >
+          <Share2 className="size-3.5" strokeWidth={1.75} />
           複製邀請連結
-        </Button>
-        <Button
-          variant="ghost"
-          disabled={busy}
-          onClick={() => void regenerate()}
-        >
-          重新產生
-        </Button>
+        </button>
       </div>
-      <p className="mt-3 min-h-5 text-sm text-violet-300" role="status">
+
+      <div className="flex items-center justify-between gap-2 rounded-sm border border-zinc-200 bg-[#f5f6f7] px-2.5 py-1.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="text-xs text-zinc-500">邀請碼</span>
+          <span
+            className="font-mono text-sm font-semibold tracking-[0.14em] text-zinc-900 select-all"
+            data-testid="invite-code"
+          >
+            {formatInviteCode(inviteCode)}
+          </span>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            aria-label="複製邀請碼"
+            title="複製邀請碼"
+            className="inline-flex size-7 items-center justify-center rounded text-zinc-600 transition-colors hover:bg-white hover:text-zinc-900 focus-visible:ring-2 focus-visible:ring-[#0095d9] focus-visible:outline-none"
+            onClick={() => void copy(formatInviteCode(inviteCode), "邀請碼")}
+          >
+            <Copy className="size-3.5" strokeWidth={1.75} />
+          </button>
+          <button
+            type="button"
+            aria-label="重新產生邀請碼"
+            title="重新產生邀請碼"
+            disabled={busy}
+            className="inline-flex size-7 items-center justify-center rounded text-zinc-600 transition-colors hover:bg-white hover:text-zinc-900 focus-visible:ring-2 focus-visible:ring-[#0095d9] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40"
+            onClick={() => void regenerate()}
+          >
+            <RefreshCw className="size-3.5" strokeWidth={1.75} />
+          </button>
+        </div>
+      </div>
+
+      <p className="mt-1.5 text-xs text-[#0095d9] empty:hidden" role="status">
         {shown}
       </p>
-    </Card>
+    </section>
   );
 }
