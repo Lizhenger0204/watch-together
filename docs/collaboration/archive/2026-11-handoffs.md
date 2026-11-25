@@ -504,3 +504,31 @@ T-118 第二輪審查（GPT ultra fast，66a7155）：第一輪 8 項中 6 項�
 
 合併：rebase 到 cf6f5dc（已含 T-122 第一步）後四項檢查全過（啟動器 2、Vitest 442 + 120、e2e 6），fast-forward。
 
+> 2026-11-25 監工決定：T-129 擴大為修正 RoomDO 的產品競態，交給 GPT。這是 ownership.md 中 Claude 目錄（`apps/signal/src`）的單次例外，比照 T-116、T-120。目前沒有其他任務在改 `apps/signal`。
+
+### T-129（GPT，2026-11-25）— DONE
+1. 做了什麼：
+   - `relay-lifecycle.test.ts:440` 的偶發失敗（50 輪失敗 2 輪）其實是產品的競態：加入和踢人都根據記憶體裡的舊成員清單算出新狀態再寫入，後寫入的會蓋掉先前已成功加入的席位。
+   - 修法：新增 `runtime/workers/serial-queue.ts`，RoomDO 分成兩條佇列：
+     - `changes`：房態工作。「讀取最新狀態 → 計算 → 提交 → 更新記憶體 → 發送」整段序列化。
+     - `lifecycle`：需要等目錄 DO 或 SFU 的工作。
+   - 排隊方向固定：`lifecycle` 可以等 `changes`；`changes` 只能用 `waitUntil` 把後續清理派出去，不能反過來等 `lifecycle`。
+   - 新增 `room-sockets.ts`。`room-do.ts` 從 25,360 bytes 降到 24,469 bytes。
+2. 介面變動：無。REST、WebSocket、RPC 與持久化格式都不變。
+3. 已知限制：佇列只排序同一個 DO 實例裡還在執行的工作；狀態與清理進度另外存在 storage，所以休眠不會造成影響。
+4. 驗證方式：
+   - 新增 `room-race.test.ts`：用交易控制強制交錯，涵蓋 4 個案例，修正前 12/12 失敗。
+   - 原本的五人並行測試連續 100 輪 0 失敗；`relay-lifecycle.test.ts` 跑 100 輪 × 11 個案例，全部通過。
+   - 整套 `pnpm test` 連續 5 輪全過。
+   - 反向實驗 3 個。
+
+審查與合併（監工，2026-11-25）：
+- 變更 5 個檔案，都在授權範圍內。
+- 監工逐一核對兩條佇列的巢狀方向：
+  - `closeRetired` 在 `changes` 裡只用 `waitUntil` 派出工作。
+  - `runCleanup`、`applyRotation`、`retainRelayCleanup` 都是在 `lifecycle` 裡等 `changes`。
+  - `closeTracks` 的 DELETE 回呼只在 `lifecycle` 那一側執行。
+  - 沒有找到 `changes` 裡再等 `changes` 的重入。
+- 監工 rebase 到 8927b86 後跑四項檢查，全過（啟動器 2、Vitest 442 + 124、e2e 6）；兩個並發測試檔再重跑 10 輪，0 失敗。
+- 以 fast-forward 合併。
+
