@@ -74,6 +74,7 @@ export function joinRoom(
 ) {
   return request("/api/rooms/join", joinRoomResponseSchema, {
     method: "POST",
+    redirect: "error",
     body: JSON.stringify({ inviteCode, nickname, joinKey }),
   });
 }

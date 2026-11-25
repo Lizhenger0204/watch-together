@@ -1,26 +1,31 @@
-import { formatInviteCode } from "@project/shared";
+import {
+  formatInviteCode,
+  type RegenerateInviteCodeResponse,
+} from "@project/shared";
 import { useState } from "react";
 import { Button, Card, copyText } from "../../components/ui";
 import { joinUrl } from "../../lib/router";
 
 export function InviteCodeCard({
   inviteCode,
+  inviteCodeVersion = 0,
   onRegenerate,
 }: {
   inviteCode: string;
-  onRegenerate: () => Promise<unknown> | undefined;
+  inviteCodeVersion?: number;
+  onRegenerate: () => Promise<RegenerateInviteCodeResponse> | undefined;
 }) {
   const [feedback, setFeedback] = useState("");
   const [busy, setBusy] = useState(false);
-  // 重產成功、等畫面換掉的舊碼。REST 回應可能被較新的推送取代，畫面真的換成新碼才提示成功。
-  const [replacing, setReplacing] = useState<string | null>(null);
+  // 重產成功後記下這次換碼版本；畫面顯示該版本或更新的有效碼時才顯示成功提示。
+  const [confirmedVersion, setConfirmedVersion] = useState<number | null>(null);
   const shown =
-    replacing !== null && inviteCode !== replacing
+    confirmedVersion !== null && inviteCodeVersion >= confirmedVersion
       ? "已產生新的邀請碼"
       : feedback;
 
   async function copy(text: string, what: string) {
-    setReplacing(null);
+    setConfirmedVersion(null);
     setFeedback(
       (await copyText(text)) ? `已複製${what}` : "無法自動複製，請手動選取",
     );
@@ -33,13 +38,13 @@ export function InviteCodeCard({
       )
     )
       return;
-    const before = inviteCode;
     setBusy(true);
-    setReplacing(null);
+    setConfirmedVersion(null);
     try {
-      await onRegenerate();
+      const result = await onRegenerate();
+      if (!result) return;
       setFeedback("");
-      setReplacing(before);
+      setConfirmedVersion(result.inviteCodeVersion);
     } catch {
       setFeedback("重新產生失敗，請稍後再試");
     } finally {

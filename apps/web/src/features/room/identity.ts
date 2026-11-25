@@ -116,24 +116,69 @@ function generateJoinKey() {
 }
 
 /**
- * 這次加入的冪等鍵：沿用尚未完成的那把（回應遺失、或前一個分頁在保存身份前關閉），
+ * 這次加入的冪等鍵：沿用尚未確認結果的那把（回應遺失、或前一個分頁在保存身份前關閉），
  * 否則產生新的。送出前先存進共用儲存，在加入鎖內接手的分頁才讀得到。
  */
 function joinKeyFor(inviteCode: string) {
   const pending = pendingJoinKey.get(inviteCode, JOIN_KEY_TTL_MS);
-  if (pending) return pending;
+  if (pending) {
+    return {
+      key: pending,
+      reusedPending: true,
+      persisted: pendingJoinKey.persisted(inviteCode, pending),
+    };
+  }
   const key = generateJoinKey();
-  pendingJoinKey.set(inviteCode, key);
-  return key;
+  const persisted = pendingJoinKey.set(inviteCode, key);
+  return { key, reusedPending: false, persisted };
+}
+
+/**
+ * 伺服器明確未配位時條件清除待完成鍵：
+ * - 404 / 409 已在 RoomDO 查過重放紀錄，確定此鍵沒有對應的有效席位；
+ * - 400 / 429 / 401 / 403 若發生在本次新產生的鍵，尚未進房就遭拒，也確定未配位；
+ * - INTERNAL 或「既有待完成鍵重試遇到限流」結果未明，保留待完成鍵以便稍後重試。
+ */
+function shouldClearKeyOnError(error: unknown, reusedPending: boolean) {
+  if (!(error instanceof ApiError)) return false;
+  if (error.code === "ROOM_NOT_FOUND" || error.code === "ROOM_FULL") {
+    return true;
+  }
+  return !reusedPending && error.code !== "INTERNAL";
+}
+
+function clearKeyWhenSafe(
+  inviteCode: string,
+  roomId: string,
+  key: string,
+  keyPersisted: boolean,
+) {
+  // 身份已持久化，或這把鍵本來就沒寫進共用儲存（重新整理兩者都會消失）時清除；
+  // 身份存不進去、但鍵已持久化時保留，讓重新整理或另一分頁仍可取回同一席。
+  if (roomToken.persisted(roomId) || !keyPersisted) {
+    pendingJoinKey.clearIfCurrent(inviteCode, key);
+  }
 }
 
 async function joinNew(body: JoinRoomRequest, roomIds: string[]) {
-  const joinKey = joinKeyFor(body.inviteCode);
-  const joined = roomIds.length
-    ? joinRoomResponseSchema.parse(
-        await conditionalJoin({ ...body, excludeRoomIds: roomIds, joinKey }),
-      )
-    : await joinRoom(body.inviteCode, body.nickname, joinKey);
+  const pending = joinKeyFor(body.inviteCode);
+  let joined;
+  try {
+    joined = roomIds.length
+      ? joinRoomResponseSchema.parse(
+          await conditionalJoin({
+            ...body,
+            excludeRoomIds: roomIds,
+            joinKey: pending.key,
+          }),
+        )
+      : await joinRoom(body.inviteCode, body.nickname, pending.key);
+  } catch (error) {
+    if (shouldClearKeyOnError(error, pending.reusedPending)) {
+      pendingJoinKey.clearIfCurrent(body.inviteCode, pending.key);
+    }
+    throw error;
+  }
   // 新身份可能在請求途中由另一分頁寫入。先保住房主或既有成員的憑證。
   let current = roomToken.get(joined.roomId);
   while (current && current !== joined.memberToken) {
@@ -146,25 +191,46 @@ async function joinNew(body: JoinRoomRequest, roomIds: string[]) {
     if (check === "unknown") throw new ApiError("INTERNAL");
     if (check === "valid") {
       roomInviteCode.set(joined.roomId, body.inviteCode);
-      pendingJoinKey.clearIfCurrent(body.inviteCode, joinKey);
+      clearKeyWhenSafe(
+        body.inviteCode,
+        joined.roomId,
+        pending.key,
+        pending.persisted,
+      );
       return { roomId: joined.roomId, reused: true };
     }
     break;
   }
-  const persisted = roomToken.set(joined.roomId, joined.memberToken);
+  const tokenPersisted = roomToken.set(joined.roomId, joined.memberToken);
   roomInviteCode.set(joined.roomId, body.inviteCode);
-  // 身份確實存進共用儲存後才刪鍵：在這之前中斷（或存不進去、重新整理就會遺失），
-  // 下一次加入仍會用同一把鍵取回同一席。
-  if (persisted) pendingJoinKey.clearIfCurrent(body.inviteCode, joinKey);
+  if (tokenPersisted || !pending.persisted) {
+    pendingJoinKey.clearIfCurrent(body.inviteCode, pending.key);
+  }
   return { roomId: joined.roomId, reused: false };
 }
 
 async function join(inviteCode: string, nickname: string) {
+  pendingJoinKey.prune(JOIN_KEY_TTL_MS);
+  const existingPending = pendingJoinKey.get(inviteCode, JOIN_KEY_TTL_MS);
+  const existingPendingPersisted = existingPending
+    ? pendingJoinKey.persisted(inviteCode, existingPending)
+    : false;
+
   const known = roomInviteCode.findRoom(inviteCode);
   const token = known && roomToken.get(known);
   if (known && token) {
     const check = await verifyStoredIdentity(known, token);
-    if (check === "valid") return { roomId: known, reused: true };
+    if (check === "valid") {
+      if (existingPending) {
+        clearKeyWhenSafe(
+          inviteCode,
+          known,
+          existingPending,
+          existingPendingPersisted,
+        );
+      }
+      return { roomId: known, reused: true };
+    }
     if (check === "unknown") throw new ApiError("INTERNAL");
     throw new ApiError(
       check === "unauthorized" ? "UNAUTHORIZED" : "ROOM_NOT_FOUND",
@@ -199,6 +265,14 @@ async function join(inviteCode: string, nickname: string) {
       );
       if (reused.roomId !== roomId) throw new ApiError("INTERNAL");
       roomInviteCode.set(roomId, inviteCode);
+      if (existingPending) {
+        clearKeyWhenSafe(
+          inviteCode,
+          roomId,
+          existingPending,
+          existingPendingPersisted,
+        );
+      }
       return { roomId, reused: true };
     } catch (error) {
       if (!(error instanceof ApiError && error.code === "ROOM_NOT_FOUND"))

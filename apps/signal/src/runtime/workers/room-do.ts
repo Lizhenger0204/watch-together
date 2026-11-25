@@ -254,14 +254,14 @@ export class RoomDO extends DurableObject<Env> {
 
   async regenerateInviteCode(
     hostMemberId: string,
-  ): Promise<Result<{ inviteCode: string }>> {
+  ): Promise<Result<{ inviteCode: string; inviteCodeVersion: number }>> {
     // 和關房一起排隊：依序執行時最後一次換到的碼有效，對照表不留孤兒。
     return this.lifecycle.run(() => this.regenerateInviteCodeNow(hostMemberId));
   }
 
   private async regenerateInviteCodeNow(
     hostMemberId: string,
-  ): Promise<Result<{ inviteCode: string }>> {
+  ): Promise<Result<{ inviteCode: string; inviteCodeVersion: number }>> {
     if (!this.room) return { ok: false, code: "ROOM_NOT_FOUND" };
     if (findMember(this.room, hostMemberId)?.role !== "host") {
       return { ok: false, code: "FORBIDDEN" };
@@ -285,21 +285,31 @@ export class RoomDO extends DurableObject<Env> {
       roomId,
       rotation.opId,
     );
-    await this.applyRotation(inviteCode, hostMemberId);
-    return { ok: true, value: { inviteCode } };
+    const applied = await this.applyRotation(inviteCode, hostMemberId);
+    return { ok: true, value: applied };
   }
 
-  /** 換碼完成：記下新碼並清掉進行中的換碼紀錄（同一筆交易）。 */
-  private async applyRotation(inviteCode: string, hostMemberId?: string) {
-    await this.changes.run(async () => {
-      const room = { ...this.openRoom(), inviteCode };
+  /** 換碼完成：記下新碼、遞增版本、清空舊碼冪等紀錄並清掉進行中換碼（同一筆交易）。 */
+  private async applyRotation(
+    inviteCode: string,
+    hostMemberId?: string,
+  ): Promise<{ inviteCode: string; inviteCodeVersion: number }> {
+    return this.changes.run(async () => {
+      const current = this.openRoom();
+      const changed = current.inviteCode !== inviteCode;
+      const inviteCodeVersion =
+        (current.inviteCodeVersion ?? 0) + (changed ? 1 : 0);
+      // 換碼後舊碼配發的冪等紀錄一律作廢（protocol.md「加入冪等」：鍵不能跨碼使用）。
+      const room = changed
+        ? { ...current, inviteCode, inviteCodeVersion, joinKeys: [] }
+        : current;
       await this.ctx.storage.transaction(async (txn) => {
         await txn.put(STATE_KEY, room);
         await txn.delete(ROTATION_KEY);
       });
       this.room = room;
       if (hostMemberId) {
-        // 只有房主看得到邀請碼。
+        // 只有房主看得到邀請碼與換碼版本。
         this.apply(
           [
             {
@@ -314,6 +324,7 @@ export class RoomDO extends DurableObject<Env> {
           null,
         );
       }
+      return { inviteCode: room.inviteCode, inviteCodeVersion };
     });
   }
 

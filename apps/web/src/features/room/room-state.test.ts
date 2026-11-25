@@ -19,6 +19,7 @@ const snapshot = {
     quality: "standard" as const,
     createdAt: 0,
     inviteCode: "AAAAAAAA",
+    inviteCodeVersion: 0,
   },
   members: [],
   stream: { live: false, title: null, startedAt: null },
@@ -110,25 +111,29 @@ describe("roomReducer：連線品質與重新驗證", () => {
     expect(view.memberStatus).toEqual({});
   });
 
-  test("重產邀請碼的 REST 回應：期間沒有新的房間狀態就直接更新", () => {
+  test("重產邀請碼的 REST 回應：版本較高時依序更新", () => {
     let view = roomReducer(initialRoomView, {
       kind: "message",
       message: snapshot,
     });
-    view = roomReducer(view, { kind: "invite-requested", id: 1 });
     view = roomReducer(view, {
       kind: "invite-code",
-      id: 1,
       inviteCode: "BBBBBBBB",
+      inviteCodeVersion: 1,
     });
-    expect(view.room?.inviteCode).toBe("BBBBBBBB");
-    view = roomReducer(view, { kind: "invite-requested", id: 2 });
+    expect(view.room).toMatchObject({
+      inviteCode: "BBBBBBBB",
+      inviteCodeVersion: 1,
+    });
     view = roomReducer(view, {
       kind: "invite-code",
-      id: 2,
       inviteCode: "CCCCCCCC",
+      inviteCodeVersion: 2,
     });
-    expect(view.room?.inviteCode).toBe("CCCCCCCC");
+    expect(view.room).toMatchObject({
+      inviteCode: "CCCCCCCC",
+      inviteCodeVersion: 2,
+    });
   });
 
   test.each([
@@ -136,26 +141,72 @@ describe("roomReducer：連線品質與重新驗證", () => {
       "room:updated",
       {
         type: "room:updated" as const,
-        room: { ...snapshot.room, inviteCode: "CCCCCCCC" },
+        room: {
+          ...snapshot.room,
+          inviteCode: "CCCCCCCC",
+          inviteCodeVersion: 2,
+        },
       },
     ],
     [
       "room:snapshot",
-      { ...snapshot, room: { ...snapshot.room, inviteCode: "CCCCCCCC" } },
+      {
+        ...snapshot,
+        room: {
+          ...snapshot.room,
+          inviteCode: "CCCCCCCC",
+          inviteCodeVersion: 2,
+        },
+      },
     ],
-  ])("重產的 REST 回應晚於 %s：忽略，保留較新的碼", (_name, newer) => {
+  ])("重產的舊版 REST 回應晚於 %s：忽略，保留版本較高的碼", (_name, newer) => {
     let view = roomReducer(initialRoomView, {
       kind: "message",
       message: snapshot,
     });
-    view = roomReducer(view, { kind: "invite-requested", id: 7 });
     view = roomReducer(view, { kind: "message", message: newer });
     view = roomReducer(view, {
       kind: "invite-code",
-      id: 7,
       inviteCode: "BBBBBBBB",
+      inviteCodeVersion: 1,
     });
-    expect(view.room?.inviteCode).toBe("CCCCCCCC");
+    expect(view.room).toMatchObject({
+      inviteCode: "CCCCCCCC",
+      inviteCodeVersion: 2,
+    });
+  });
+
+  test("雙分頁交錯換碼並斷線：先收到另一分頁的 v1 推送後，仍採用本分頁最後提交的 v2 REST 回應", () => {
+    let view = roomReducer(initialRoomView, {
+      kind: "message",
+      message: snapshot,
+    });
+    // 另一分頁先提交並透過 WS 推送 v1，之後本分頁 WS 斷線。
+    view = roomReducer(view, {
+      kind: "message",
+      message: {
+        type: "room:updated",
+        room: {
+          ...snapshot.room,
+          inviteCode: "BBBBBBBB",
+          inviteCodeVersion: 1,
+        },
+      },
+    });
+    view = roomReducer(view, {
+      kind: "connection",
+      state: { status: "reconnecting", attempt: 1 },
+    });
+    // 本分頁最後提交的 REST 回應帶 v2 抵達：必須採用 v2，不可留在已失效的 v1。
+    view = roomReducer(view, {
+      kind: "invite-code",
+      inviteCode: "CCCCCCCC",
+      inviteCodeVersion: 2,
+    });
+    expect(view.room).toMatchObject({
+      inviteCode: "CCCCCCCC",
+      inviteCodeVersion: 2,
+    });
   });
 
   test("重產期間收到仍帶舊碼的鎖房廣播後斷線：仍採用 REST 的新碼", () => {
@@ -163,7 +214,6 @@ describe("roomReducer：連線品質與重新驗證", () => {
       kind: "message",
       message: snapshot,
     });
-    view = roomReducer(view, { kind: "invite-requested", id: 3 });
     view = roomReducer(view, {
       kind: "message",
       message: {
@@ -177,49 +227,71 @@ describe("roomReducer：連線品質與重新驗證", () => {
     });
     view = roomReducer(view, {
       kind: "invite-code",
-      id: 3,
       inviteCode: "BBBBBBBB",
+      inviteCodeVersion: 1,
     });
-    expect(view.room).toMatchObject({ locked: true, inviteCode: "BBBBBBBB" });
+    expect(view.room).toMatchObject({
+      locked: true,
+      inviteCode: "BBBBBBBB",
+      inviteCodeVersion: 1,
+    });
   });
 
-  test("REST 新碼生效後，晚到的舊碼廣播不會把畫面蓋回舊碼", () => {
+  test("REST 新碼生效後，晚到的舊版廣播或 snapshot 不會把畫面蓋回舊碼", () => {
     let view = roomReducer(initialRoomView, {
       kind: "message",
       message: snapshot,
     });
-    view = roomReducer(view, { kind: "invite-requested", id: 4 });
     view = roomReducer(view, {
       kind: "invite-code",
-      id: 4,
       inviteCode: "BBBBBBBB",
+      inviteCodeVersion: 2,
     });
     view = roomReducer(view, {
       kind: "message",
       message: {
         type: "room:updated",
-        room: { ...snapshot.room, quality: "high" },
+        room: { ...snapshot.room, quality: "high", inviteCodeVersion: 1 },
       },
     });
     expect(view.room).toMatchObject({
       quality: "high",
       inviteCode: "BBBBBBBB",
+      inviteCodeVersion: 2,
+    });
+    view = roomReducer(view, {
+      kind: "message",
+      message: {
+        ...snapshot,
+        room: { ...snapshot.room, locked: true, inviteCodeVersion: 1 },
+      },
+    });
+    expect(view.room).toMatchObject({
+      locked: true,
+      inviteCode: "BBBBBBBB",
+      inviteCodeVersion: 2,
     });
   });
 
-  test("不是最後一次送出的重產回應也忽略", () => {
+  test("亂序抵達的舊版 REST 回應會被忽略", () => {
     let view = roomReducer(initialRoomView, {
       kind: "message",
       message: snapshot,
     });
-    view = roomReducer(view, { kind: "invite-requested", id: 1 });
-    view = roomReducer(view, { kind: "invite-requested", id: 2 });
     view = roomReducer(view, {
       kind: "invite-code",
-      id: 1,
-      inviteCode: "BBBBBBBB",
+      inviteCode: "CCCCCCCC",
+      inviteCodeVersion: 2,
     });
-    expect(view.room?.inviteCode).toBe("AAAAAAAA");
+    view = roomReducer(view, {
+      kind: "invite-code",
+      inviteCode: "BBBBBBBB",
+      inviteCodeVersion: 1,
+    });
+    expect(view.room).toMatchObject({
+      inviteCode: "CCCCCCCC",
+      inviteCodeVersion: 2,
+    });
   });
 });
 

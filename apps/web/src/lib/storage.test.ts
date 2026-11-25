@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   liveIntent,
+  pendingJoinKey,
   resetMemoryStorage,
   roomInviteCode,
   roomToken,
@@ -220,5 +221,80 @@ describe("roomInviteCode", () => {
     resetMemoryStorage();
     expect(roomInviteCode.findRoom("ABCDEFGH")).toBe(ROOM);
     expect(roomInviteCode.findRoom("ZZZZZZZZ")).toBeNull();
+  });
+});
+
+describe("pendingJoinKey", () => {
+  const CODE = "ABCDEFGH";
+  const OTHER_CODE = "XYZW2345";
+
+  test("寫入失敗後，另一分頁寫入的新鍵不會被舊分頁的 clearIfCurrent 誤刪", () => {
+    const storage = new MemoryStorage();
+    vi.stubGlobal("localStorage", storage);
+    const localKey = crypto.randomUUID();
+    const otherTabKey = crypto.randomUUID();
+
+    const denied = vi.spyOn(storage, "setItem").mockImplementation(() => {
+      throw new DOMException("quota", "QuotaExceededError");
+    });
+    expect(pendingJoinKey.set(CODE, localKey, 1000)).toBe(false);
+    expect(pendingJoinKey.persisted(CODE, localKey)).toBe(false);
+    expect(pendingJoinKey.get(CODE, 60_000, 1000) === localKey).toBe(true);
+    denied.mockRestore();
+
+    // 另一分頁成功寫入自己的待完成鍵。
+    storage.setItem(`join:${CODE}:key`, `2000:${otherTabKey}`);
+
+    // 舊分頁清理自己那把：只清記憶體，必須保留另一分頁在 localStorage 的值。
+    pendingJoinKey.clearIfCurrent(CODE, localKey);
+    expect(storage.getItem(`join:${CODE}:key`) === `2000:${otherTabKey}`).toBe(
+      true,
+    );
+    expect(pendingJoinKey.get(CODE, 60_000, 2000) === otherTabKey).toBe(true);
+  });
+
+  test("正常寫入後若另一分頁已清除，本分頁不會讀回舊鍵", () => {
+    const storage = new MemoryStorage();
+    vi.stubGlobal("localStorage", storage);
+    const key = crypto.randomUUID();
+    expect(pendingJoinKey.set(CODE, key, 1000)).toBe(true);
+    expect(pendingJoinKey.persisted(CODE, key)).toBe(true);
+    storage.removeItem(`join:${CODE}:key`);
+    expect(pendingJoinKey.get(CODE, 60_000, 1000)).toBeNull();
+  });
+
+  test("逾期讀取會即時刪除儲存項；prune 會清掉其他邀請碼的逾期鍵", () => {
+    const storage = new MemoryStorage();
+    vi.stubGlobal("localStorage", storage);
+    const expiredA = crypto.randomUUID();
+    const expiredB = crypto.randomUUID();
+    const fresh = crypto.randomUUID();
+    pendingJoinKey.set(CODE, expiredA, 1000);
+    pendingJoinKey.set(OTHER_CODE, expiredB, 1000);
+    pendingJoinKey.set("MNPQ6789", fresh, 50_000);
+
+    expect(pendingJoinKey.get(CODE, 10_000, 11_000)).toBeNull();
+    expect(storage.getItem(`join:${CODE}:key`)).toBeNull();
+
+    pendingJoinKey.prune(10_000, 55_000);
+    expect(storage.getItem(`join:${OTHER_CODE}:key`)).toBeNull();
+    expect(pendingJoinKey.get("MNPQ6789", 10_000, 55_000) === fresh).toBe(true);
+  });
+
+  test("removeItem 失敗時隱藏刪不掉的舊鍵，但仍採用其他分頁之後寫入的新鍵", () => {
+    const storage = new MemoryStorage();
+    vi.stubGlobal("localStorage", storage);
+    const oldKey = crypto.randomUUID();
+    const newKey = crypto.randomUUID();
+    pendingJoinKey.set(CODE, oldKey, 1000);
+    const denied = vi.spyOn(storage, "removeItem").mockImplementation(() => {
+      throw new Error("denied");
+    });
+    pendingJoinKey.clearIfCurrent(CODE, oldKey);
+    expect(pendingJoinKey.get(CODE, 60_000, 1000)).toBeNull();
+    denied.mockRestore();
+
+    storage.setItem(`join:${CODE}:key`, `2000:${newKey}`);
+    expect(pendingJoinKey.get(CODE, 60_000, 2000) === newKey).toBe(true);
   });
 });

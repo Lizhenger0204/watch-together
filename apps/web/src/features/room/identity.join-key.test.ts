@@ -1,11 +1,22 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { JOIN_KEY_TTL_MS, joinKeySchema } from "@project/shared";
-import { resetMemoryStorage, roomToken } from "../../lib/storage";
+import {
+  pendingJoinKey,
+  resetMemoryStorage,
+  roomToken,
+} from "../../lib/storage";
 import { joinKeepingIdentity, resetComparedRooms } from "./identity";
-import { CODE, ROOM, persistedTokens } from "./identity.fixtures";
+import {
+  CODE,
+  ROOM,
+  ROTATED,
+  TOKEN,
+  mockApi,
+  persistedTokens,
+} from "./identity.fixtures";
 
-// protocol.md「加入冪等」：每次按加入產生一把 joinKey，送出前存進共用儲存；
-// 回應遺失或分頁在保存身份前關閉，重試與接手的分頁都沿用同一把鍵，只配一席。
+// protocol.md「加入冪等」：每次新加入產生一把 joinKey，送出前存進共用儲存；
+// 結果未明時重試與接手分頁沿用同一把鍵；成功保存、沿用或確定未配位時條件清除。
 
 const keyStorage = `join:${CODE}:key`;
 
@@ -23,13 +34,27 @@ afterEach(() => {
 function idempotentServer() {
   const seats = new Map<string, string>();
   const sent: (string | undefined)[] = [];
+  const redirects: (RequestRedirect | undefined)[] = [];
   let loseNext = false;
+  let nextError: { status: number; code: string } | null = null;
   const fetcher = vi.fn<typeof fetch>(async (path, init) => {
     expect(String(path)).toBe("/api/rooms/join");
+    redirects.push(init?.redirect);
     const body: { joinKey?: string } = JSON.parse(String(init?.body));
     sent.push(body.joinKey);
-    // 鍵在送出前就已存進共用儲存。
-    expect(localStorage.getItem(keyStorage)).toContain(body.joinKey);
+    // 鍵在送出前就已寫入（正常儲存時可在共用儲存讀到）。
+    const stored = localStorage.getItem(keyStorage);
+    if (stored !== null) {
+      expect(Boolean(body.joinKey && stored.includes(body.joinKey))).toBe(true);
+    }
+    if (nextError) {
+      const err = nextError;
+      nextError = null;
+      return Response.json(
+        { error: { code: err.code, message: "測試錯誤" } },
+        { status: err.status },
+      );
+    }
     let token = body.joinKey && seats.get(body.joinKey);
     if (!token) {
       token = crypto.randomUUID();
@@ -44,15 +69,19 @@ function idempotentServer() {
   vi.stubGlobal("fetch", fetcher);
   return {
     sent,
+    redirects,
     seats: () => seats.size,
     loseResponse: () => {
       loseNext = true;
+    },
+    failNext: (status: number, code: string) => {
+      nextError = { status, code };
     },
   };
 }
 
 describe("加入冪等鍵", () => {
-  test("回應遺失後重試：沿用同一把鍵，只配一席", async () => {
+  test("回應遺失後重試：沿用同一把鍵，只配一席，且一般加入路徑也禁用轉址", async () => {
     const server = idempotentServer();
     server.loseResponse();
     await expect(joinKeepingIdentity(CODE, "朋友")).rejects.toMatchObject({
@@ -64,7 +93,8 @@ describe("加入冪等鍵", () => {
     });
     expect(server.seats()).toBe(1);
     expect(server.sent).toHaveLength(2);
-    expect(server.sent[1]).toBe(server.sent[0]);
+    expect(server.sent[1] === server.sent[0]).toBe(true);
+    expect(server.redirects).toEqual(["error", "error"]);
     expect(joinKeySchema.safeParse(server.sent[0]).success).toBe(true);
     // 身份存好後刪除鍵；下一次加入是新的一次。
     expect(localStorage.getItem(keyStorage)).toBeNull();
@@ -82,19 +112,22 @@ describe("加入冪等鍵", () => {
       reused: false,
     });
     expect(server.seats()).toBe(1);
-    expect(server.sent[1]).toBe(server.sent[0]);
-    expect(storage.roomToken.get(ROOM)).toBeTruthy();
+    expect(server.sent[1] === server.sent[0]).toBe(true);
+    expect(Boolean(storage.roomToken.get(ROOM))).toBe(true);
+    expect(localStorage.getItem(keyStorage)).toBeNull();
   });
 
-  test("超過期限的鍵不再使用，改產生新的", async () => {
+  test("超過期限的鍵不再使用並清掉其他邀請碼的逾期鍵", async () => {
     const server = idempotentServer();
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(1_000_000);
+    pendingJoinKey.set(ROTATED, crypto.randomUUID(), 1_000_000);
     server.loseResponse();
     await expect(joinKeepingIdentity(CODE, "朋友")).rejects.toBeDefined();
     vi.setSystemTime(1_000_000 + JOIN_KEY_TTL_MS);
     await joinKeepingIdentity(CODE, "朋友");
-    expect(server.sent[1]).not.toBe(server.sent[0]);
+    expect(server.sent[1] === server.sent[0]).toBe(false);
+    expect(localStorage.getItem(`join:${ROTATED}:key`)).toBeNull();
   });
 
   test("成功加入後再加入另一房：每次按加入都是新的鍵", async () => {
@@ -102,6 +135,89 @@ describe("加入冪等鍵", () => {
     await joinKeepingIdentity(CODE, "朋友");
     roomToken.clear(ROOM);
     await joinKeepingIdentity(CODE, "朋友");
-    expect(server.sent[1]).not.toBe(server.sent[0]);
+    expect(server.sent[1] === server.sent[0]).toBe(false);
+  });
+
+  test.each([
+    [404, "ROOM_NOT_FOUND"],
+    [409, "ROOM_FULL"],
+    [429, "RATE_LIMITED"],
+  ] as const)(
+    "新加入明確收到 %i（%s）時清除待完成鍵，下次按加入改用新鍵",
+    async (status, code) => {
+      const server = idempotentServer();
+      server.failNext(status, code);
+      await expect(joinKeepingIdentity(CODE, "朋友")).rejects.toMatchObject({
+        code,
+      });
+      expect(localStorage.getItem(keyStorage)).toBeNull();
+      await joinKeepingIdentity(CODE, "朋友");
+      expect(server.sent[1] === server.sent[0]).toBe(false);
+    },
+  );
+
+  test("先前結果未明的待完成鍵重試時遇到 429 限流：保留鍵，稍後重試仍只配一席", async () => {
+    const server = idempotentServer();
+    server.loseResponse();
+    await expect(joinKeepingIdentity(CODE, "朋友")).rejects.toMatchObject({
+      code: "INTERNAL",
+    });
+    server.failNext(429, "RATE_LIMITED");
+    await expect(joinKeepingIdentity(CODE, "朋友")).rejects.toMatchObject({
+      code: "RATE_LIMITED",
+    });
+    expect(localStorage.getItem(keyStorage)).not.toBeNull();
+    await expect(joinKeepingIdentity(CODE, "朋友")).resolves.toEqual({
+      roomId: ROOM,
+      reused: false,
+    });
+    expect(server.seats()).toBe(1);
+    expect(server.sent[2] === server.sent[0]).toBe(true);
+    expect(localStorage.getItem(keyStorage)).toBeNull();
+  });
+
+  test("換碼後透過 existingRoomId 成功沿用身份：不留待完成鍵", async () => {
+    persistedTokens([[ROOM, TOKEN]]);
+    const api = mockApi();
+    api.rotate();
+    await expect(joinKeepingIdentity(ROTATED, "朋友")).resolves.toEqual({
+      roomId: ROOM,
+      reused: true,
+    });
+    expect(localStorage.getItem(`join:${ROTATED}:key`)).toBeNull();
+  });
+
+  test("寫入共用儲存持續失敗時：成功加入後清除記憶體鍵；鍵已持久化但憑證存不進去時保留持久鍵", async () => {
+    const server = idempotentServer();
+    const denyAll = vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+      throw new DOMException("quota", "QuotaExceededError");
+    });
+    await expect(joinKeepingIdentity(CODE, "朋友")).resolves.toEqual({
+      roomId: ROOM,
+      reused: false,
+    });
+    denyAll.mockRestore();
+    // 鍵沒持久化：成功後記憶體鍵已清掉，清掉憑證再加入會產生新鍵。
+    expect(pendingJoinKey.get(CODE, JOIN_KEY_TTL_MS)).toBeNull();
+    roomToken.clear(ROOM);
+
+    // 鍵寫得進去，但之後寫憑證失敗：保留已持久化的鍵，讓重整或別的分頁仍可取回同一席。
+    let writes = 0;
+    const realSetItem = localStorage.setItem.bind(localStorage);
+    const denySecond = vi
+      .spyOn(localStorage, "setItem")
+      .mockImplementation((k, v) => {
+        if (++writes >= 2) {
+          throw new DOMException("quota", "QuotaExceededError");
+        }
+        realSetItem(k, v);
+      });
+    await expect(joinKeepingIdentity(CODE, "朋友")).resolves.toEqual({
+      roomId: ROOM,
+      reused: false,
+    });
+    denySecond.mockRestore();
+    expect(server.sent[1] === server.sent[0]).toBe(false);
+    expect(localStorage.getItem(keyStorage)).not.toBeNull();
   });
 });

@@ -131,9 +131,13 @@ test("pruneStaleMembers 沒有變動時回傳同一個物件", () => {
   expect(pruneStaleMembers(state, new Set(), T0, config)).toBe(state);
 });
 
-test("只有房主看得到邀請碼", () => {
-  expect(toRoomInfo(room(), "host").inviteCode).toBe("ABCDEFGH");
+test("只有房主看得到邀請碼與換碼版本", () => {
+  expect(toRoomInfo(room(), "host")).toMatchObject({
+    inviteCode: "ABCDEFGH",
+    inviteCodeVersion: 0,
+  });
   expect(toRoomInfo(room(), "member")).not.toHaveProperty("inviteCode");
+  expect(toRoomInfo(room(), "member")).not.toHaveProperty("inviteCodeVersion");
 });
 
 test("toMembers 依連線標示 online", () => {

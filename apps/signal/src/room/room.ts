@@ -32,6 +32,8 @@ export type RoomState = {
   mode: Mode;
   quality: Quality;
   inviteCode: string;
+  /** 換碼版本（初始 0，每次成功換碼遞增）。舊房間沒有此欄位，視為 0。 */
+  inviteCodeVersion?: number;
   members: MemberRecord[];
   stream: StreamInfo;
   /** 最後一人離線的時間；有人在線時為 null。 */
@@ -61,6 +63,7 @@ export function createRoomState(input: {
     mode: "p2p",
     quality: DEFAULT_QUALITY,
     inviteCode: input.inviteCode,
+    inviteCodeVersion: 0,
     members: [
       {
         ...input.host,
@@ -191,7 +194,13 @@ export function toRoomInfo(state: RoomState, role: Role): RoomInfo {
     quality: state.quality,
     createdAt: state.createdAt,
   };
-  return role === "host" ? { ...info, inviteCode: state.inviteCode } : info;
+  return role === "host"
+    ? {
+        ...info,
+        inviteCode: state.inviteCode,
+        inviteCodeVersion: state.inviteCodeVersion ?? 0,
+      }
+    : info;
 }
 
 export function toMembers(state: RoomState, online: Online): Member[] {

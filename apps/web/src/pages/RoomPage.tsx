@@ -207,6 +207,7 @@ function HostView({
         {view.room?.inviteCode && (
           <InviteCodeCard
             inviteCode={view.room.inviteCode}
+            inviteCodeVersion={view.room.inviteCodeVersion ?? 0}
             onRegenerate={actions.regenerateInviteCode}
           />
         )}

@@ -1,6 +1,7 @@
 import type {
   CreateRoomResponse,
   JoinRoomResponse,
+  RegenerateInviteCodeResponse,
   Role,
 } from "@project/shared";
 import type { Result } from "./errors";
@@ -25,7 +26,7 @@ export interface RoomService {
   regenerateInviteCode(
     roomId: string,
     hostMemberId: string,
-  ): Promise<Result<{ inviteCode: string }>>;
+  ): Promise<Result<RegenerateInviteCodeResponse>>;
   /**
    * WebSocket upgrade。roomId 未檢查格式：格式錯誤、房間不存在、已關閉或關房中，
    * 一律接受後以 4001（`room_closed`）關閉，回應完全相同。

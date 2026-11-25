@@ -2,6 +2,7 @@ import {
   JOIN_KEY_TTL_MS,
   createRoomResponseSchema,
   joinRoomResponseSchema,
+  regenerateInviteCodeResponseSchema,
 } from "@project/shared";
 import { env, runInDurableObject } from "cloudflare:test";
 import { expect, test, vi } from "vitest";
@@ -11,7 +12,7 @@ import { generateToken } from "../src/room/crypto";
 import type { RoomState } from "../src/room/room";
 import { workersServices } from "../src/runtime/workers/services";
 import type { SerialQueue } from "../src/runtime/workers/serial-queue";
-import { deferred, hostSocket } from "./room-fixture";
+import { connect, deferred, hostSocket } from "./room-fixture";
 
 // protocol.md「加入冪等」：同一把 joinKey 重試時沿用已配置的席位。
 
@@ -56,13 +57,30 @@ async function memberCount(roomId: string) {
   return (await state(roomId))?.members.length;
 }
 
+/** 用布林比對身份回應，避免斷言失敗時在輸出中印出測試憑證。 */
+function sameJoinResponse(
+  a: { status: number; body: unknown },
+  b: { status: number; body: unknown },
+) {
+  if (a.status !== b.status) return false;
+  const pa = joinRoomResponseSchema.safeParse(a.body);
+  const pb = joinRoomResponseSchema.safeParse(b.body);
+  return (
+    pa.success &&
+    pb.success &&
+    pa.data.roomId === pb.data.roomId &&
+    pa.data.memberId === pb.data.memberId &&
+    pa.data.memberToken === pb.data.memberToken
+  );
+}
+
 test("同一把鍵重試：回傳同一份身份，不再多配一席", async () => {
   const { roomId, inviteCode } = await room();
   const joinKey = generateToken();
   const first = await join({ inviteCode, joinKey });
   expect(first.status).toBe(200);
   const again = await join({ inviteCode, joinKey, nickname: "改名" });
-  expect(again).toEqual(first);
+  expect(sameJoinResponse(again, first)).toBe(true);
   expect(joinRoomResponseSchema.parse(again.body).roomId).toBe(roomId);
   expect(await memberCount(roomId)).toBe(2);
   const members = (await state(roomId))?.members ?? [];
@@ -81,7 +99,7 @@ test("同一把鍵同時送出兩筆：只配一席，兩筆結果相同", async
     join({ inviteCode, joinKey }),
   ]);
   expect(a.status).toBe(200);
-  expect(b).toEqual(a);
+  expect(sameJoinResponse(b, a)).toBe(true);
   expect(await memberCount(roomId)).toBe(2);
 });
 
@@ -114,8 +132,13 @@ test("第一筆已決定配位、尚未提交時收到同鍵的第二筆：仍�
       await secondQueued.promise;
       resume.resolve();
       const [a, b] = await Promise.all([first, second]);
-      expect(a.ok).toBe(true);
-      expect(b).toEqual(a);
+      expect(a.ok && b.ok).toBe(true);
+      expect(
+        a.ok &&
+          b.ok &&
+          a.value.memberId === b.value.memberId &&
+          a.value.memberToken === b.value.memberToken,
+      ).toBe(true);
       const saved = await s.storage.get<RoomState>("state");
       expect(saved?.members.map((m) => m.nickname)).toEqual(["房主", "甲"]);
     } finally {
@@ -134,14 +157,19 @@ test("重放不受鎖房、滿房與排除名單影響", async () => {
   for (let i = 0; i < 6; i++)
     expect((await join({ inviteCode })).status).toBe(200);
   expect((await join({ inviteCode })).status).toBe(409);
-  expect(await join({ inviteCode, joinKey, excludeRoomIds: [roomId] })).toEqual(
-    first,
-  );
+  expect(
+    sameJoinResponse(
+      await join({ inviteCode, joinKey, excludeRoomIds: [roomId] }),
+      first,
+    ),
+  ).toBe(true);
   const host = await hostSocket(created);
   host.send({ type: "room:update", locked: true, reqId: "lock" });
   expect(await host.next("ack")).toMatchObject({ reqId: "lock", ok: true });
   expect((await join({ inviteCode })).status).toBe(404);
-  expect(await join({ inviteCode, joinKey })).toEqual(first);
+  expect(sameJoinResponse(await join({ inviteCode, joinKey }), first)).toBe(
+    true,
+  );
   expect(await memberCount(roomId)).toBe(8);
   host.close();
 });
@@ -155,7 +183,7 @@ test("超過期限的鍵視為新加入", async () => {
   try {
     const later = await join({ inviteCode, joinKey });
     expect(later.status).toBe(200);
-    expect(later).not.toEqual(first);
+    expect(sameJoinResponse(later, first)).toBe(false);
     const records = (await state(roomId))?.joinKeys ?? [];
     expect(records).toHaveLength(1); // 過期的紀錄已清掉
   } finally {
@@ -178,8 +206,8 @@ test("當時配置的成員已被踢出：重放照一般新加入處理", async
   const again = joinRoomResponseSchema.parse(
     (await join({ inviteCode, joinKey })).body,
   );
-  expect(again.memberId).not.toBe(first.memberId);
-  expect(again.memberToken).not.toBe(first.memberToken);
+  expect(again.memberId === first.memberId).toBe(false);
+  expect(again.memberToken === first.memberToken).toBe(false);
   // 被踢成員的舊紀錄已清掉，只剩這次的。
   const records = (await state(created.roomId))?.joinKeys ?? [];
   expect(records.map((r) => r.memberId)).toEqual([again.memberId]);
@@ -199,6 +227,110 @@ test("重新產生邀請碼後，舊碼帶同一把鍵也回相同的 404", asyn
     status: 404,
     body: errorBody("ROOM_NOT_FOUND"),
   });
+});
+
+test("重新產生邀請碼後，舊碼配發的紀錄作廢：新碼帶舊鍵受鎖房與排除名單限制、原成員可沿用，且換碼版本遞增", async () => {
+  const created = await room();
+  const keyOpen = generateToken();
+  const keyExcluded = generateToken();
+  const keyLocked = generateToken();
+  const first = joinRoomResponseSchema.parse(
+    (await join({ inviteCode: created.inviteCode, joinKey: keyOpen })).body,
+  );
+  expect(
+    (await join({ inviteCode: created.inviteCode, joinKey: keyExcluded }))
+      .status,
+  ).toBe(200);
+  expect(
+    (await join({ inviteCode: created.inviteCode, joinKey: keyLocked })).status,
+  ).toBe(200);
+  expect((await state(created.roomId))?.joinKeys ?? []).toHaveLength(3);
+
+  const host = await hostSocket(created);
+  const rotated1 = await post(
+    `/api/rooms/${created.roomId}/invite-code`,
+    undefined,
+    created.hostToken,
+  );
+  expect(rotated1.status).toBe(200);
+  const firstRotation = regenerateInviteCodeResponseSchema.parse(
+    await rotated1.json(),
+  );
+  expect(firstRotation.inviteCodeVersion).toBe(1);
+  expect(await host.next("room:updated")).toMatchObject({
+    room: {
+      inviteCode: firstRotation.inviteCode,
+      inviteCodeVersion: 1,
+    },
+  });
+  expect((await state(created.roomId))?.joinKeys ?? []).toEqual([]);
+
+  // 開放房：帶舊碼時期的鍵走一般新加入，配到新的成員。
+  const again = joinRoomResponseSchema.parse(
+    (await join({ inviteCode: firstRotation.inviteCode, joinKey: keyOpen }))
+      .body,
+  );
+  expect(again.memberId === first.memberId).toBe(false);
+  expect(again.memberToken === first.memberToken).toBe(false);
+
+  // 排除名單：帶舊碼時期的鍵不可繞過 excludeRoomIds。
+  expect(
+    (
+      await join({
+        inviteCode: firstRotation.inviteCode,
+        joinKey: keyExcluded,
+        excludeRoomIds: [created.roomId],
+      })
+    ).status,
+  ).toBe(404);
+
+  // 鎖房後：帶舊碼時期的鍵不可繞過鎖房。
+  host.send({ type: "room:update", locked: true, reqId: "lock" });
+  expect(await host.next("ack")).toMatchObject({ reqId: "lock", ok: true });
+  expect(
+    (await join({ inviteCode: firstRotation.inviteCode, joinKey: keyLocked }))
+      .status,
+  ).toBe(404);
+
+  // 既有成員仍可用原憑證沿用原席位回房。
+  const reused = await post(
+    joinPath,
+    {
+      inviteCode: firstRotation.inviteCode,
+      nickname: "原成員",
+      existingRoomId: created.roomId,
+    },
+    first.memberToken,
+  );
+  expect(reused.status).toBe(200);
+  expect(await reused.json()).toEqual({
+    roomId: created.roomId,
+    memberId: first.memberId,
+    reused: true,
+  });
+
+  // 再次換碼：版本遞增為 2，房主重新連線的 snapshot 也帶著版本 2。
+  const rotated2 = await post(
+    `/api/rooms/${created.roomId}/invite-code`,
+    undefined,
+    created.hostToken,
+  );
+  expect(rotated2.status).toBe(200);
+  const secondRotation = regenerateInviteCodeResponseSchema.parse(
+    await rotated2.json(),
+  );
+  expect(secondRotation.inviteCodeVersion).toBe(2);
+  host.close();
+
+  const reconnected = await connect(created.roomId);
+  reconnected.auth(created.hostToken);
+  expect(await reconnected.next("room:snapshot")).toMatchObject({
+    room: {
+      inviteCode: secondRotation.inviteCode,
+      inviteCodeVersion: 2,
+    },
+  });
+  reconnected.close();
 });
 
 test("鍵格式錯誤回 400；沿用請求忽略鍵", async () => {
@@ -233,11 +365,11 @@ test("storage 不保存鍵與 token 的明文；鍵不能在別的房間取回�
       ...(await s.storage.list()),
     ]),
   );
-  expect(saved).not.toContain(joinKey);
-  expect(saved).not.toContain(joined.memberToken);
+  expect(saved.includes(joinKey)).toBe(false);
+  expect(saved.includes(joined.memberToken)).toBe(false);
   const other = joinRoomResponseSchema.parse(
     (await join({ inviteCode: b.inviteCode, joinKey })).body,
   );
-  expect(other.memberToken).not.toBe(joined.memberToken);
+  expect(other.memberToken === joined.memberToken).toBe(false);
   expect(other.roomId).toBe(b.roomId);
 });
