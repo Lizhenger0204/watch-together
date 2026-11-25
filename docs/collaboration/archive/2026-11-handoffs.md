@@ -468,3 +468,39 @@ T-118 第二輪審查（GPT ultra fast，66a7155）：第一輪 8 項中 6 項�
 
 合併：rebase 到 dc1dd71 後四項檢查全過（啟動器 2、Vitest 400 + 120、e2e 6），以 fast-forward 合併。
 
+> 2026-11-25 T-121（`claude/T-121-frontend-followups`，b012b17～64d90c5，共 5 個 commit）完成 12 項，送 GPT 審查。第 11 項與 §6 衝突，改列為 T-128。T-121 檢查期間發現 signal 的 `relay-lifecycle.test.ts` 偶發失敗，開為 T-129（GPT）。T-129 只改 `apps/signal/test`，不會和審查中的分支衝突。
+
+### T-121（Claude 子對話，2026-11-25）— DONE
+1. 做了什麼：完成 12 項（第 11 項改列 T-128）。
+   - `roomToken.rooms()` 列出記憶體裡的房號。
+   - 收到 4401 時只用 `clearIfCurrent` 清掉這一份憑證。
+   - 被 4000 取代或明確停播時，舊分頁的開播意圖失效（`liveIntent.stopEverywhere`）。
+   - 片名以字素截斷。
+   - 修掉 signal 的假綠測試。
+   - `host_closed` 依 `closedBy` 顯示不同文案。
+   - 重產邀請碼時記錄 `roomVersion`。
+   - 跨限流時窗時記住已比對過的房間。
+   - 沒有 Web Locks 時改用 IndexedDB 租約（`lib/tab-lock.ts`）。
+   - 片名請求加上序號。
+   - 晚到的停播 ack 不覆寫狀態。
+   - streaming.md §9 修掉一句。
+   - host-session 拆檔（`host-session-flows.ts`、`host-session-title.ts`）。
+2. 介面變動：`useRoom` 多回傳 `token`；新增 `roomToken.rooms()`、`liveIntent.stopEverywhere`、`lib/tab-lock.ts`。對外協定不變。
+3. 已知限制：第 11 項見 T-128；審查遺留的項目見 T-130。
+4. 驗證方式：四項檢查全過；16 個反向實驗。
+
+審查（GPT ultra fast，64d90c5）判「需退回」，阻擋只有一項：沒有 `Intl.Segmenter` 的瀏覽器在載入時就拋錯，首頁與邀請頁都是白畫面。
+- 已驗證通過：記憶體房主重現、4401、4000 意圖、片名序號、晚到 ack、跨時窗；Web Locks 關閉時兩頁並行只配 1 席，關頁後 10 秒內可以接手。
+- 與 T-122 bb6af68 合併沒有衝突，Chrome 三方回歸測試通過。
+
+監工小修（4aff4b2）：
+- 不在模組頂層建立 `Intl.Segmenter`，改成用到時才偵測；沒有它時改用 `fallbackGraphemes` 的近似切法。
+- 反向實驗：改回頂層建立，載入測試就失敗。
+- 用 Chromium 刪掉 `Intl.Segmenter` 實測，首頁與邀請頁都能正常渲染。
+
+應修處理：
+- 「舊版開播意圖格式」不必遷移，因為 v1 還沒發布，沒有既有使用者。
+- 其餘列為 T-130。
+
+合併：rebase 到 cf6f5dc（已含 T-122 第一步）後四項檢查全過（啟動器 2、Vitest 442 + 120、e2e 6），fast-forward。
+
