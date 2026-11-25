@@ -46,7 +46,7 @@
 | T-126 | 細緻畫質調整（Claude 先改 spec，實作分工待定）：取代固定的畫質預設。房主在播放器的畫質面板用三條分段滑桿即時調整：解析度 720P～1080P（不超過片源）；位元率 8／10／15 Mbps／原片位元率；FPS 暫定 24／30／60／原片。這是契約變更：先改 streaming.md §2、protocol.md、packages/shared 的 `QUALITY_PRESETS` 與 quality 型別，再改 `common/encoding`（`setQuality` 即時套用）與 UI。P2P 60 Mbps 總上傳量提示保留，但不強制 | Claude | T-125 | TODO |
 | T-127 | 聊天室與彈幕（Claude 先改 spec，實作分工待定）：新增聊天訊息（protocol.md 與 shared schema）。不保留歷史紀錄，加入後只看得到之後的訊息；房主不需要禁言或刪訊息。伺服器仍要檢查成員身份、被踢的人不能發言、限流、長度上限，並以純文字顯示。房主與收看者都能發言。彈幕從右往左，有開關與密度設定，全螢幕時仍會顯示（全螢幕的對象改成播放器容器） | Claude | T-125 | TODO |
 | T-128 | 切模式第 2 步等待 `room:updated` 逾時（結果不明）的處理（T-121 第 11 項，與 streaming.md §6 現行條文衝突）：先改 §6，區分兩種情況——**被拒**（`ack ok:false`）時照原模式重建；**逾時**時不要重建，維持「直播暫停中」。再由 `SignalClient` 提供重新驗證的方法（例如 `resync()`），拿到新的 snapshot 後依 snapshot 的模式重建 | Claude | T-121 | TODO |
-| T-129 | 不穩定測試：`apps/signal/test/relay-lifecycle.test.ts`（T-120 新增）在 T-121 的檢查中 13 次失敗 1 次。找出原因（時序、共用狀態、alarm 或假時鐘），修成穩定，並用重複執行證明 | GPT | T-120 | DOING |
+| T-129 | **RoomDO 產品競態**（從不穩定測試查出）：加入與踢人都從記憶體的 `this.room` 算出新成員清單後才交給 `saveTransition()`，提交後才更新 `this.room`。兩個操作讀到同一份舊清單時，後寫的會蓋掉先前已成功加入的席位（新成員拿到 200，卻立刻驗證失敗）。`relay-lifecycle.test.ts:440` 50 輪中失敗 2 輪。要把會改寫房間狀態的操作序列化，範圍從讀取最新狀態、計算變更，一直到提交交易、更新記憶體，並補上能穩定重現的回歸測試 | GPT | T-120 | DOING |
 
 可平行的組合：T-101 完成後 → T-102（Claude）∥ T-106（GPT）；T-102 完成後 → T-103、T-105（Claude，依序）∥ T-104（GPT）；T-103 完成後 → T-108、T-112（GPT）。T-115（Claude）可與 T-105／T-114 的審查同時進行；T-114 與 T-115 都合併後 → T-107（GPT）∥ T-109、T-110（Claude）。
 
@@ -97,3 +97,6 @@
 
 
 > 2026-11-25 T-121（`claude/T-121-frontend-followups`，b012b17～64d90c5，共 5 個 commit）完成 12 項，送 GPT 審查。第 11 項與 §6 衝突，改列為 T-128。T-121 檢查期間發現 signal 的 `relay-lifecycle.test.ts` 偶發失敗，開為 T-129（GPT）。T-129 只改 `apps/signal/test`，不會和審查中的分支衝突。
+
+> 2026-11-25 監工決定：T-129 擴大為修正 RoomDO 的產品競態，交給 GPT。這是 ownership.md 中 Claude 目錄（`apps/signal/src`）的單次例外，比照 T-116、T-120。目前沒有其他任務在改 `apps/signal`。
+
