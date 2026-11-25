@@ -47,7 +47,7 @@
 | T-127 | 聊天室與彈幕（Gemini 先改 spec，實作分工待定；暫不派工）：新增聊天訊息（protocol.md 與 shared schema）。不保留歷史紀錄，加入後只看得到之後的訊息；房主不需要禁言或刪訊息。伺服器仍要檢查成員身份、被踢的人不能發言、限流、長度上限，並以純文字顯示。房主與收看者都能發言。彈幕從右往左，有開關與密度設定，全螢幕時仍會顯示（全螢幕的對象改成播放器容器） | Gemini | T-125 | TODO |
 | T-128 | 切模式第 2 步等待 `room:updated` 逾時（結果不明）的處理（T-121 第 11 項，與 streaming.md §6 現行條文衝突）：先改 §6，區分兩種情況——**被拒**（`ack ok:false`）時照原模式重建；**逾時**時不要重建，維持「直播暫停中」。再由 `SignalClient` 提供重新驗證的方法（例如 `resync()`），拿到新的 snapshot 後依 snapshot 的模式重建 | Claude | T-121, T-122 | TODO |
 | T-129 | **RoomDO 產品競態**（從不穩定測試查出）：加入與踢人都從記憶體的 `this.room` 算出新成員清單後才交給 `saveTransition()`，提交後才更新 `this.room`。兩個操作讀到同一份舊清單時，後寫的會蓋掉先前已成功加入的席位（新成員拿到 200，卻立刻驗證失敗）。`relay-lifecycle.test.ts:440` 50 輪中失敗 2 輪。要把會改寫房間狀態的操作序列化，範圍從讀取最新狀態、計算變更，一直到提交交易、更新記憶體，並補上能穩定重現的回歸測試 | GPT | T-120 | DONE |
-| T-130 | T-121 審查遺留（前端）：重產邀請碼期間收到「同碼」的鎖房／畫質廣播後 WS 中斷，成功的 REST 新碼被捨棄（應只在邀請碼確實更新、或有更新的重產請求時才捨棄；成功提示要等畫面採用有效碼後才顯示）；`tab-lock.test.ts` 改用假時鐘，不依賴真實的 `setTimeout`；`identity.ts` 的 `comparedRooms` 在身份清除時淘汰對應項，並限制保留數量；**伺服器已配位、分頁尚未保存身份就關頁會多一席**——需要契約：同一次加入重試時沿用已配置的結果（例如加入請求帶冪等鍵），要先改 protocol.md 與 shared，等 T-129 合併後再做 | Claude | T-121, T-129 | REVIEW |
+| T-130 | T-121 審查遺留（前端）：重產邀請碼期間收到「同碼」的鎖房／畫質廣播後 WS 中斷，成功的 REST 新碼被捨棄（改以單調遞增 `inviteCodeVersion` 與跨分頁共用儲存排序，畫面採用有效碼後才提示成功）；`tab-lock.test.ts` 改用假時鐘，不依賴真實的 `setTimeout`；`identity.ts` 的 `comparedRooms` 在身份清除時淘汰對應項，並限制保留數量；**伺服器已配位、分頁尚未保存身份就關頁會多一席**——加入請求帶冪等鍵 `joinKey`，已更新 protocol.md、room-and-invite.md 與 shared | Claude | T-121, T-129 | DONE |
 | T-131 | T-122 審查遺留（轉發）：收看端 relay `start()` 在套用 answer 前後已失敗時要拒絕並清理（比照房主端的 `ensureNotFailed`）；`ANSWER_TIMEOUT_MS` 補上獨立斷言（改成 20 秒時測試要失敗）；E2E 若可行，加上 SFU 替身的影音流程 | Claude | T-122 | TODO |
 
 可平行的組合：T-101 完成後 → T-102（Claude）∥ T-106（GPT）；T-102 完成後 → T-103、T-105（Claude，依序）∥ T-104（GPT）；T-103 完成後 → T-108、T-112（GPT）。T-115（Claude）可與 T-105／T-114 的審查同時進行；T-114 與 T-115 都合併後 → T-107（GPT）∥ T-109、T-110（Claude）。
@@ -98,8 +98,6 @@
 > - `claude/test-session-docs`（測試對話規範）刻意先不送審，等功能全部完成後再處理。
 
 
-
-> 2026-11-25 T-130（`claude/T-130-join-idempotency`，eac215b～41b752e，共 6 個 commit）完成，送 GPT 審查。內含協定變更：`POST /api/rooms/join` 新增選填的 `joinKey`（32 bytes 的 base64url）。5 分鐘內用同一把鍵、同一個現行邀請碼重試，而且成員還在，伺服器就回傳同一份身份。伺服器以 HKDF 導出查表識別與 AES-GCM 金鑰，token 加密後才保存。
 
 > 2026-11-25 注意：監工合併 T-122 時發現，有人直接在 main 工作目錄留下未提交的修改（09:03）：`apps/signal/src/config.ts` 改用 `WS_AUTH_TIMEOUT_MS`、ADR 0002 加註「ADR 0001 已刪除」、`transport/index.ts` 改了 `relayNotReady()` 的註解。監工已用 `git stash` 暫存（stash@{0}），合併後放回。`transport/index.ts` 的那一處因為 T-122 已刪掉該函式，改用 T-122 的版本；另外兩處留在工作目錄、**未提交**，等修改者走分支流程送審。**只有監工能改 main，請改在自己的分支 commit。**
 

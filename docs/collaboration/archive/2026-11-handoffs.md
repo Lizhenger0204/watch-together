@@ -582,3 +582,23 @@ T-118 第二輪審查（GPT ultra fast，66a7155）：第一輪 8 項中 6 項�
 
 合併：rebase 到 e2eb62b 後，四項檢查全過（啟動器 2、Vitest 462 + 124、e2e 6），以 fast-forward 合併。轉發從此正式可用。
 
+
+### T-130（Claude 子對話初版 + 監工收尾，2026-11-25）— DONE
+1. 做了什麼：
+   - **加入冪等（`joinKey`）**：`docs/specs/protocol.md`、`room-and-invite.md`、`packages/shared`、`apps/signal/src/room/join-key.ts`、`apps/signal/src/runtime/workers/room-join.ts`、`apps/signal/src/runtime/workers/room-do.ts`、`apps/web/src/features/room/identity.ts`、`apps/web/src/lib/storage.ts`、`apps/web/src/lib/api.ts`。新加入可帶 32 bytes base64url 的 `joinKey`，5 分鐘內在同一個現行邀請碼重試且成員仍在時，回傳同一份身份不再多配一席。伺服器以 HKDF-SHA-256（salt 為 `roomId`）導出查表識別與 AES-256-GCM 金鑰（AAD 為 `memberId`），不存鍵與 token 明文，於 `changes` 佇列同一筆交易寫入。換碼交易（`applyRotation`）清空舊碼的 `joinKeys`。
+   - **待完成鍵生命週期與跨分頁安全**：`pendingJoinKey` 獨立管理持久儲存、本分頁寫入失敗記憶體與刪除失敗墓碑；`clearIfCurrent` 分別核對持久值與記憶體值，寫入失敗後不誤刪他頁新鍵；明確遭拒（404／409、新鍵遭 400／429 等拒絕）與成功沿用（憑證已持久化時）條件清除，`INTERNAL` 與既有待完成鍵重試遇 429 時保留；`get()` 與 `prune()` 清除逾期鍵並補刪暫時刪除失敗的墓碑舊值。
+   - **重產邀請碼版本排序與跨分頁同步**：`RoomInfo`（僅房主）與 `POST /api/rooms/:roomId/invite-code` 新增單調遞增的 `inviteCodeVersion`（初始 0）。`roomInviteCode` 保存 `<邀請碼>:<版本>`（向下相容無版本舊值），提供 `sync()`、`subscribe()` 與 `setIfUnchanged()`；`roomReducer`、`useRoom`、`InviteCodeCard` 一律採用較高版本有效碼，晚到的舊版換碼或身份沿用回應都不會覆寫新版對照。
+   - **`comparedRooms` 與假時鐘**：`apps/web/src/features/room/compared-rooms.ts` 在身份清除時淘汰對應項並限制最多 8 碼 LRU；`apps/web/src/lib/tab-lock.test.ts` 改用假時鐘。
+   - **安全強化**：`api.ts` 的 `joinRoom` 補上 `redirect: "error"`；測試斷言對待完成鍵、token、沿用與錯誤回應改採布林與嚴格欄位集合比對，避免失敗時印出測試憑證。
+2. 介面變動：
+   - `POST /api/rooms/join` 新增選填 `joinKey`（43 字元 base64url）。
+   - `POST /api/rooms/:roomId/invite-code` 回應新增 `inviteCodeVersion`（非負整數）。
+   - `RoomInfo`（僅房主收到）新增選填 `inviteCodeVersion`（初始 0，每次成功換碼遞增）。v1 尚未發布，已更新 `protocol.md` 版本紀錄，不升 `PROTOCOL_VERSION`。
+3. 已知限制：
+   - 前端從產鍵起算 TTL、伺服器從配位起算 TTL，極端邊界可能提早改產新鍵；換碼前若回應遺失且換碼後才重試，舊席位依既有離線淘汰或踢人清理。
+4. 審查與驗證：
+   - 第一輪審查（GPT，`41b752e`）：退回修正（阻擋：換碼未清空 `joinKeys`；應修：雙分頁交錯換碼排序、明確遭拒與沿用後未清待完成鍵、寫入失敗後 `clearIfCurrent` 誤刪他頁鍵；建議：測試保密斷言與 `redirect: "error"`）。
+   - 第二輪審查（GPT，`67c4149`）：第一輪阻擋項通過；退回修正 2 項應修（斷線分頁晚收 v1 REST 覆寫共用儲存 v2；`removeItem` 暫時失敗後 `prune()` 跳過墓碑逾期鍵）與測試保密遺漏。
+   - 第三輪複驗（GPT，`a7bd3e6`）：第二輪兩項應修在真實 Chrome 通過；另抓到阻擋項（晚到的身份沿用回應透過無版本 `set()` 覆寫請求期間他頁寫入的新版對照）與兩處測試保密細節。
+   - 第四輪複驗（GPT，`f89a73c`）：**通過（可合併）**。真實 Chrome 雙分頁與跨裝置情境、5 項合成保密反例、四項固定檢查全綠（啟動器 2、shared 69、web 421、signal 134、E2E 6，合計 632 測試；所有非豁免變更檔低於 20,000 bytes，`room-do.ts` 由 24,469 縮至 24,142 bytes）。
+   - 以 fast-forward 合併進 `main`（`89926ce..f89a73c`）。
