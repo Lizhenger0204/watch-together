@@ -30,6 +30,20 @@ export async function openPeerConnection(
   });
 }
 
+const offerError = (cause?: unknown) =>
+  new TransportError("RELAY_FAILED", "無法產生連線提議（offer）", { cause });
+
+/** 包裝層遇到空 SDP 丟 SIGNAL_ERROR（common/rtc.ts）；轉發沒有信令，改回 RELAY_FAILED。 */
+async function readOffer<T>(read: () => T | Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch (error) {
+    if (error instanceof TransportError && error.code === "SIGNAL_ERROR")
+      throw offerError(error);
+    throw error;
+  }
+}
+
 /**
  * §4：先 setLocalDescription(offer)，再有界等 ICE 收集，重新讀取 localDescription，
  * 整份 SDP（含已收集的 candidates）作為 POST body。
@@ -39,15 +53,14 @@ export async function gatheredOffer(
   pc: RtcPeerConnection,
   signal: AbortSignal,
 ): Promise<string | null> {
-  const offer = await pc.createOffer();
+  const offer = await readOffer(() => pc.createOffer());
   if (signal.aborted) return null;
   await pc.setLocalDescription(offer);
   if (signal.aborted) return null;
   await pc.waitForIceGatheringComplete(ICE_GATHERING_TIMEOUT_MS);
   if (signal.aborted) return null;
-  const local = pc.localDescription;
-  if (local?.type !== "offer" || !local.sdp)
-    throw new TransportError("RELAY_FAILED", "無法產生連線提議（offer）");
+  const local = await readOffer(() => pc.localDescription);
+  if (local?.type !== "offer" || !local.sdp) throw offerError();
   return local.sdp;
 }
 
