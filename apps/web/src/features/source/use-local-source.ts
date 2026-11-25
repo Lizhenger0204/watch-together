@@ -1,17 +1,27 @@
 import { estimateSourceBitrate } from "@project/shared";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
-import { captureVideo, loadMetadata, probePlayback } from "./browser-source";
+import {
+  captureVideo,
+  loadMetadata,
+  probePlayback,
+  sourceFailure,
+} from "./browser-source";
 import {
   classifyCapturedTracks,
   SourceCheckError,
   type SourceCheckCode,
+  type SourceDiagnostic,
 } from "./source-check";
 
 type SourceCheck =
   | { status: "idle" | "checking" }
   | { status: "ready"; code: "OK" | "NO_AUDIO" }
   | { status: "warning"; code: "NO_AUDIO" }
-  | { status: "error"; code: Exclude<SourceCheckCode, "NO_AUDIO"> };
+  | {
+      status: "error";
+      code: Exclude<SourceCheckCode, "NO_AUDIO">;
+      diagnostic?: SourceDiagnostic;
+    };
 
 /** 片源的高度與估計的平均位元率（streaming.md §2「原片位元率」）。 */
 export type SourceInfo = { height: number; bitrate: number | null };
@@ -72,22 +82,24 @@ export function useLocalSource(
 
     try {
       await loadMetadata(video, url, signal);
+      signal.throwIfAborted();
       if (video.videoWidth <= 0 || video.videoHeight <= 0) {
-        throw new SourceCheckError("VIDEO_UNDECODABLE");
+        throw sourceFailure(video, "VIDEO_UNDECODABLE", "metadata");
       }
       setInfo({
         height: video.videoHeight,
         bitrate: estimateSourceBitrate(file.size, video.duration),
       });
       captured = captureVideo(video);
-      await probePlayback(video, signal);
+      await probePlayback(video, signal, captured);
       if (signal.aborted) return;
 
       const code = classifyCapturedTracks(
         captured.getVideoTracks().length,
         captured.getAudioTracks().length,
       );
-      if (code === "VIDEO_UNDECODABLE") throw new SourceCheckError(code);
+      if (code === "CAPTURE_FAILED")
+        throw sourceFailure(video, code, "capture", captured);
       if (code === "NO_AUDIO") {
         pendingStream.current = captured;
         setCheck({ status: "warning", code });
@@ -106,6 +118,8 @@ export function useLocalSource(
       setCheck({
         status: "error",
         code,
+        diagnostic:
+          error instanceof SourceCheckError ? error.diagnostic : undefined,
       });
     }
   }

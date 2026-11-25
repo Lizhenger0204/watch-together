@@ -19,8 +19,8 @@ describe("source checks", () => {
   it.each([
     [1, 1, "OK"],
     [1, 0, "NO_AUDIO"],
-    [0, 1, "VIDEO_UNDECODABLE"],
-    [2, 1, "VIDEO_UNDECODABLE"],
+    [0, 1, "CAPTURE_FAILED"],
+    [2, 1, "CAPTURE_FAILED"],
   ])("classifies %d video and %d audio tracks as %s", (video, audio, code) => {
     expect(classifyCapturedTracks(video, audio)).toBe(code);
   });

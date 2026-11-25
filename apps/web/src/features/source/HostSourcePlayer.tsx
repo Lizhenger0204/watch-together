@@ -8,6 +8,7 @@ import {
 } from "../../components/player";
 import { SOURCE_ACCEPT, type SourceCheckCode } from "./source-check";
 import type { useLocalSource } from "./use-local-source";
+import { SourceDiagnostics } from "./SourceDiagnostics";
 
 const CHECK_MESSAGES: Record<SourceCheckCode, string> = {
   TIMEOUT: "影片載入或試播逾時，請重新選檔。",
@@ -15,6 +16,10 @@ const CHECK_MESSAGES: Record<SourceCheckCode, string> = {
     "影像無法解碼。瀏覽器可能不支援此 HEVC 影片或容器，請試用 H.264 MP4。",
   NO_AUDIO: "音訊無法解碼或影片沒有音軌。要繼續播放無聲影片嗎？",
   CAPTURE_UNSUPPORTED: "此瀏覽器無法擷取影片，請使用桌面版 Chrome 或 Edge。",
+  CAPTURE_FAILED:
+    "無法擷取影片影像軌，請查看播放診斷，或更新桌面版 Chrome／Edge 後重新選檔。",
+  PLAYBACK_FAILED:
+    "影片試播失敗，請查看播放診斷，確認瀏覽器播放權限與原生解碼支援。",
 };
 
 export function HostSourcePlayer({
@@ -211,6 +216,9 @@ export function HostSourcePlayer({
             </button>
           )}
         </div>
+        {check.status === "error" && check.diagnostic && (
+          <SourceDiagnostics diagnostic={check.diagnostic} />
+        )}
         {controlError && (
           <p role="alert" className="mt-1.5 text-xs text-red-600">
             {controlError}

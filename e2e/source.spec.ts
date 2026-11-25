@@ -1,17 +1,13 @@
-import { fileURLToPath } from "node:url";
-import { expect, test } from "@playwright/test";
-
-function fixture(name: string) {
-  return fileURLToPath(new URL(`./fixtures/${name}.mp4`, import.meta.url));
-}
+import { chromium, expect, test } from "@playwright/test";
+import {
+  checkBrowserErrors,
+  expectFramesAdvance,
+  fixture,
+  nativePlayback,
+} from "./source-media";
 
 test.beforeEach(async ({ page }) => {
-  page.on("pageerror", (error) => {
-    throw error;
-  });
-  page.on("console", (message) => {
-    if (message.type() === "error") throw new Error(message.text());
-  });
+  checkBrowserErrors(page);
   await page.route("**/favicon.ico", (route) => route.fulfill({ status: 204 }));
   await page.goto("/?demo=source");
 });
@@ -24,7 +20,7 @@ test("plays a local movie and replaces its captured stream after selecting anoth
   const play = page.getByRole("button", { name: "播放", exact: true });
 
   await page.screenshot({ path: testInfo.outputPath("source-empty.png") });
-  await input.setInputFiles(fixture("h264-aac"));
+  await input.setInputFiles(fixture("h264-aac.mp4"));
   await expect(page.getByRole("status")).toHaveText("檢查通過，可以播放。");
   await expect(video).toHaveJSProperty("paused", true);
   await expect(video).toHaveJSProperty("currentTime", 0);
@@ -58,7 +54,7 @@ test("plays a local movie and replaces its captured stream after selecting anoth
   await fullscreen.press("Enter");
   await expect.poll(isFullscreen).toBe(false);
 
-  await input.setInputFiles(fixture("h264-silent"));
+  await input.setInputFiles(fixture("h264-silent.mp4"));
   await expect(page.getByRole("status")).toContainText("影片沒有音軌");
   await expect(play).toBeDisabled();
   await expect(page.getByText("擷取音軌 0・擷取影像軌 0")).toBeVisible();
@@ -78,31 +74,117 @@ test("plays a local movie and replaces its captured stream after selecting anoth
     .toBeGreaterThan(0);
 });
 
-test("checks HEVC playback or displays a decode error on unsupported hosts", async ({
+for (const name of [
+  "hevc-aac.mp4",
+  "hevc-main10-aac.mp4",
+  "hevc-hev1-aac.mp4",
+  "hevc-aac.mkv",
+]) {
+  test(`decodes, captures and plays ${name} on a HEVC-capable host`, async ({
+    page,
+  }, testInfo) => {
+    const path = fixture(name);
+    const native = await nativePlayback(page, path, testInfo);
+    const decodable =
+      native.mediaError === null &&
+      native.width > 0 &&
+      native.frames > 2 &&
+      native.currentTime >= 1;
+    test.skip(
+      !decodable && process.env.HEVC_REQUIRED !== "1",
+      `原生 Chrome 無法完成 ${name} 解碼；成功案例未驗證（width=${native.width}, frames=${native.frames}, time=${native.currentTime}, MediaError=${native.mediaError?.code ?? "無"}）。以 HEVC_REQUIRED=1 可強制此能力前提。`,
+    );
+    expect(
+      native.mediaError,
+      "此成功案例需要有 HEVC 原生解碼能力的 Chrome runner",
+    ).toBeNull();
+    expect(
+      native.width,
+      "原生 HEVC 解碼不可被應用程式的錯誤分支取代",
+    ).toBeGreaterThan(0);
+    expect(native.frames).toBeGreaterThan(2);
+    expect(native.currentTime).toBeGreaterThanOrEqual(1);
+    await page.screenshot({ path: testInfo.outputPath("source-empty.png") });
+    await page.getByLabel("選擇影片").setInputFiles(path);
+    await expect(page.getByRole("status")).toHaveText("檢查通過，可以播放。");
+    await expect(page.getByText("擷取音軌 1・擷取影像軌 1")).toBeVisible();
+    const video = page.locator("video");
+    await expect(video).toHaveJSProperty("paused", true);
+    await expect(video).toHaveJSProperty("currentTime", 0);
+    await expect(video).toHaveJSProperty("seeking", false);
+    await expect(video).toHaveJSProperty("muted", false);
+    await page.screenshot({
+      path: testInfo.outputPath("source-hevc-ready.png"),
+    });
+    await page.getByRole("button", { name: "播放", exact: true }).click();
+    await expectFramesAdvance(page, testInfo);
+    await page.screenshot({
+      path: testInfo.outputPath("source-hevc-playing.png"),
+    });
+  });
+}
+
+test("reports a stalled native trial instead of accepting play() alone", async ({
   page,
 }, testInfo) => {
-  const input = page.getByLabel("選擇影片");
-  await input.setInputFiles(fixture("hevc-aac"));
-  const status = page.getByRole("status");
-  await expect(status).toHaveText(/檢查通過|影像無法解碼/);
+  await page.locator("video").evaluate((video: HTMLVideoElement) => {
+    video.defaultPlaybackRate = 0;
+    video.playbackRate = 0;
+  });
+  await page.getByLabel("選擇影片").setInputFiles(fixture("h264-aac.mp4"));
+  await expect(page.getByRole("status")).toHaveText("正在檢查影片…");
+  await page.screenshot({
+    path: testInfo.outputPath("source-stalled-checking.png"),
+  });
+  await expect(page.getByRole("status")).toHaveText(
+    "影片載入或試播逾時，請重新選檔。",
+    { timeout: 15_000 },
+  );
+  await expect(
+    page.getByRole("button", { name: "播放", exact: true }),
+  ).toBeDisabled();
+  await page.getByText("播放診斷", { exact: true }).click();
+  await expect(page.getByText("失敗階段：靜音試播")).toBeVisible();
+  await page.screenshot({
+    path: testInfo.outputPath("source-stalled-diagnostic.png"),
+    fullPage: true,
+  });
+});
 
-  if ((await status.textContent())?.includes("檢查通過")) {
-    await expect(page.getByText("擷取音軌 1・擷取影像軌 1")).toBeVisible();
-    await page.getByRole("button", { name: "播放", exact: true }).click();
-    await expect
-      .poll(() =>
-        page
-          .locator("video")
-          .evaluate((element: HTMLVideoElement) => element.currentTime),
-      )
-      .toBeGreaterThan(0);
-    console.log("HEVC: decoded and played with video and audio tracks");
-  } else {
+test("diagnoses a host with native HEVC decoding disabled separately from playback success", async ({
+  baseURL,
+}, testInfo) => {
+  const browser = await chromium.launch({
+    channel: "chrome",
+    args: ["--disable-features=PlatformHEVCDecoderSupport"],
+  });
+  try {
+    const page = await browser.newPage({ baseURL });
+    checkBrowserErrors(page);
+    await page.route("**/favicon.ico", (route) =>
+      route.fulfill({ status: 204 }),
+    );
+    await page.goto("/?demo=source");
+    const native = await nativePlayback(
+      page,
+      fixture("hevc-aac.mp4"),
+      testInfo,
+    );
+    expect(native.width, "此案例必須真的關閉原生 HEVC 解碼").toBe(0);
+    await page.getByLabel("選擇影片").setInputFiles(fixture("hevc-aac.mp4"));
+    await expect(page.getByRole("status")).toContainText("影像無法解碼");
     await expect(
       page.getByRole("button", { name: "播放", exact: true }),
     ).toBeDisabled();
     await expect(page.getByText("擷取音軌 0・擷取影像軌 0")).toBeVisible();
-    console.log("HEVC: decode error shown and playback disabled");
+    await page.getByText("播放診斷", { exact: true }).click();
+    await expect(page.getByText("失敗階段：載入中繼資料")).toBeVisible();
+    await expect(page.getByText("影像：0 × 0", { exact: false })).toBeVisible();
+    await page.screenshot({
+      path: testInfo.outputPath("source-hevc-unsupported.png"),
+      fullPage: true,
+    });
+  } finally {
+    await browser.close();
   }
-  await page.screenshot({ path: testInfo.outputPath("source-hevc.png") });
 });
