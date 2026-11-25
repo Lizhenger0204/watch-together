@@ -38,6 +38,9 @@ export interface RelaySfuStats {
   /** 成功建立（201）的資源 Location 清單，用來逐一比對 DELETE。 */
   whip: string[];
   whep: string[];
+  /** 在 DELETE 路由入口記錄的所有請求路徑（含 403 等重複／錯誤請求）。 */
+  deleteRequests: string[];
+  /** 成功刪除（200）的資源路徑清單。 */
   deleted: string[];
   viewerWhip: number;
   hostWhep: number;
@@ -208,6 +211,7 @@ export async function createRelaySfu(browser: Browser): Promise<RelaySfu> {
     whepRequests: 0,
     whip: [],
     whep: [],
+    deleteRequests: [],
     deleted: [],
     viewerWhip: 0,
     hostWhep: 0,
@@ -292,6 +296,7 @@ export async function createRelaySfu(browser: Browser): Promise<RelaySfu> {
         }
 
         if (request.method() === "DELETE" && resourceId) {
+          recorded.deleteRequests.push(pathname);
           const ok = await sfuPage.evaluate(
             ({ room, id }) => window.__relaySfu?.remove(room, id) ?? false,
             { room: roomId, id: resourceId },
@@ -310,6 +315,7 @@ export async function createRelaySfu(browser: Browser): Promise<RelaySfu> {
         ...recorded,
         whip: [...recorded.whip],
         whep: [...recorded.whep],
+        deleteRequests: [...recorded.deleteRequests],
         deleted: [...recorded.deleted],
       };
     },

@@ -69,6 +69,11 @@ test("轉發模式透過 SFU 替身播放影音，切回 P2P 後清理資源並�
       await Promise.all(viewers.map((viewer) => expectPeers(viewer, 1)));
       await expectPlaying(...viewers);
       await expectAudioPlaying(...viewers);
+
+      // 恢復 P2P 影音後再核對全部 DELETE 請求，確保無重複、遺漏或刪錯資源。
+      expect([...sfu.stats().deleteRequests].sort()).toEqual(
+        [...created].sort(),
+      );
     });
   } finally {
     await sfu.close();
