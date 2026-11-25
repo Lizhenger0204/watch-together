@@ -340,7 +340,7 @@ export class HostSession extends HostSessionFlows {
 
   private handleRoomUpdated(mode: Mode, quality: Quality) {
     this.quality = quality;
-    this.qualityRequests.observe();
+    this.qualityRequests.observe(quality);
     this.applyEncoding();
     if (mode !== this.mode) {
       this.mode = mode;

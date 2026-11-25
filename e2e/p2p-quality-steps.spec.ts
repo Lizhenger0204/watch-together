@@ -5,7 +5,9 @@ import { test } from "./room-pages";
 // 畫質面板的使用者操作（T-126）：連續調整時房間廣播延遲、請求被拒、片源高度限制。
 // 不開播也能調整畫質，所以只需要房主一個分頁；選片用的是會用到 H.264 的 chrome 專案。
 
-type QualityRequest = { quality: { height: number; bitrate: number | string } };
+type QualityRequest = {
+  quality: { height: number; bitrate: number | string; fps: number | string };
+};
 
 /** 攔截房主的 WebSocket：記錄 room:update、可延遲 room:updated 廣播、可代替伺服器拒絕請求。 */
 async function controlSocket(page: Page) {
@@ -90,6 +92,37 @@ test("連續調整 8→10→15→8、房間廣播延遲：最後的 8 Mbps 一�
   await expect(
     host.getByRole("dialog", { name: "畫質" }).getByLabel("位元率"),
   ).toHaveAttribute("aria-valuetext", "8 Mbps");
+});
+
+test("先鎖房再調 8→10 Mbps、廣播延遲時改 FPS：第二筆要帶著 10 Mbps，鎖房的廣播不能充當畫質確認", async ({
+  newRoomPage,
+}) => {
+  const host = await newRoomPage();
+  const control = await controlSocket(host);
+  await createRoom(host);
+  const locked = host.getByRole("checkbox", { name: /鎖定房間/ });
+
+  // 鎖房：它的 room:updated 先正常抵達（畫質仍是 8 Mbps）。
+  await locked.click();
+  await expect(locked).toBeChecked();
+
+  await host.getByRole("button", { name: /^畫質/ }).click();
+  const panel = host.getByRole("dialog", { name: "畫質" });
+  const bitrate = panel.getByLabel("位元率");
+  const fps = panel.getByLabel("FPS");
+  control.holding = true;
+  await bitrate.press("ArrowRight");
+  await expect.poll(() => control.sent.length).toBe(1);
+  await fps.press("End");
+  await expect.poll(() => control.sent.length).toBe(2);
+  expect(control.sent.map((r) => [r.quality.bitrate, r.quality.fps])).toEqual([
+    [10_000_000, 30],
+    [10_000_000, "source"],
+  ]);
+
+  control.releaseBroadcasts();
+  await expect(bitrate).toHaveAttribute("aria-valuetext", "10 Mbps");
+  await expect(fps).toHaveAttribute("aria-valuetext", "原片");
 });
 
 test("房間拒絕畫質請求：面板自動回到房間真實的畫質並顯示錯誤，不必重開面板", async ({

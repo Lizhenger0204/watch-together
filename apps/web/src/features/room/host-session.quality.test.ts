@@ -58,6 +58,37 @@ describe("房主的畫質請求", () => {
     expect(t.session.getView().pendingQuality).toBeNull();
   });
 
+  test("鎖房等無關的 room:updated 不算畫質確認：先收過一次也不會讓之後的請求提前清掉", async () => {
+    const t = setup();
+    await t.goLive();
+    // 鎖房的廣播先到（畫質仍是房間的 8 Mbps）。
+    t.client.emit(roomUpdated("p2p", Q.standard));
+    t.session.setQuality(at(10_000_000));
+    await t.client.ack(update(10_000_000));
+    // 畫質廣播還沒到：畫面仍顯示最後的選擇，第二條滑桿才不會拿舊值送出。
+    expect(t.session.getView().pendingQuality).toEqual(at(10_000_000));
+    // 又來一個不帶畫質變化的廣播（例如重新產生邀請碼）：同樣不清掉。
+    t.client.emit(roomUpdated("p2p", Q.standard));
+    expect(t.session.getView().pendingQuality).toEqual(at(10_000_000));
+    t.client.emit(roomUpdated("p2p", at(10_000_000)));
+    expect(t.session.getView().pendingQuality).toBeNull();
+  });
+
+  test("連續調整時夾雜無關廣播：只有排在隊首的畫質廣播才出列，最後一筆到了才清掉", async () => {
+    const t = setup();
+    await t.goLive();
+    t.session.setQuality(at(10_000_000));
+    t.session.setQuality(at(15_000_000));
+    await t.client.ackFirst(update(10_000_000));
+    await t.client.ackFirst(update(15_000_000));
+    // 房主在兩次調整之間鎖房：廣播帶著當下的畫質（10 Mbps），不是隊首（先 10 後 15）時被忽略。
+    t.client.emit(roomUpdated("p2p", at(10_000_000)));
+    t.client.emit(roomUpdated("p2p", at(10_000_000)));
+    expect(t.session.getView().pendingQuality).toEqual(at(15_000_000));
+    t.client.emit(roomUpdated("p2p", at(15_000_000)));
+    expect(t.session.getView().pendingQuality).toBeNull();
+  });
+
   test("最後一筆被房間拒絕：清掉最後的選擇、顯示錯誤，面板回到房間真實的畫質", async () => {
     const t = setup();
     await t.goLive();
