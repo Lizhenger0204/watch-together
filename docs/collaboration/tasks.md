@@ -53,7 +53,7 @@
 | T-133 | BUG-003：HEVC 試播誤判與失敗診斷（已合併）。Windows 失敗的根因是片源標頭標成 Main 10、實際 8-bit，網站試播會擋下；使用者決定結案（詳見 [bugs.md](bugs.md)） | GPT | — | DONE |
 | T-134 | BUG-002：明確退房、清除身份與釋放空房；與 T-132 對齊契約並補回歸測試（詳見 [bugs.md](bugs.md)） | Gemini（使用者指定接手） | T-132 契約 | DONE |
 | T-135 | 房主端正式支援 MKV 容器。**結案，不實作**：查明 Windows 解碼錯誤（BUG-003）是片源標頭標成 Main 10、實際 8-bit，Mac 崩潰是 BUG-004，兩者都與容器無關。ADR 草稿留在 `claude/T-135-mkv-hevc`（`8953498`），不合併 | Claude（ADR） | — | DONE |
-| T-136 | BUG-004：HEVC Main 10 片源開播後房主分頁崩潰；送出前把 10-bit 畫面轉成 8-bit（streaming.md §1，規格已合併 `daa794a`、`c892004`）。實作在 `gemini/BUG-004-10bit-capture`（`00432ae`，已推上遠端），**GPT 審查退回 1 項阻擋**：換片後 Chrome 仍往舊擷取 stream 加入 track，舊 track 一直是 `live`（詳見 [bugs.md](bugs.md)）。**T-137 合併後須一併修**：畫布改用原片尺寸（streaming.md §1 第 2 點，ADR 0004 D7），`video-conversion.ts` 的 `Math.max(...RESOLUTION_STEPS)` 在 `RESOLUTION_STEPS` 加入 `"source"` 後會型別錯誤；rebase 到 `main` 後要重跑檢查 | Gemini（實作）、GPT（審查） | — | DOING |
+| T-136 | BUG-004：HEVC Main 10 片源開播後房主分頁崩潰；送出前把 10-bit 畫面轉成 8-bit（streaming.md §1），畫布用原片尺寸（ADR 0004 D7）、換片退役擷取 stream。已合併 `aa250bf`（`f9604d5`、`cb22069`），GPT 第二輪複驗通過（交接備註見 [archive](archive/2026-11-handoffs.md) T-136） | Gemini（實作）、GPT（審查） | — | DONE |
 | T-137 | 畫質支援 1080P 以上：解析度 1440／2160／原片（原片不縮放）、位元率加 25／40 Mbps；實際送出 > 1080 改 `maintain-resolution`；高畫質靜態、4K 位元率、「編碼跟不上」三種提示（只提示不強制）；協定升為 v2。ADR 0004、streaming.md §2／§8／§9、protocol.md（原暫定 T-136，與 BUG-004 撞號改號；交接備註見 [archive](archive/2026-11-handoffs.md) T-137） | Claude（研究、規格、審查）、Gemini（實作） | — | DONE |
 | T-138 | 瀏覽器內自動修正「標頭標成 Main 10、實際 8-bit」的 HEVC 片源（零複製 Blob 拼接，不重新編碼；先寫 ADR） | 進行中會話 | BUG-003 根因 | DOING |
 
@@ -82,18 +82,3 @@
 2. 介面變動：片源檢查增加播放與擷取錯誤分類與診斷。
 3. 已知限制：在 macOS Chrome 158 驗證四種 HEVC 樣本。待用回報者的原始片源與瀏覽器複驗。
 4. 驗證：`pnpm typecheck && pnpm lint && pnpm test` 及 `HEVC_REQUIRED=1 pnpm e2e`。相同停滯回歸測試在修正前重現誤判、修正後通過。
-
-> 2026-11-26 使用者決定：
-> - BUG-004 的規格（`daa794a`、`c892004`）依使用者直接指示，在 GPT 實證審查後由主對話合進 `main`。當時規則仍是「只有監工能改 main」，之後於 `26a9108` 改為主對話＝協調者。
-> - 使用者指示：T-136 的 GPT 審查通過後，直接合進 `main` 並推送。第一輪審查未通過，因此尚未合併。
-
-### T-136（Gemini，2026-11-26，`gemini/BUG-004-10bit-capture` `00432ae`，未合併）
-1. 做了什麼：新增 `features/source/video-conversion.ts`（8-bit 格式判斷、畫布尺寸、clone 首幀偵測、`MediaStreamTrackProcessor` → `OffscreenCanvas` → `MediaStreamTrackGenerator` 轉換、pipe 重接、音軌同步）；`browser-source.ts`、`use-local-source.ts` 在試播時建立轉換，首幀輸出後才進入 `ready`／`warning`；`SourceDiagnostic` 加上 `frameFormat`、`converted`，診斷與成功提示都會顯示；新增 `e2e/p2p-hevc-main10.spec.ts`。
-2. 介面變動：只改 `features/source/` 與 `e2e/`；`useLocalSource().check` 在 `ready`／`warning` 時附帶 `frameFormat`、`converted`；無新增依賴。
-3. 已知限制：canvas 轉換可能有輕微色階斷層；HDR 會被轉成 SDR；Windows、多位收看者、背景分頁待 T-113。
-4. 驗證：`pnpm typecheck && pnpm lint && pnpm test` 通過 822；`HEVC_REQUIRED=1` 的 source／p2p-hevc-main10／p2p-playback／layout E2E 通過 11；新 E2E 在修正前會失敗。
-5. GPT 審查（gpt-6.2-sol、high，第一輪）：真 Chrome 在房間頁實測 4K Main 10 mp4／mkv，送出 1080p，房主沒有崩潰，收看端有畫面與聲音；拖進度、重播、換 8-bit 再換回都正常；改壞驗證（拿掉 `preventAbort`、首幀前就通過）都會讓測試失敗。**退回**：
-   - （阻擋）換片後 Chrome 仍往**每一條舊的擷取 stream** 加入新的影音 track，而清理只停止當下的 track，舊 stream 上的新 track 一直是 `live`，換越多片累積越多。基底 `c892004` 也能重現，屬既有問題，但不符合 §1 第 5 點。
-   - （建議）把「延後首幀」的房間案例納入正式回歸測試。現有單元測試用替身頂掉了 hook 的首幀等待。
-   - （小問題）`video-conversion.test.ts:338` 的「缺 generator」測試傳入 `runtime: {}`，應該只拿掉 generator。
-   - 證據：`/Users/lizheng/.t3/projects/bug004-evidence/review-impl/`。

@@ -10,7 +10,7 @@
 | BUG-001 | 房主關掉瀏覽器之後，不會自動退出房間 | 人工實測（GPT 測試期間未顯現） | T-132 | CLOSED（2026-11-26 使用者實測完成） |
 | BUG-002 | 退出房間之後，房間若沒人不會自動釋出空房間 | 人工實測（GPT 測試期間未顯現） | T-134 | CLOSED（2026-11-26 使用者實測完成） |
 | BUG-003 | 無法播放 HEVC（H.265）影片 | 人工實測（GPT 測試期間未顯現） | T-133 | CLOSED（根因是片源標頭錯誤；網站試播會擋下並顯示診斷） |
-| BUG-004 | HEVC Main 10 片源開播後，房主分頁崩潰（macOS Chrome，錯誤代碼 5） | 人工實測（使用者回報，Claude 重現） | T-136 | OPEN（規格已合併；實作審查退回 1 項阻擋） |
+| BUG-004 | HEVC Main 10 片源開播後，房主分頁崩潰（macOS Chrome，錯誤代碼 5） | 人工實測（使用者回報，Claude 重現） | T-136 | CLOSED（2026-11-27 合併 `aa250bf`，GPT 複驗通過；Windows 實機待 T-113） |
 
 ---
 
@@ -73,14 +73,14 @@
 
 ## BUG-004：HEVC Main 10 片源開播後，房主分頁崩潰
 
-- **狀態**：OPEN。規格已合併（streaming.md §1「送出前把 10-bit 畫面轉成 8-bit」，`daa794a`、`c892004`）。實作在 `gemini/BUG-004-10bit-capture`（`00432ae`），GPT 審查退回 1 項阻擋，尚未合併。另外 T-137 已修改規格：畫布改用原片尺寸（streaming.md §1 第 2 點）。下一輪修正須一併處理，並 rebase 到 `main`（`RESOLUTION_STEPS` 已加入 `"source"`，`Math.max(...RESOLUTION_STEPS)` 會型別錯誤）。
+- **狀態**：CLOSED（2026-11-27）。T-136 合併 `aa250bf`（`f9604d5`、`cb22069`），GPT 第二輪複驗通過。Windows 實機、多位收看者、背景分頁列入 T-113 人工驗收。
 - **發現來源**：使用者在 macOS 播放 Main 10 時，Chrome 分頁閃退，顯示錯誤代碼 5。Claude 以 Playwright 真 Chrome 重現，GPT 以獨立腳本驗證（共 41 個情境）。
 - **現象與原因**：
   - HEVC Main 10 的畫面經 `captureStream()` 直接交給 WebRTC 編碼時，房主分頁崩潰。
   - H.264 或 VP8、有沒有 `scaleResolutionDownBy`、160×90 或 4K、mp4 或 mkv 都會崩潰。只播放，或只擷取不送出，都不會崩潰；8-bit 正常。
   - 首幀的 `VideoFrame.format`：8-bit 為 `NV12`，Main 10 為 `null`。看起來是 Chrome 本身的 bug。
-- **修法**：首幀格式不是已知的 8-bit 格式時，先經 `MediaStreamTrackProcessor` → `OffscreenCanvas`（高度上限 1080）→ `MediaStreamTrackGenerator` 轉成 8-bit 再送出。實測不會崩潰，轉換大約多用一個核心的 0～15%。
-- **審查退回的阻擋項**（既有問題，基底也能重現）：同一個 `<video>` 每次 `captureStream()` 產生的 stream，在之後換片時都會被 Chrome 再加入新的影音 track。現行清理只停止當下的 track，舊 stream 上的新 track 一直是 `live`，換越多片累積越多。規格 §1 第 5 點要求停止所有擷取的 track。
+- **修法**：首幀格式不是已知的 8-bit 格式時，先經 `MediaStreamTrackProcessor` → `OffscreenCanvas`（原片尺寸，縮放交給 `scaleResolutionDownBy`，ADR 0004 D7）→ `MediaStreamTrackGenerator` 轉成 8-bit 再送出。實測不會崩潰，轉換大約多用一個核心的 0～15%。
+- **第一輪審查退回的阻擋項（已於 `cb22069` 修正）**（既有問題，基底也能重現）：同一個 `<video>` 每次 `captureStream()` 產生的 stream，在之後換片時都會被 Chrome 再加入新的影音 track。現行清理只停止當下的 track，舊 stream 上的新 track 一直是 `live`，換越多片累積越多。規格 §1 第 5 點要求停止所有擷取的 track。
 - **為何 BUG-003 測試期間未顯現**：BUG-003 的 E2E 只驗證選檔、試播、擷取（`?demo=source`），沒有接上 WebRTC 送出。
 - **不在此範圍**：Windows 的 `PIPELINE_ERROR_DECODE: GetVideoDecoderConfigCount failed (0x80070057)` 是解碼階段就失敗，屬 BUG-003。
 

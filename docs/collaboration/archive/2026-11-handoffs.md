@@ -716,3 +716,20 @@ T-118 第二輪審查（GPT ultra fast，66a7155）：第一輪 8 項中 6 項�
 3. 已知限制：轉發模式的 4K 未實測（本機沒有 Realtime 金鑰，假 SFU 會重編成 720）；Windows 房主硬體編碼、Windows／Android 收看端解 4K 未驗證，皆列入 T-113。P2P 兩人 4K 在 M1 上約 13～21 FPS（會出現「編碼跟不上」提示）。
 4. 驗證：`pnpm typecheck && pnpm lint && pnpm test`（637 + 181）；`pnpm e2e e2e/p2p-high-res.spec.ts --project=chrome` 收看端 `frameHeight` 2160／2160／1080；反向驗證三種改壞都會失敗。Claude 兩輪審查，並以 HEVC 4K 片、P2P 兩位收看者實際開播確認收看端 3840×2160、按鈕與面板一致。
 5. 合併前協調者處理：任務改號 T-137；測試片原為 1.7 MB，超過 fixture ≤ 1 MB 的規定，合併前改寫未推送的分支歷史換成 0.85 MB 版本。
+
+> 2026-11-26 使用者決定：
+> - BUG-004 的規格（`daa794a`、`c892004`）依使用者直接指示，在 GPT 實證審查後由主對話合進 `main`。當時規則仍是「只有監工能改 main」，之後於 `26a9108` 改為主對話＝協調者。
+> - 使用者指示：T-136 的 GPT 審查通過後，直接合進 `main` 並推送。第一輪審查未通過；第二輪修正後複驗通過，2026-11-27 合併並推送。
+
+### T-136（Gemini 實作、GPT 審查，2026-11-26～27，已合併 `aa250bf`）— DONE
+1. 做了什麼：新增 `features/source/video-conversion.ts`（8-bit 格式判斷、畫布尺寸、clone 首幀偵測、`MediaStreamTrackProcessor` → `OffscreenCanvas` → `MediaStreamTrackGenerator` 轉換、pipe 重接、音軌同步）；`browser-source.ts`、`use-local-source.ts` 在試播時建立轉換，首幀輸出後才進入 `ready`／`warning`；`SourceDiagnostic` 加上 `frameFormat`、`converted`，診斷與成功提示都會顯示；新增 `e2e/p2p-hevc-main10.spec.ts`。
+2. 介面變動：只改 `features/source/` 與 `e2e/`；`useLocalSource().check` 在 `ready`／`warning` 時附帶 `frameFormat`、`converted`；無新增依賴。
+3. 已知限制：canvas 轉換可能有輕微色階斷層；HDR 會被轉成 SDR；Windows、多位收看者、背景分頁待 T-113。
+4. 驗證：`pnpm typecheck && pnpm lint && pnpm test` 通過 822；`HEVC_REQUIRED=1` 的 source／p2p-hevc-main10／p2p-playback／layout E2E 通過 11；新 E2E 在修正前會失敗。
+5. GPT 審查（gpt-6.2-sol、high，第一輪）：真 Chrome 在房間頁實測 4K Main 10 mp4／mkv，送出 1080p，房主沒有崩潰，收看端有畫面與聲音；拖進度、重播、換 8-bit 再換回都正常；改壞驗證（拿掉 `preventAbort`、首幀前就通過）都會讓測試失敗。**退回**：
+   - （阻擋）換片後 Chrome 仍往**每一條舊的擷取 stream** 加入新的影音 track，而清理只停止當下的 track，舊 stream 上的新 track 一直是 `live`，換越多片累積越多。基底 `c892004` 也能重現，屬既有問題，但不符合 §1 第 5 點。
+   - （建議）把「延後首幀」的房間案例納入正式回歸測試。現有單元測試用替身頂掉了 hook 的首幀等待。
+   - （小問題）`video-conversion.test.ts:338` 的「缺 generator」測試傳入 `runtime: {}`，應該只拿掉 generator。
+   - 證據：`/Users/lizheng/.t3/projects/bug004-evidence/review-impl/`。
+6. 第二輪修正（`cb22069`，rebase 到 `adaf4dc`）：畫布改用原片尺寸、移除 `MAX_CONVERSION_HEIGHT`；新增冪等 `retireCapturedStream()`（停止既有 track 並持續停掉之後 `addtrack` 補進來的）；Chrome 同一 `<video>` 多次 `captureStream()` 音軌共用來源，停舊 stream 會把新 stream 靜音，所以換檔時以 `videoKey` 重新掛載 `<video>`；補齊連續換片、離房清理、首幀延後的房間 E2E；「缺 generator」測試只拿掉 generator。
+7. GPT 第二輪複驗（gpt-6.2-sol、high）**通過**：4K Main 10 mp4／mkv 在 `2160P`／原片實收 3840×2160，切回 1080P 為 1920×1080；連續換片影音持續、沿用同一 P2P 連線，離房後擷取軌與 generator 全部 `ended`；5 組改壞驗證皆失敗；`pnpm typecheck && pnpm lint && pnpm test` 848 項、`HEVC_REQUIRED=1` Chrome E2E 13/13。非阻擋建議：首幀 E2E 可先保存 video sender 參照，避免 sender 缺失時也回 `null`。
