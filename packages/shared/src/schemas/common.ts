@@ -8,6 +8,7 @@ import {
   SDP_MAX_LENGTH,
   TITLE_MAX_LENGTH,
 } from "../constants";
+import { chatTextLength, normalizeChatText } from "../chat-text";
 
 export const errorCodeSchema = z.enum([
   "BAD_REQUEST",
@@ -139,19 +140,24 @@ export const iceServerSchema = z.object({
 });
 export type IceServer = z.infer<typeof iceServerSchema>;
 
-/** 聊天文字：換行正規化為空白、去掉前後空白，結果須為 1–200 字元。 */
+const withinChatLength = (min: number, max: number) => (value: string) => {
+  const length = chatTextLength(value);
+  return length >= min && length <= max;
+};
+
+/** 聊天文字：換行正規化為空白、去掉前後空白，結果須為 1–200 字（以 code point 計，見 chat-text.ts）。 */
 export const chatTextSchema = z
   .string()
-  .max(CHAT_RAW_MAX_LENGTH)
-  .transform((value) => value.replace(/[\r\n]+/g, " ").trim())
-  .pipe(z.string().min(1).max(CHAT_MAX_LENGTH));
+  .refine(withinChatLength(0, CHAT_RAW_MAX_LENGTH))
+  .transform(normalizeChatText)
+  .pipe(z.string().refine(withinChatLength(1, CHAT_MAX_LENGTH)));
 
 export const chatMessageSchema = z.object({
   id: idSchema,
   memberId: idSchema,
   nickname: nicknameSchema,
   role: roleSchema,
-  text: z.string().min(1).max(CHAT_MAX_LENGTH),
+  text: z.string().refine(withinChatLength(1, CHAT_MAX_LENGTH)),
   sentAt: z.number().int(),
 });
 export type ChatMessage = z.infer<typeof chatMessageSchema>;

@@ -1,3 +1,4 @@
+export * from "./chat-text";
 export * from "./constants";
 export * from "./invite-code";
 export * from "./quality";
