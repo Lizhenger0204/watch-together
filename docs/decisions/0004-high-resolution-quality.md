@@ -1,8 +1,9 @@
-# ADR 0003：畫質支援 1080P 以上（1440P／2160P／原片解析度）
+# ADR 0004：畫質支援 1080P 以上（1440P／2160P／原片解析度）
 
 - 狀態：已採用（T-136；使用者 2026-11-26 同意 D1～D6，D6-4 選擇升版）
 - 日期：2026-11-26
-- 相關：streaming.md §2、protocol.md `Quality`、ADR 0002
+- 相關：streaming.md §1（BUG-004 的 10-bit 轉換）與 §2、protocol.md `Quality`、ADR 0002
+- 編號：原草稿為 0003，與先建立的 `0003-mkv-hevc-source.md`（T-135，擱置）撞號，改為 0004
 
 ## 背景
 
@@ -156,3 +157,31 @@ P2P 是 mesh，每個 sender 各有一個編碼器。同一條 4K track 送給 N
 
 2. 用支援 Range 的本機靜態伺服器提供測試片。Playwright `route.fulfill` 交出 90 MB 的片會讓頁面當掉。
 3. 在 Playwright Chrome（`channel: 'chrome'`）的同一頁做 loopback，記錄 `outbound-rtp` 的 `encoderImplementation`、`frameWidth`／`frameHeight`、`framesPerSecond`、`qualityLimitationReason`、`qualityLimitationDurations`，以及 `inbound-rtp` 的 `frameHeight`、`decoderImplementation`。另外以 `ps` 取樣 Chrome 程序的 CPU。
+
+## 審查補充（2026-11-26）
+
+### D7. 10-bit 片源的轉換畫布用原片尺寸（使用者同意）
+
+BUG-004 原本規定 10-bit 轉 8-bit 的畫布高度取 `min(videoHeight, RESOLUTION_STEPS 的最大值)`，也就是 1080。T-136 之後最大檔位是 `'source'`，這條規則失效，而且 10-bit 4K 片會被固定縮到 1080，`2160P`／`原片` 沒有作用。
+
+改為：**畫布與原片同尺寸，轉換只負責 10-bit 轉 8-bit，縮放仍由傳輸層的 `scaleResolutionDownBy` 處理**。
+
+實測（M1、Chrome 158，HEVC Main 10 3840×2160 30 fps，畫布 3840×2160，H.264 `maintain-resolution` 30 Mbps）：
+
+- 房主分頁沒有崩潰，收看端 40 秒內維持 3840×2160 @ 29～30。
+- 轉換每張畫面平均 0.2 ms，與 1080 畫布相同。
+- Chrome 總 CPU 與直接送 8-bit 4K 同一量級。
+
+未採用的方案：
+
+- 上限設為 2160：8K 片的「原片」就不是真的原片。
+- 畫布跟著目前送出高度變：直播中 track 尺寸會改變，與 BUG-004「track 物件不變」的設計衝突。
+
+### 實際開播驗證（Neon 實作分支）
+
+在 Chrome 158 以應用程式實際操作：
+
+- HEVC 3840×2160 30 fps 片源，選 `2160P`、25 Mbps，P2P 兩位收看者。
+- 兩位收看端 `inbound-rtp` 都是 3840×2160，畫質按鈕顯示 `2160P`，和面板一致。
+- 房主兩路編碼受 CPU 限制，降到 13～21 FPS。開播約 20 秒後出現「編碼跟不上」提示，符合 streaming.md §2 的連續 10 秒條件。
+- H.264 SDP 的 `profile-level-id` 仍是 `42001f`（level 3.1），Mac 收看端解 4K 正常。Windows、Android 仍待 T-113。

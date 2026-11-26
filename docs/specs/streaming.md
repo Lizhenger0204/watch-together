@@ -61,7 +61,7 @@
 **轉換流程**（只在要轉換時建立，每次選檔只建一次）：
 
 1. 擷取的 video track → `MediaStreamTrackProcessor` → 在 `OffscreenCanvas` 上 `drawImage` → `new VideoFrame(canvas, { timestamp })` → `MediaStreamTrackGenerator({ kind: 'video' })`。來源畫面處理完立刻 `close()`。
-2. 畫布尺寸：高度取 `min(videoHeight, RESOLUTION_STEPS 的最大值)`，目前是 1080，寬度依比例計算，寬高都取偶數。傳輸層照舊依 track 高度算 §2 的 `scaleResolutionDownBy`，所以轉換後不會重複縮放。`SourceInfo.height` 仍是原片高度，畫質面板照舊顯示「片源」高度。
+2. 畫布尺寸：**與原片相同**（`videoWidth`×`videoHeight`，寬高都取偶數），轉換不縮放。縮放一律由傳輸層依 track 高度算 §2 的 `scaleResolutionDownBy`，所以 `2160P`／`原片` 對 10-bit 片源同樣有效，也不會重複縮放（T-136，ADR 0004 D7）。`SourceInfo.height` 仍是原片高度，畫質面板照舊顯示「片源」高度。
 3. 送出的 stream 由 T-106 自己組成：generator 的 video track，加上擷取到的 audio track。
 4. **播完與重播**：每條擷取的 video track 各自做一次 pipe，最後一段寫進 generator 的 `pipeTo` 要同時設 `preventClose: true` 與 `preventAbort: true`，並帶該次專用的 `AbortSignal`。這樣擷取 track 被移除、該次 pipe 結束時，generator 不會關閉，送出的 video track 物件不變。
    - **不可重疊 pipe**：前一次 pipe 的 promise 還沒 settle（resolve 或 reject）時，writable 仍被鎖住，這時再呼叫 `pipeTo` 會丟出 `TypeError: Cannot pipe to a locked stream`。實測 `<video>` 觸發 `ended` 的當下，舊 pipe 仍鎖著；`removetrack` 觸發時已解鎖。重播加入新的擷取 track 時，T-106 先等舊 pipe settle，再為新 track 建 processor，接回同一個 generator。
@@ -94,6 +94,8 @@
 
   轉換路徑大約多出 0～15 個百分點，也就是一個核心的 15% 以內。樣本少、波動大，只適用於這個量測條件。
 
+- 4K 畫布（T-136 審查，同一台 M1、Chrome 158，HEVC Main 10 3840×2160 30 fps，畫布 3840×2160，H.264 `maintain-resolution` 30 Mbps）：房主分頁沒有崩潰，收看端 40 秒內維持 3840×2160 @ 29～30；轉換每張畫面平均 0.2 ms、p95 0.3 ms。同片以 1920×1080 畫布送 1080P 時也是平均 0.2 ms。
+
 Windows、多位收看者、實際送滿 8 Mbps、分頁在背景時的表現列入 T-113。
 
 **驗收**：
@@ -116,7 +118,7 @@ Windows、多位收看者、實際送滿 8 Mbps、分頁在背景時的表現列
 | 位元率 | `8 Mbps`／`10 Mbps`／`15 Mbps`／`25 Mbps`／`40 Mbps`／`原片` | 每位收看者的 `maxBitrate` |
 | FPS | `24`／`30`／`60`／`原片` | `maxFramerate`；`原片` 不設上限，沿用片源幀率 |
 
-- 預設 `1080P`、`8 Mbps`、`30`（`DEFAULT_QUALITY`），不因 T-136 改變。高畫質由房主自己選（ADR 0003）。
+- 預設 `1080P`、`8 Mbps`、`30`（`DEFAULT_QUALITY`），不因 T-136 改變。高畫質由房主自己選（ADR 0004）。
 - 房間只記住**檔位**（protocol.md 的 `Quality`）。實際編碼參數由房主端 `resolveQuality(quality, sourceBitrate)` 算出 `EncodingTarget { targetHeight | null, maxBitrate, maxFramerate | null }` 再交給傳輸層。`targetHeight: null` 代表「原片」解析度（不縮放）；**不可**在房間層先換成片源高度，否則換片時傳輸層會拿新 track 的高度配舊的目標高度（§9）。
 - **原片位元率**：選檔後以 `檔案大小 × 8 ÷ 片長` 估計（含音軌，`estimateSourceBitrate`）。量不到時用 15 Mbps（`SOURCE_BITRATE_FALLBACK`），最高 50 Mbps（`SOURCE_BITRATE_MAX`）。檔位是「原片」時換片會依新片重新估計並套用。
 - 調整時房主送 `room:update { quality }`，收到 `room:updated` 後對現有傳輸 `setQuality(encodingTarget)`（`setParameters`，不重建連線）。開播、停播、切換傳送方式或斷線同步中暫時停用畫質面板。
@@ -125,31 +127,31 @@ Windows、多位收看者、實際送滿 8 Mbps、分頁在背景時的表現列
 - 解析度 `原片`：滑桿右上角與控制列按鈕顯示實際送出的片源高度，格式 `原片（1608P）`；片源未知時只顯示 `原片`。寬銀幕 4K 片（3840×1608）的 `2160P` 是停用的，要送全解析度就選 `原片`。
 - 位元率滑桿的「原片」顯示的估計值與實際送出的上限一致（最高 50 Mbps）。
 - 收看者不顯示畫質控制。
-- **縮放與降級策略**（`videoEncodingPolicy(sourceHeight, targetHeight)`，ADR 0003 D3）：
+- **縮放與降級策略**（`videoEncodingPolicy(sourceHeight, targetHeight)`，ADR 0004 D3）：
   - `scaleResolutionDownBy = max(1, 片源高度 / 目標高度)`；`targetHeight` 為 null（原片）或片源高度未知時為 1。4K 片源選 1080P 以下時一定要縮放，否則會以 4K 編碼。
   - **實際送出高度**（`sentVideoHeight`）= `min(片源高度, 目標高度)`，原片時為片源高度。**> 1080 時 `degradationPreference = 'maintain-resolution'`**（頻寬或 CPU 不夠時掉幀，不降解析度，收看端從第一格起就是所選解析度），≤ 1080 維持 `'maintain-framerate'`。換片、補回 video track 或 `setQuality` 時都依當下的片源高度重算。
-  - 實測：`maintain-framerate` 下選 4K，Chrome 的頻寬估計約 30 秒才爬到 30 Mbps，這段期間只送 1440P；頻寬不足時會一直停在 1440P，和面板顯示不一致（ADR 0003 實測 2）。
+  - 實測：`maintain-framerate` 下選 4K，Chrome 的頻寬估計約 30 秒才爬到 30 Mbps，這段期間只送 1440P；頻寬不足時會一直停在 1440P，和面板顯示不一致（ADR 0004 實測 2）。
 - `videoTrack.contentHint = 'motion'`。
 - Codec 偏好：**H.264 優先**（收看端 Android 硬體解碼最普遍），其次 VP8。用 `RTCRtpTransceiver.setCodecPreferences` 設定。高畫質也不改用 VP9／AV1（Chrome 為軟體編碼，CPU 是硬體 H.264 的 3～5 倍）或 H.265（收看端不一定能解）。
 
 ### 高畫質提示（實際送出高度 > 1080，房主端）
 
-只提示，不強制、不自動改檔位（ADR 0003 D5）。
+只提示，不強制、不自動改檔位（ADR 0004 D5）。
 
 1. **靜態提示**（畫質面板，實際送出高度 > 1080 時顯示）：「高畫質需要房主電腦有硬體編碼。P2P 每位收看者各編碼一次，建議改用『轉發』。」P2P 模式且在線收看者 ≥ 2 人時以警告樣式顯示。
 2. **位元率提示**：實際送出高度 > 1440（`HIGH_RESOLUTION_HINT_ABOVE_HEIGHT`）且實際位元率（`EncodingTarget.maxBitrate`）< 25 Mbps（`HIGH_RESOLUTION_BITRATE_HINT`）時，面板提示「4K 建議 25 Mbps 以上」。
 3. **編碼跟不上**（直播中、依 §8 房主統計）：任一 video sender **連續 10 秒**符合下列任一條件，就在畫質按鈕旁與面板內提示「房主電腦編碼跟不上，建議調低解析度或改用轉發」：
    - `qualityLimitationReason === 'cpu'`；
-   - 送出 FPS 低於目標的 70%。目標是 `maxFramerate`，原片 FPS 時用片源 FPS（`track.getSettings().frameRate`），兩者都量不到就不判斷這條。
+   - 送出 FPS 低於目標的 70%。目標 = `min(maxFramerate, 片源 FPS)`，片源 FPS 取 `track.getSettings().frameRate`；只量得到其中一個就用那一個（原片 FPS 的 `maxFramerate` 為 null），兩者都量不到就不判斷這條。片源只有 24 FPS、設定 60 時目標是 24，不可拿 60 比較而誤報。
    條件連續 10 秒不成立、停播或換畫質時清除提示。只看 video；P2P 有多位收看者時任一人符合即算。
-- 不能用 `getStats()` 的 `encoderImplementation` 或 `mediaCapabilities.encodingInfo()` 判斷是否為硬體編碼：前者只在頁面有鏡頭／麥克風權限時才提供，後者在 M1 硬體 H.264 上仍回 `powerEfficient: false`（ADR 0003 實測 1）。
+- 不能用 `getStats()` 的 `encoderImplementation` 或 `mediaCapabilities.encodingInfo()` 判斷是否為硬體編碼：前者只在頁面有鏡頭／麥克風權限時才提供，後者在 M1 硬體 H.264 上仍回 `powerEfficient: false`（ADR 0004 實測 1）。
 - 音訊：Opus，`maxBitrate` 128 kbps，關閉 `echoCancellation` / `noiseSuppression` / `autoGainControl`（這些是給麥克風用的）。
 
 ### P2P 總頻寬保護
 
 - 一般 3 位收看者，上限 7 位。
 - 預估總上傳量 = 實際位元率（`EncodingTarget.maxBitrate`）× 收看人數；超過 60 Mbps 時提示房主調低位元率或改用「轉發」模式，但不強制。
-- 轉發模式只上傳一路、只編碼一次，與人數無關。Cloudflare Realtime 文件沒有寫單一 track 的位元率或解析度上限；計費只算 Cloudflare 送出的流量（4K 25 Mbps 約每位收看者每小時 11 GB）。見 ADR 0003 實測 4。
+- 轉發模式只上傳一路、只編碼一次，與人數無關。Cloudflare Realtime 文件沒有寫單一 track 的位元率或解析度上限；計費只算 Cloudflare 送出的流量（4K 25 Mbps 約每位收看者每小時 11 GB）。見 ADR 0004 實測 4。
 
 ### 實作位置
 

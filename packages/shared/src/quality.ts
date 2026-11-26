@@ -63,7 +63,7 @@ export function resolveQuality(
 }
 
 /**
- * 實際送出的高度超過此值時，編碼改用 `maintain-resolution`（ADR 0003 D3）：
+ * 實際送出的高度超過此值時，編碼改用 `maintain-resolution`（ADR 0004 D3）：
  * 房主選了高畫質，頻寬或 CPU 不夠時改掉幀，不降解析度。
  */
 export const MAINTAIN_RESOLUTION_ABOVE_HEIGHT = 1080;
@@ -92,7 +92,7 @@ export type VideoEncodingPolicy = {
   degradationPreference: "maintain-framerate" | "maintain-resolution";
 };
 
-/** 依片源高度與目標高度算出縮放與降級策略（streaming.md §2，ADR 0003 D3）。p2p／relay 共用。 */
+/** 依片源高度與目標高度算出縮放與降級策略（streaming.md §2，ADR 0004 D3）。p2p／relay 共用。 */
 export function videoEncodingPolicy(
   sourceHeight: number,
   targetHeight: number | null,
