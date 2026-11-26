@@ -49,9 +49,9 @@
 | T-129 | **RoomDO 產品競態**（從不穩定測試查出）：加入與踢人都從記憶體的 `this.room` 算出新成員清單後才交給 `saveTransition()`，提交後才更新 `this.room`。兩個操作讀到同一份舊清單時，後寫的會蓋掉先前已成功加入的席位（新成員拿到 200，卻立刻驗證失敗）。`relay-lifecycle.test.ts:440` 50 輪中失敗 2 輪。要把會改寫房間狀態的操作序列化，範圍從讀取最新狀態、計算變更，一直到提交交易、更新記憶體，並補上能穩定重現的回歸測試 | GPT | T-120 | DONE |
 | T-130 | T-121 審查遺留（前端）：重產邀請碼期間收到「同碼」的鎖房／畫質廣播後 WS 中斷，成功的 REST 新碼被捨棄（改以單調遞增 `inviteCodeVersion` 與跨分頁共用儲存排序，畫面採用有效碼後才提示成功）；`tab-lock.test.ts` 改用假時鐘，不依賴真實的 `setTimeout`；`identity.ts` 的 `comparedRooms` 在身份清除時淘汰對應項，並限制保留數量；**伺服器已配位、分頁尚未保存身份就關頁會多一席**——加入請求帶冪等鍵 `joinKey`，已更新 protocol.md、room-and-invite.md 與 shared | Claude | T-121, T-129 | DONE |
 | T-131 | T-122 審查遺留（轉發）：收看端 relay `start()` 在套用 answer 前後已失敗時要拒絕並清理（比照房主端的 `ensureNotFailed`）；`ANSWER_TIMEOUT_MS` 補上獨立斷言（改成 20 秒時測試要失敗）；E2E 若可行，加上 SFU 替身的影音流程 | Gemini | T-122 | DONE |
-| T-132 | BUG-001：房主關閉瀏覽器後自動退房；先確認斷線／重整語意並更新契約，再補心跳、生命週期與回歸測試（詳見 [bugs.md](bugs.md)） | Gemini（使用者指定接手） | — | REVIEW |
-| T-133 | BUG-003：修正 HEVC 試播誤判、保留失敗診斷並補實播測試。已通過 GPT 審查並合併，待原始片源與環境複驗（詳見 [bugs.md](bugs.md)） | GPT 子線程 3（使用者指定） | — | REVIEW |
-| T-134 | BUG-002：明確退房、清除身份與釋放空房；與 T-132 對齊契約並補回歸測試（詳見 [bugs.md](bugs.md)） | Gemini（使用者指定接手） | T-132 契約 | REVIEW |
+| T-132 | BUG-001：房主關閉瀏覽器後自動退房；先確認斷線／重整語意並更新契約，再補心跳、生命週期與回歸測試（詳見 [bugs.md](bugs.md)） | Gemini（使用者指定接手） | — | DONE |
+| T-133 | BUG-003：修正 HEVC 試播誤判、保留失敗診斷並補實播測試。已通過 GPT 審查並合併；macOS 可播，但 **Windows 實測仍出錯，未修復**，需重新排查（詳見 [bugs.md](bugs.md)） | Gemini（修 BUG 改由 Gemini 負責，待派工） | — | TODO |
+| T-134 | BUG-002：明確退房、清除身份與釋放空房；與 T-132 對齊契約並補回歸測試（詳見 [bugs.md](bugs.md)） | Gemini（使用者指定接手） | T-132 契約 | DONE |
 
 可平行的組合：T-101 完成後 → T-102（Claude）∥ T-106（GPT）；T-102 完成後 → T-103、T-105（Claude，依序）∥ T-104（GPT）；T-103 完成後 → T-108、T-112（GPT）。T-115（Claude）可與 T-105／T-114 的審查同時進行；T-114 與 T-115 都合併後 → T-107（GPT）∥ T-109、T-110（Claude）。
 
