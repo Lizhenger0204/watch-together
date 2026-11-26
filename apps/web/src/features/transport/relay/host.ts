@@ -172,7 +172,8 @@ export const createRelayHostTransport: CreateHostTransport = (options) => {
     const request = ++codecRequests;
     enqueue(current, () => applyCodecMode(current, request)).catch(
       (error: unknown) => {
-        if (run === current)
+        // 拋出到這裡之間可能又切換了：送出前再核對一次是不是最新請求。
+        if (run === current && request === codecRequests)
           emitError(relayError(error, "無法切換 Safari 模式"));
       },
     );

@@ -264,3 +264,29 @@ test("開啟被瀏覽器拒絕後再關閉：原本的設定仍有效，不再�
   expect(h.errors).not.toHaveBeenCalled();
   expect(setter).toHaveBeenCalledTimes(1);
 });
+
+test("失敗拋出後、錯誤送出前又切換：已被取代的錯誤不回報", async () => {
+  const h = await live([BASELINE, CONSTRAINED]);
+  let rejectWrite!: (error: Error) => void;
+  const write = new Promise<void>((_, reject) => {
+    rejectWrite = reject;
+  });
+  const setter = vi
+    .spyOn(h.sender, "setParameters")
+    .mockImplementationOnce(() => write);
+  h.host.setSafariMode(true);
+  await flush();
+  expect(setter).toHaveBeenCalledTimes(1);
+  // 同一個微任務檢查點內，另一個 promise 的後續先跑並切換兩次。
+  const next = write
+    .catch(() => {})
+    .then(() => {
+      h.host.setSafariMode(false);
+      h.host.setSafariMode(true);
+    });
+  rejectWrite(new DOMException("transient", "InvalidStateError"));
+  await next;
+  await flush();
+  expect(encodingCodec(h.sender)).toEqual(CONSTRAINED);
+  expect(h.errors).not.toHaveBeenCalled();
+});
