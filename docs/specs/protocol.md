@@ -17,11 +17,14 @@
 | POST | `/api/rooms` | 無 | `{ nickname }` | `201 { roomId, inviteCode, hostToken, memberId }` |
 | POST | `/api/rooms/join` | 新加入免認證；沿用身份帶 Bearer | `{ inviteCode, nickname, existingRoomId?, excludeRoomIds?, joinKey? }` | 新加入 `200 { roomId, memberToken, memberId }`；沿用 `200 { roomId, memberId, reused: true }` |
 | POST | `/api/rooms/:roomId/invite-code` | host | — | `200 { inviteCode, inviteCodeVersion }`（重新產生） |
+| POST | `/api/rooms/:roomId/leave` | 任一成員 | — | `204` |
 | GET | `/api/rooms/:roomId/ice` | 任一成員 | — | `200 { iceServers: RTCIceServer[] }` |
 | POST | `/api/rooms/:roomId/whip` | host | SDP offer（`application/sdp`） | `201` SDP answer + `Location`；P2P 模式回 `409 STREAM_NOT_LIVE` |
 | POST | `/api/rooms/:roomId/whep` | member | SDP offer | `201` SDP answer + `Location`；P2P 模式、未開播或無有效發布回 `409 STREAM_NOT_LIVE` |
 | DELETE | `<Location>` | 同建立者 | — | `200` |
 | GET | `/api/health` | 無 | — | `200 { ok: true, protocolVersion }` |
+
+`POST /api/rooms/:roomId/leave` 為明確退房：移除呼叫者席位、撤銷憑證與對應 `joinKey`、清理名下轉發資源（房主同時撤下發布與綁定訂閱）並以 `4401` 關閉其 WebSocket；若為房主離房且房內仍有收看者，停播並保留房間；若移除後房內已無任何成員，立即關房並釋放邀請碼與轉發資源；無效憑證或房間不存在回 `401 UNAUTHORIZED`。
 
 WHIP 只需房間已切到 relay 即可發布。P2P 模式下，WHIP 的 409 訊息為「請先切換到轉發模式再發布」，WHEP 的 409 訊息為「目前沒有可收看的轉發直播」。兩者皆用通用 REST 錯誤格式。若 SFU 建連期間已切離轉發、建立者離線，或 WHEP 所訂閱的發布已失效，即使房間又切回轉發或成員已重連，也會撤回這次登記並回 `409 STREAM_NOT_LIVE`（「房間狀態已變更，請確認轉發狀態後重試」）。踢人或淘汰成員後，舊憑證再送 WHEP 回 `401 UNAUTHORIZED`。若移除前就已驗證、移除後才登記，則回 `403 FORBIDDEN` 並回滾已建立的 tracks。
 
@@ -168,4 +171,4 @@ type ChatMessage = {
 
 | `PROTOCOL_VERSION` | 內容 |
 | --- | --- |
-| 1 | 第一版（尚未正式發布）。發布前的修改不升版：ICE 路徑由 `/api/ice` 改為 `/api/rooms/:roomId/ice`（才能驗證是哪個房間的成員）、加入關閉碼表、房主重新連線的流程、連到不存在或已關閉的房間改為接受後以 `4001` 關閉（原本回 HTTP 404）、P2P 信令必填 `data.negotiationId`、條件式加入支援 `existingRoomId` 沿用及 `excludeRoomIds` 防止重複配位、加入可帶 `joinKey` 重試時沿用已配置的席位、換碼 REST 與房主 `RoomInfo` 帶單調遞增的 `inviteCodeVersion`、`Quality` 由三個預設名稱改為解析度／位元率／FPS 三個檔位的物件（T-126；伺服器讀到舊房間存的預設名稱時回到預設畫質）、新增聊天訊息 `chat:send` 與 `chat:message`（T-127；不保留歷史紀錄，每成員每 10 秒限 5 則，長度上限 200 字）、伺服器端心跳逾時 130 秒以 `4410` 關閉並自判定逾時當下起算離線，房主離線滿 100 秒自動移除席位（有收看者則保留房間並提示房主已離開、不再接受新加入，無成員或無人滿 100 秒釋放房間）。 |
+| 1 | 第一版（尚未正式發布）。發布前的修改不升版：ICE 路徑由 `/api/ice` 改為 `/api/rooms/:roomId/ice`（才能驗證是哪個房間的成員）、加入關閉碼表、房主重新連線的流程、連到不存在或已關閉的房間改為接受後以 `4001` 關閉（原本回 HTTP 404）、P2P 信令必填 `data.negotiationId`、條件式加入支援 `existingRoomId` 沿用及 `excludeRoomIds` 防止重複配位、加入可帶 `joinKey` 重試時沿用已配置的席位、換碼 REST 與房主 `RoomInfo` 帶單調遞增的 `inviteCodeVersion`、`Quality` 由三個預設名稱改為解析度／位元率／FPS 三個檔位的物件（T-126；伺服器讀到舊房間存的預設名稱時回到預設畫質）、新增聊天訊息 `chat:send` 與 `chat:message`（T-127；不保留歷史紀錄，每成員每 10 秒限 5 則，長度上限 200 字）、伺服器端心跳逾時 130 秒以 `4410` 關閉並自判定逾時當下起算離線，房主離線滿 100 秒自動移除席位（有收看者則保留房間並提示房主已離開、不再接受新加入，無成員或無人滿 100 秒釋放房間）、新增 `POST /api/rooms/:roomId/leave` 明確退房與成員歸零／無人 100 秒釋放空房規則。 |
