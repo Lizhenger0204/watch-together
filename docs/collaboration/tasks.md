@@ -56,7 +56,7 @@
 | T-136 | BUG-004：HEVC Main 10 片源開播後房主分頁崩潰；送出前把 10-bit 畫面轉成 8-bit（streaming.md §1），畫布用原片尺寸（ADR 0004 D7）、換片退役擷取 stream。已合併 `aa250bf`（`f9604d5`、`cb22069`），GPT 第二輪複驗通過（交接備註見 [archive](archive/2026-11-handoffs.md) T-136） | Gemini（實作）、GPT（審查） | — | DONE |
 | T-137 | 畫質支援 1080P 以上：解析度 1440／2160／原片（原片不縮放）、位元率加 25／40 Mbps；實際送出 > 1080 改 `maintain-resolution`；高畫質靜態、4K 位元率、「編碼跟不上」三種提示（只提示不強制）；協定升為 v2。ADR 0004、streaming.md §2／§8／§9、protocol.md（原暫定 T-136，與 BUG-004 撞號改號；交接備註見 [archive](archive/2026-11-handoffs.md) T-137） | Claude（研究、規格、審查）、Gemini（實作） | — | DONE |
 | T-138 | 瀏覽器內自動修正「標頭標成 Main 10、實際 8-bit」的 HEVC 片源（零複製 Blob 拼接，不重新編碼；先寫 ADR） | 進行中會話 | BUG-003 根因 | DOING |
-| T-139 | 收看端位元率與畫質不一致、Chrome 位元率衝不上去：(1) 統一 H.264 profile 協商與硬體編碼路徑、WHEP codec 偏好（`gemini/T-139-bitrate-fairness`，`8cffd9c`～`1d02e96`，Opus 第一輪通過）；(2) 2026-11-27 擴充：先取證 Chrome 單獨收看也偏低的根因再修，並新增房主端「Safari 模式」開關（改走 42e01f 軟體編碼路徑，畫質換 CPU） | Gemini（實作）、Claude Opus（審查） | T-137 | DOING |
+| T-139 | 收看端位元率與畫質不一致、Chrome 位元率衝不上去：(1) 統一 H.264 profile 協商與硬體編碼路徑、WHEP codec 偏好（`gemini/T-139-bitrate-fairness`，`8cffd9c`～`1d02e96`，Opus 第一輪通過）；(2) 2026-11-27 擴充：先取證 Chrome 單獨收看也偏低的根因再修，並新增房主端「Safari 模式」開關（改走 42e01f 軟體編碼路徑，畫質換 CPU） | Gemini（第一部分實作）→ Claude Opus（第二部分接手實作）、Claude Opus（第一部分審查）、GPT（第二部分審查） | T-137 | DOING |
 
 可平行的組合：T-101 完成後 → T-102（Claude）∥ T-106（GPT）；T-102 完成後 → T-103、T-105（Claude，依序）∥ T-104（GPT）；T-103 完成後 → T-108、T-112（GPT）。T-115（Claude）可與 T-105／T-114 的審查同時進行；T-114 與 T-115 都合併後 → T-107（GPT）∥ T-109、T-110（Claude）。
 
