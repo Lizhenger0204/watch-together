@@ -68,11 +68,16 @@ export function ChatPanel({
       : savedScrollTopRef.current;
   }, [visible]);
 
+  // 可見時才處理新訊息：原本在底部就跟到最新；自己剛送出的訊息也捲到底。
+  // 用最後處理過的訊息 id 判斷「新」，切回分頁時不把既有的最後一則當成新訊息。
+  const lastHandledIdRef = useRef<string | null>(messages.at(-1)?.id ?? null);
   useEffect(() => {
     const el = listRef.current;
-    if (!el || !visible || messages.length === 0) return;
-    const latest = messages[messages.length - 1];
-    if (stickToBottomRef.current || latest?.memberId === youId) {
+    if (!el || !visible) return;
+    const latest = messages.at(-1);
+    if (!latest || latest.id === lastHandledIdRef.current) return;
+    lastHandledIdRef.current = latest.id;
+    if (stickToBottomRef.current || latest.memberId === youId) {
       el.scrollTop = el.scrollHeight;
       stickToBottomRef.current = true;
     }

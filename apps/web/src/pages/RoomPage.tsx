@@ -333,7 +333,7 @@ function HostView({
             connected={online}
             onSend={actions.sendChat}
             visible={sideTab === "chat"}
-            className={theater ? "h-80" : "h-80 lg:h-auto lg:flex-1"}
+            className={theater ? "h-80 lg:flex-1" : "h-80 lg:h-auto lg:flex-1"}
           />
         </SidebarTabPanel>
       </aside>
