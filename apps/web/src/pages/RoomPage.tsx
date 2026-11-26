@@ -355,6 +355,7 @@ function ViewerView({ room }: { room: Room }) {
             viewer={viewer}
             hostName={host?.nickname ?? null}
             hostOnline={host?.online ?? false}
+            hostPresent={Boolean(host)}
             danmaku={danmaku}
             danmakuOverlay={danmakuOverlay}
             chat={{
@@ -390,12 +391,18 @@ function ViewerView({ room }: { room: Room }) {
       {chatOpen && (
         <aside className="flex flex-col bg-white lg:sticky lg:top-0 lg:h-[calc(100dvh-3rem)]">
           <div className="shrink-0 border-b border-zinc-200 px-4 py-3">
-            <p className="truncate text-sm text-zinc-900">
-              <span className="font-semibold text-[#0072b2]">
-                {host?.nickname ?? "房主"}
-              </span>{" "}
-              正在主持
-            </p>
+            {host ? (
+              <p className="truncate text-sm text-zinc-900">
+                <span className="font-semibold text-[#0072b2]">
+                  {host.nickname}
+                </span>{" "}
+                正在主持
+              </p>
+            ) : (
+              <p className="truncate text-sm font-medium text-zinc-700">
+                房主已離開房間
+              </p>
+            )}
             <p className="text-xs text-zinc-500">{onlineCount} 人在線</p>
           </div>
           <SidebarTabs

@@ -1,5 +1,6 @@
 import {
   PROTOCOL_VERSION,
+  WS_HEARTBEAT_TIMEOUT_MS,
   iceResponseSchema,
   regenerateInviteCodeResponseSchema,
   reuseRoomResponseSchema,
@@ -1031,7 +1032,10 @@ describe("關房清理與休眠", () => {
     });
     expect(result.rotated).toBe(true);
     expect(result.open).toBe(true);
-    expect(result.alarm).toBeGreaterThan(Date.now() + 23 * 60 * 60_000);
+    expect(result.alarm).toBeGreaterThan(Date.now());
+    expect(result.alarm).toBeLessThanOrEqual(
+      Date.now() + WS_HEARTBEAT_TIMEOUT_MS + 1_000,
+    );
     host.send({ type: "ping" });
     expect(await host.next("pong")).toEqual({ type: "pong" });
     host.close();
@@ -1198,8 +1202,11 @@ describe("關房清理與休眠", () => {
     const alarm = await runInDurableObject(stub, (_i, state) =>
       state.storage.getAlarm(),
     );
-    // 房主在線：下一次是建房滿 24 小時
-    expect(alarm).toBeGreaterThan(Date.now() + 23 * 60 * 60_000);
+    // 房主在線：下一次是心跳檢查期限
+    expect(alarm).toBeGreaterThan(Date.now());
+    expect(alarm).toBeLessThanOrEqual(
+      Date.now() + WS_HEARTBEAT_TIMEOUT_MS + 1_000,
+    );
     host.close();
   });
 });

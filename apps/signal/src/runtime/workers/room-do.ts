@@ -23,6 +23,7 @@ import {
   createRoomState,
   findMember,
   findMemberByTokenHash,
+  hostRemoveAt,
   toRoomInfo,
   type RoomState,
 } from "../../room/room";
@@ -31,6 +32,7 @@ import {
   closeRoomEffects,
   onAuth,
   onDisconnect,
+  onHostOfflineTimeout,
   onMessage,
   type Effect,
 } from "../../signaling/process";
@@ -43,8 +45,10 @@ import {
   attachmentOf,
   closeSocket,
   authTimeouts,
+  heartbeatTimeouts,
   onlineMembers,
   socketsOf,
+  touchSocket,
   type Attachment,
 } from "./room-sockets";
 import { joinMember, reuseMember, type JoinInput } from "./room-join";
@@ -171,6 +175,11 @@ export class RoomDO extends DurableObject<Env> {
   private async armCleanup(
     txn: DurableObjectTransaction,
     room: RoomState | null,
+    alarmOptions?: {
+      authAlarm?: number;
+      closingSocket?: WebSocket;
+      acceptedHeartbeatAt?: number;
+    },
   ) {
     const current = await txn.get<Retry>(RETRY_KEY);
     const retry =
@@ -178,7 +187,13 @@ export class RoomDO extends DurableObject<Env> {
         ? current
         : { attempts: 1, at: Date.now() + CLEANUP_RETRY_BASE_MS };
     await txn.put(RETRY_KEY, retry);
-    await this.writeAlarm(txn, retry, room);
+    await this.writeAlarm(
+      txn,
+      retry,
+      room,
+      alarmOptions?.authAlarm,
+      alarmOptions,
+    );
   }
 
   private closeRetired(retired: RelayResource[]) {
@@ -428,13 +443,18 @@ export class RoomDO extends DurableObject<Env> {
         now,
       );
       if (outcome.accepted) {
-        await this.saveTransition(outcome.state, { accepted: ws });
-        acceptMember(this.ctx, ws, outcome.memberId);
+        await this.saveTransition(outcome.state, {
+          accepted: ws,
+          acceptedHeartbeatAt: now + this.config.heartbeatTimeoutMs,
+        });
+        acceptMember(this.ctx, ws, outcome.memberId, now);
       }
       this.apply(outcome.effects, ws);
       return;
     }
 
+    const now = Date.now();
+    touchSocket(ws, attachment, now);
     if (message.type === "auth") {
       this.sendTo(ws, {
         type: "error",
@@ -449,7 +469,7 @@ export class RoomDO extends DurableObject<Env> {
       attachment.memberId,
       message,
       this.online(),
-      Date.now(),
+      now,
       { generateId, chatLimiter: this.chatLimiter },
     );
     if (outcome.state !== before) await this.saveTransition(outcome.state);
@@ -467,8 +487,8 @@ export class RoomDO extends DurableObject<Env> {
   // ── 關房 ───────────────────────────────────────────────────
 
   /**
-   * 同一個 alarm 有三種用途：重試清理、關房（閒置或到期）、關掉逾時未驗證的連線。
-   * 每次執行完都依目前狀態重新排下一次（scheduleAlarm 取最早的時間）。
+   * 同一個 alarm 有四種用途：心跳逾時斷線、重試清理、房主離線移除或關房（閒置／到期）、關掉逾時未驗證連線。
+   * 每次執行完都依目前狀態重新排下一次（writeAlarm 取最早的時間）。
    */
   override async alarm() {
     const retry = await this.ctx.storage.get<Retry>(RETRY_KEY);
@@ -478,12 +498,24 @@ export class RoomDO extends DurableObject<Env> {
       (this.room && now >= closeAt(this.room, this.config))
     ) {
       await this.lifecycle.run(async () => {
-        // 等候目錄或清理期間仍可重新上線，執行前再確認兩種期限。
+        // 等候目錄或清理期間仍可重新上線，執行前再確認期限。
         const current = await this.ctx.storage.get<Retry>(RETRY_KEY);
         if (current?.at != null && Date.now() >= current.at)
           await this.runCleanup();
         if (await this.changes.run(() => this.closeIfExpired()))
           await this.runCleanup();
+      });
+    }
+    await this.changes.run(() => this.evictStaleHeartbeats());
+    const afterHeartbeat = Date.now();
+    if (this.room && this.needsLifecycleCheck(this.room, afterHeartbeat)) {
+      await this.lifecycle.run(async () => {
+        const transitioned = await this.changes.run(async () => {
+          const removed = await this.removeExpiredHost();
+          const closed = await this.closeIfExpired();
+          return removed || closed;
+        });
+        if (transitioned && this.closing) await this.runCleanup();
       });
     }
     await this.changes.run(async () => {
@@ -494,10 +526,61 @@ export class RoomDO extends DurableObject<Env> {
     });
   }
 
+  private needsLifecycleCheck(room: RoomState, now: number) {
+    if (now >= closeAt(room, this.config)) return true;
+    const hostAt = hostRemoveAt(room, this.online(), this.config);
+    return hostAt !== null && now >= hostAt;
+  }
+
+  private async evictStaleHeartbeats() {
+    if (!this.room) return;
+    const { expired } = heartbeatTimeouts(this.ctx, {
+      now: Date.now(),
+      timeoutMs: this.config.heartbeatTimeoutMs,
+    });
+    for (const { ws, lastActivityAt } of expired) {
+      await this.handleSocketGone(
+        ws,
+        CLOSE.HEARTBEAT_TIMEOUT,
+        "heartbeat_timeout",
+        lastActivityAt,
+      );
+    }
+  }
+
+  private async removeExpiredHost() {
+    const room = this.room;
+    if (!room) return false;
+    const now = Date.now();
+    const outcome = onHostOfflineTimeout(
+      room,
+      this.online(),
+      now,
+      this.config,
+      { chatLimiter: this.chatLimiter },
+    );
+    if (!outcome.removed) return false;
+    if (
+      outcome.state.members.length === 0 ||
+      now >= closeAt(outcome.state, this.config)
+    ) {
+      return this.closeRoom("expired");
+    }
+    await this.saveTransition(outcome.state);
+    this.apply(outcome.effects, null);
+    return true;
+  }
+
   private async closeIfExpired() {
     const room = this.room;
     if (!room || Date.now() < closeAt(room, this.config)) return false;
-    const reason = "expired";
+    return this.closeRoom("expired");
+  }
+
+  /** 只由 changes 佇列呼叫；外部清理需在 changes 外交給 lifecycle 執行。 */
+  private async closeRoom(reason: CloseReason) {
+    const room = this.room;
+    if (!room) return false;
     const closing: Closing = {
       roomId: room.roomId,
       reason,
@@ -627,7 +710,12 @@ export class RoomDO extends DurableObject<Env> {
 
   // ── 工具 ───────────────────────────────────────────────────
 
-  private async handleSocketGone(ws: WebSocket, code: number) {
+  private async handleSocketGone(
+    ws: WebSocket,
+    code: number,
+    reason = "bye",
+    offlineAt = Date.now(),
+  ) {
     const memberId = attachmentOf(ws)?.memberId;
     if (this.room && memberId) {
       const outcome = onDisconnect(
@@ -635,16 +723,20 @@ export class RoomDO extends DurableObject<Env> {
         memberId,
         this.online(ws),
         Date.now(),
+        offlineAt,
       );
       if (outcome.state !== this.room)
-        await this.saveTransition(outcome.state, { departed: memberId });
+        await this.saveTransition(outcome.state, {
+          departed: memberId,
+          closingSocket: ws,
+        });
       ws.serializeAttachment({
         memberId: null,
         authDeadline: 0,
       } satisfies Attachment);
       this.apply(outcome.effects, null);
     }
-    closeSocket(ws, code === 1005 || code === 1006 ? 1000 : code, "bye");
+    closeSocket(ws, code === 1005 || code === 1006 ? 1000 : code, reason);
   }
 
   private directory() {
@@ -680,7 +772,17 @@ export class RoomDO extends DurableObject<Env> {
 
   private async saveTransition(
     next: RoomState,
-    { departed, accepted }: { departed?: string; accepted?: WebSocket } = {},
+    {
+      departed,
+      accepted,
+      closingSocket,
+      acceptedHeartbeatAt,
+    }: {
+      departed?: string;
+      accepted?: WebSocket;
+      closingSocket?: WebSocket;
+      acceptedHeartbeatAt?: number;
+    } = {},
   ) {
     const before = this.room;
     const retired = await this.ctx.storage.transaction(async (txn) => {
@@ -688,14 +790,22 @@ export class RoomDO extends DurableObject<Env> {
         ? await retireRoomResources(txn, before, next, departed)
         : [];
       await txn.put(STATE_KEY, next);
-      if (targets.length) await this.armCleanup(txn, next);
-      else
+      const authAlarm = authTimeouts(this.ctx, { accepted }).alarm;
+      if (targets.length) {
+        await this.armCleanup(txn, next, {
+          authAlarm,
+          closingSocket,
+          acceptedHeartbeatAt,
+        });
+      } else {
         await this.writeAlarm(
           txn,
           (await txn.get<Retry>(RETRY_KEY)) ?? null,
           next,
-          authTimeouts(this.ctx, { accepted }).alarm,
+          authAlarm,
+          { closingSocket, acceptedHeartbeatAt },
         );
+      }
       return targets;
     });
     this.room = next;
@@ -718,10 +828,26 @@ export class RoomDO extends DurableObject<Env> {
     retry: Retry | null,
     room = this.room,
     authAlarm = authTimeouts(this.ctx).alarm,
+    {
+      closingSocket,
+      acceptedHeartbeatAt,
+    }: { closingSocket?: WebSocket; acceptedHeartbeatAt?: number } = {},
   ) {
     let next = Infinity;
     if (room) {
-      next = Math.min(closeAt(room, this.config), authAlarm);
+      const online = this.online(closingSocket);
+      const heartbeatAlarm = heartbeatTimeouts(this.ctx, {
+        timeoutMs: this.config.heartbeatTimeoutMs,
+        exclude: closingSocket,
+        acceptedHeartbeatAt,
+      }).alarm;
+      const hostAt = hostRemoveAt(room, online, this.config);
+      next = Math.min(
+        closeAt(room, this.config),
+        authAlarm,
+        heartbeatAlarm,
+        hostAt ?? Infinity,
+      );
     }
     if (retry?.at != null) next = Math.min(next, retry.at);
     if (next === Infinity) await txn.deleteAlarm();

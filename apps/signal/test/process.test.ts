@@ -5,6 +5,7 @@ import {
   CLOSE,
   onAuth,
   onDisconnect,
+  onHostOfflineTimeout,
   onMessage,
   type Effect,
 } from "../src/signaling/process";
@@ -585,5 +586,93 @@ describe("onDisconnect", () => {
       state,
       effects: [],
     });
+  });
+
+  test("房主斷線記錄 hostDisconnectedAt（可指定 offlineAt）", () => {
+    const outcome = onDisconnect(
+      roomWith({ idleSince: null, hostDisconnectedAt: null }),
+      "host",
+      new Set(["a"]),
+      T0 + 60,
+      T0 + 5,
+    );
+    expect(outcome.state.hostDisconnectedAt).toBe(T0 + 5);
+    expect(outcome.state.members[0]?.lastSeenAt).toBe(T0 + 5);
+  });
+});
+
+describe("onHostOfflineTimeout 與無房主房間", () => {
+  const config = { hostOfflineTtlMs: 100_000 };
+
+  test("房主仍在線或離線未滿期限：不動作", () => {
+    const onlineHost = roomWith({ idleSince: null, hostDisconnectedAt: null });
+    expect(
+      onHostOfflineTimeout(
+        onlineHost,
+        new Set(["host", "a"]),
+        T0 + 200_000,
+        config,
+      ).removed,
+    ).toBe(false);
+
+    const offlineHost = roomWith({ idleSince: null, hostDisconnectedAt: T0 });
+    expect(
+      onHostOfflineTimeout(
+        offlineHost,
+        new Set(["a"]),
+        T0 + config.hostOfflineTtlMs - 1,
+        config,
+      ).removed,
+    ).toBe(false);
+  });
+
+  test("房主離線滿 100 秒：移除房主、停播並廣播給在線收看者", () => {
+    const state = roomWith({
+      stream: LIVE,
+      idleSince: null,
+      hostDisconnectedAt: T0,
+    });
+    const outcome = onHostOfflineTimeout(
+      state,
+      new Set(["a"]),
+      T0 + config.hostOfflineTtlMs,
+      config,
+    );
+    expect(outcome.removed).toBe(true);
+    expect(outcome.state.members.map((m) => m.memberId)).toEqual(["a", "b"]);
+    expect(outcome.state.hostDisconnectedAt).toBeNull();
+    expect(outcome.state.stream.live).toBe(false);
+    expect(typesTo(outcome.effects, "a")).toEqual([
+      "room:members",
+      "stream:status",
+    ]);
+  });
+
+  test("無房主時收看者送 member:status 或 chat:send 不拋錯", () => {
+    const noHost = onHostOfflineTimeout(
+      roomWith({ idleSince: null, hostDisconnectedAt: T0 }),
+      new Set(["a"]),
+      T0 + config.hostOfflineTtlMs,
+      config,
+    ).state;
+    expect(
+      onMessage(
+        noHost,
+        "a",
+        { type: "member:status", state: "playing" },
+        new Set(["a"]),
+        T0 + 100_001,
+      ),
+    ).toEqual({ state: noHost, effects: [] });
+
+    const chat = onMessage(
+      noHost,
+      "a",
+      { type: "chat:send", text: "還在" },
+      new Set(["a"]),
+      T0 + 100_002,
+      { generateId: () => "m1" },
+    );
+    expect(typesTo(chat.effects, "a")).toEqual(["chat:message"]);
   });
 });

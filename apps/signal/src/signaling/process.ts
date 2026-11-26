@@ -1,8 +1,10 @@
 import type { ClientMessage, ErrorCode, ServerMessage } from "@project/shared";
+import type { RoomConfig } from "../config";
 import {
   OFFLINE_STREAM,
   findMember,
   findMemberByTokenHash,
+  hostDisconnectedSince,
   hostOf,
   invalidateRelayRequests,
   removeMember,
@@ -34,6 +36,7 @@ export const CLOSE = {
   BAD_REQUEST: 4400,
   UNAUTHORIZED: 4401,
   AUTH_TIMEOUT: 4408,
+  HEARTBEAT_TIMEOUT: 4410,
 } as const;
 
 const CONN: Target = { conn: true };
@@ -75,6 +78,7 @@ function streamTo(state: RoomState, online: Online, except?: string) {
 function peerRequests(state: RoomState, online: Online, memberIds: string[]) {
   const host = hostOf(state);
   if (
+    !host ||
     state.mode !== "p2p" ||
     !state.stream.live ||
     !online.has(host.memberId)
@@ -169,6 +173,7 @@ export function onAuth(
   let next: RoomState = {
     ...touchMember(state, memberId, now),
     idleSince: null,
+    ...(member.role === "host" ? { hostDisconnectedAt: null } : {}),
   };
   // 房主每次驗證成功都是新的直播工作階段（重新整理、換分頁取代 4000、斷線重連）：
   // 一律改為未開播。房主端有片源時再送 stream:status { live: true, title }，
@@ -352,7 +357,7 @@ export function onMessage(
     case "member:status": {
       if (isHost) return forbidden();
       const host = hostOf(state);
-      if (!online.has(host.memberId)) return { state, effects: [] };
+      if (!host || !online.has(host.memberId)) return { state, effects: [] };
       const { state: memberState, bitrateKbps, rttMs, packetLoss } = message;
       const status = { state: memberState, bitrateKbps, rttMs, packetLoss };
       return {
@@ -398,19 +403,23 @@ export function onMessage(
 
 // ── 斷線與關房 ─────────────────────────────────────────────
 
-/** `onlineAfter`：這條連線關閉後仍在線的成員。 */
+/** `onlineAfter`：這條連線關閉後仍在線的成員。`offlineAt` 為離線起算時間（心跳逾時用最後活動時間）。 */
 export function onDisconnect(
   state: RoomState,
   memberId: string,
   onlineAfter: Online,
   now: number,
+  offlineAt = now,
 ): Outcome {
   const member = findMember(state, memberId);
   if (!member || onlineAfter.has(memberId)) return { state, effects: [] };
 
-  let next = touchMember(state, memberId, now);
+  let next = touchMember(state, memberId, offlineAt);
   if (state.mode === "relay") next = invalidateRelayRequests(next, memberId);
-  if (onlineAfter.size === 0) next = { ...next, idleSince: now };
+  if (onlineAfter.size === 0) next = { ...next, idleSince: offlineAt };
+  if (member.role === "host") {
+    next = { ...next, hostDisconnectedAt: offlineAt };
+  }
 
   const effects = membersTo(next, onlineAfter);
   // 房主斷線 = 直播中斷；房主重新連線後會再送 stream:status。
@@ -419,6 +428,35 @@ export function onDisconnect(
     effects.push(...streamTo(next, onlineAfter));
   }
   return { state: next, effects };
+}
+
+/** 房主離線滿期限後移出房間，有收看者時保留房間並廣播更新後成員名單。 */
+export function onHostOfflineTimeout(
+  state: RoomState,
+  online: Online,
+  now: number,
+  config: Pick<RoomConfig, "hostOfflineTtlMs">,
+  deps?: Pick<MessageDeps, "chatLimiter">,
+): { removed: boolean; state: RoomState; effects: Effect[] } {
+  const host = hostOf(state);
+  if (!host || online.has(host.memberId)) {
+    return { removed: false, state, effects: [] };
+  }
+  const since = hostDisconnectedSince(state, online);
+  if (since === null || now < since + config.hostOfflineTtlMs) {
+    return { removed: false, state, effects: [] };
+  }
+  let next = removeMember(state, host.memberId);
+  deps?.chatLimiter?.forget(host.memberId);
+  if (online.size === 0 && next.idleSince === null) {
+    next = { ...next, idleSince: since };
+  }
+  const effects = membersTo(next, online);
+  if (state.stream.live) {
+    next = { ...next, stream: OFFLINE_STREAM };
+    effects.push(...streamTo(next, online));
+  }
+  return { removed: true, state: next, effects };
 }
 
 export function closeRoomEffects(

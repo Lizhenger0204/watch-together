@@ -4,7 +4,11 @@ import {
   closeAt,
   createRoomState,
   findMemberByTokenHash,
+  hostDisconnectedSince,
+  hostOf,
+  hostRemoveAt,
   pruneStaleMembers,
+  removeMember,
   toMembers,
   toRoomInfo,
   type MemberRecord,
@@ -18,7 +22,8 @@ import { DEFAULT_QUALITY, normalizeInviteCode } from "@project/shared";
 
 const config = {
   maxMembers: 3,
-  idleTtlMs: 30 * 60_000,
+  idleTtlMs: 100_000,
+  hostOfflineTtlMs: 100_000,
   maxAgeMs: 24 * 60 * 60_000,
   staleMemberMs: 10 * 60_000,
 };
@@ -167,6 +172,59 @@ describe("closeAt", () => {
     const idleSince = T0 + config.maxAgeMs - 1000;
     expect(closeAt({ ...room(), idleSince }, config)).toBe(
       T0 + config.maxAgeMs,
+    );
+  });
+  test("沒有成員時立即到期", () => {
+    expect(closeAt({ ...room(), members: [], idleSince: null }, config)).toBe(
+      0,
+    );
+  });
+});
+
+describe("房主離線計時與移除", () => {
+  test("hostOf 無房主時回 undefined", () => {
+    expect(hostOf(room())?.memberId).toBe("host");
+    expect(hostOf(removeMember(room(), "host"))).toBeUndefined();
+  });
+
+  test("removeMember 移除房主時清除 hostDisconnectedAt 與該成員的 joinKeys", () => {
+    const state = {
+      ...room(),
+      joinKeys: [
+        {
+          id: "k1",
+          memberId: "host",
+          tokenHash: "h-host",
+          sealed: "s1",
+          expiresAt: T0 + 10_000,
+        },
+        {
+          id: "k2",
+          memberId: "a",
+          tokenHash: "h-a",
+          sealed: "s2",
+          expiresAt: T0 + 10_000,
+        },
+      ],
+    };
+    const next = removeMember(state, "host");
+    expect(next.hostDisconnectedAt).toBeNull();
+    expect(next.joinKeys?.map((k) => k.memberId)).toEqual(["a"]);
+  });
+
+  test("hostDisconnectedSince／hostRemoveAt：在線為 null，上版缺欄位回退至 host.lastSeenAt", () => {
+    const base = room();
+    expect(hostDisconnectedSince(base, new Set(["host"]))).toBeNull();
+    expect(hostRemoveAt(base, new Set(["host"]), config)).toBeNull();
+    expect(hostDisconnectedSince(base, new Set())).toBe(T0);
+    expect(hostRemoveAt(base, new Set(), config)).toBe(
+      T0 + config.hostOfflineTtlMs,
+    );
+
+    const legacy = { ...base, hostDisconnectedAt: undefined };
+    expect(hostDisconnectedSince(legacy, new Set())).toBe(T0);
+    expect(hostRemoveAt(legacy, new Set(), config)).toBe(
+      T0 + config.hostOfflineTtlMs,
     );
   });
 });

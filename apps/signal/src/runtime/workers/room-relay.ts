@@ -46,13 +46,21 @@ export async function retireRoomResources(
       .filter((m) => !findMember(next, m.memberId))
       .map((m) => m.memberId),
   );
-  if (departed) removed.add(departed);
   const modeChanged = before.mode !== next.mode;
-  if (!modeChanged && !removed.size) return [];
+  if (!modeChanged && !removed.size && !departed) return [];
   const relay = await readRelay(txn);
+  const retiredPubIds = new Set(
+    Object.values(relay.resources)
+      .filter((r) => r.publicationId === null && removed.has(r.ownerId))
+      .map((r) => r.id),
+  );
   const retired = retire(
     relay,
-    (r) => modeChanged || (r.publicationId !== null && removed.has(r.ownerId)),
+    (r) =>
+      modeChanged ||
+      removed.has(r.ownerId) ||
+      (r.publicationId !== null &&
+        (retiredPubIds.has(r.publicationId) || r.ownerId === departed)),
   );
   if (retired.length) await saveRelay(txn, relay);
   return retired;

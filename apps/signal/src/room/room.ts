@@ -40,6 +40,8 @@ export type RoomState = {
   stream: StreamInfo;
   /** 最後一人離線的時間；有人在線時為 null。 */
   idleSince: number | null;
+  /** 房主離線的時間；房主在線或已移出房間時為 null。舊房間沒有此欄位。 */
+  hostDisconnectedAt?: number | null;
   /** 加入冪等鍵的紀錄（join-key.ts）。舊房間沒有此欄位。 */
   joinKeys?: JoinKeyRecord[];
 };
@@ -75,8 +77,9 @@ export function createRoomState(input: {
       },
     ],
     stream: OFFLINE_STREAM,
-    // 房主建房後還沒連線，也算閒置；一直沒連線就會在 idleTtl 後關房。
+    // 房主建房後還沒連線，也算閒置與離線；一直沒連線就會在期限後移除並關房。
     idleSince: input.now,
+    hostDisconnectedAt: input.now,
   };
 }
 
@@ -94,9 +97,37 @@ export function findMemberByTokenHash(state: RoomState, tokenHash: string) {
 }
 
 export function hostOf(state: RoomState) {
-  const host = state.members.find((m) => m.role === "host");
-  if (!host) throw new Error("房間沒有房主");
-  return host;
+  return state.members.find((m) => m.role === "host");
+}
+
+/** 房主目前離線的起算時間；房主在線或已不在房內時為 null。 */
+export function hostDisconnectedSince(
+  state: RoomState,
+  online: Online,
+): number | null {
+  const host = hostOf(state);
+  if (!host || online.has(host.memberId)) return null;
+  return state.hostDisconnectedAt !== undefined
+    ? state.hostDisconnectedAt
+    : host.lastSeenAt;
+}
+
+/** 房主因離線逾時應被移出房間的時間點；不適用時回 null。 */
+export function hostRemoveAt(
+  state: RoomState,
+  online: Online,
+  config: Pick<RoomConfig, "hostOfflineTtlMs">,
+): number | null {
+  const since = hostDisconnectedSince(state, online);
+  return since === null ? null : since + config.hostOfflineTtlMs;
+}
+
+/** 房間所有成員之中最近一次活動的時間。 */
+export function roomLastActivityAt(state: RoomState): number {
+  return state.members.reduce(
+    (latest, member) => Math.max(latest, member.lastSeenAt),
+    state.createdAt,
+  );
 }
 
 /** 移除離線太久的收看者，騰出名額。房主永遠保留。 */
@@ -154,9 +185,15 @@ export function addMember(
 }
 
 export function removeMember(state: RoomState, memberId: string): RoomState {
+  const target = findMember(state, memberId);
+  const joinKeys = state.joinKeys?.filter(
+    (record) => record.memberId !== memberId,
+  );
   return {
     ...state,
     members: state.members.filter((m) => m.memberId !== memberId),
+    ...(joinKeys !== undefined ? { joinKeys } : {}),
+    ...(target?.role === "host" ? { hostDisconnectedAt: null } : {}),
   };
 }
 
@@ -214,11 +251,12 @@ export function toMembers(state: RoomState, online: Online): Member[] {
   }));
 }
 
-/** 房間應該關閉的時間點。 */
+/** 房間應該關閉的時間點。無人時立刻到期。 */
 export function closeAt(
   state: RoomState,
   config: Pick<RoomConfig, "idleTtlMs" | "maxAgeMs">,
 ) {
+  if (state.members.length === 0) return 0;
   const maxAge = state.createdAt + config.maxAgeMs;
   return state.idleSince === null
     ? maxAge

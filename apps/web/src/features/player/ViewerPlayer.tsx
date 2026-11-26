@@ -41,6 +41,7 @@ export function ViewerPlayer({
   viewer,
   hostName,
   hostOnline,
+  hostPresent,
   danmaku,
   danmakuOverlay,
   chat,
@@ -48,6 +49,8 @@ export function ViewerPlayer({
   viewer: ViewerSession;
   hostName: string | null;
   hostOnline: boolean;
+  /** 房主是否仍在房間成員名單內。 */
+  hostPresent?: boolean;
   /** 控制列的彈幕開關與設定面板。 */
   danmaku?: PlayerControlsProps["danmaku"];
   /** 播放器容器內的彈幕層（隨全螢幕一起顯示）。 */
@@ -136,6 +139,7 @@ export function ViewerPlayer({
     errorMessage: view.error?.message ?? null,
     hostName,
     hostOnline,
+    hostPresent,
   });
 
   return (

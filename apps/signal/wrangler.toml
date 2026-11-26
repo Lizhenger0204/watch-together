@@ -4,7 +4,8 @@ compatibility_date = "2026-11-15"
 
 [vars]
 ROOM_MAX_MEMBERS = 8
-ROOM_IDLE_TTL_MS = 1800000
+ROOM_IDLE_TTL_MS = 100000
+ROOM_HOST_OFFLINE_TTL_MS = 100000
 ROOM_MAX_AGE_MS = 86400000
 
 [[durable_objects.bindings]]
@@ -38,7 +39,8 @@ run_worker_first = ["/api", "/api/*"]
 # vars、Durable Object bindings、Rate Limiting bindings 不會繼承。
 [env.production.vars]
 ROOM_MAX_MEMBERS = 8
-ROOM_IDLE_TTL_MS = 1800000
+ROOM_IDLE_TTL_MS = 100000
+ROOM_HOST_OFFLINE_TTL_MS = 100000
 ROOM_MAX_AGE_MS = 86400000
 
 [[env.production.durable_objects.bindings]]

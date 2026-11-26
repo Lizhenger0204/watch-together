@@ -17,6 +17,18 @@ describe("playerStatus", () => {
     expect(playerStatus({ ...base, live: false, hostOnline: false }).text).toBe(
       "房主目前離線，等待房主回來…",
     );
+    expect(
+      playerStatus({
+        ...base,
+        live: false,
+        hostOnline: false,
+        hostPresent: false,
+      }),
+    ).toEqual({
+      text: "房主已離開房間。",
+      tone: "info",
+      reconnect: false,
+    });
   });
 
   test.each([

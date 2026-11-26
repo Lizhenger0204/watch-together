@@ -10,6 +10,7 @@ export interface Env extends TurnEnv, RelayEnv {
   JOIN_RATE_LIMITER?: RateLimit;
   ROOM_MAX_MEMBERS?: string | number;
   ROOM_IDLE_TTL_MS?: string | number;
+  ROOM_HOST_OFFLINE_TTL_MS?: string | number;
   ROOM_MAX_AGE_MS?: string | number;
 }
 

@@ -10,6 +10,8 @@ export type PlayerStatusInput = {
   errorMessage: string | null;
   hostName: string | null;
   hostOnline: boolean;
+  /** 房主是否仍在房間成員名單內（未提供時視為 true）。 */
+  hostPresent?: boolean;
 };
 
 export type PlayerStatus = {
@@ -23,6 +25,13 @@ export type PlayerStatus = {
 export function playerStatus(input: PlayerStatusInput): PlayerStatus {
   const host = input.hostName ?? "房主";
   if (!input.live) {
+    if (input.hostPresent === false) {
+      return {
+        text: "房主已離開房間。",
+        tone: "info",
+        reconnect: false,
+      };
+    }
     return {
       text: input.hostOnline
         ? `等待 ${host} 開始播放…`
