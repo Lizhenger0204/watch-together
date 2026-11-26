@@ -127,7 +127,7 @@ export class HostPeer {
   private bind(pc: RtcPeerConnection, round: Negotiation) {
     round.attach(pc, "send", this.events.stats);
     pc.oniceconnectionstatechange = () => {
-      if (round.active) this.observeIce(pc, round);
+      if (round.active) this.observeIce(pc);
     };
     pc.onconnectionstatechange = () => {
       // A DTLS failure with healthy ICE cannot be recovered by an ICE restart.
@@ -260,8 +260,8 @@ export class HostPeer {
       round.remoteDescriptionApplied(answerSdp);
       if (!round.active) return;
       this.phase = "answered";
-      this.observeIce(pc, round);
-      if (round.active) this.renegotiateIfStale();
+      // ICE 連通時會補做 Safari 模式的重新協商（renegotiateIfStale）。
+      this.observeIce(pc);
     }).catch((error: unknown) => {
       if (round.active) this.fail(error);
     });
@@ -274,7 +274,7 @@ export class HostPeer {
     }, ANSWER_TIMEOUT_MS);
   }
 
-  private observeIce(pc: RtcPeerConnection, round: Negotiation) {
+  private observeIce(pc: RtcPeerConnection) {
     if (pc.iceConnectionState !== "disconnected") this.clearDisconnect();
     if (isIceConnected(pc)) {
       this.restarts = 0;
@@ -282,13 +282,16 @@ export class HostPeer {
         this.playing = true;
         this.events.state("playing");
       }
+      if (this.phase === "answered") this.renegotiateIfStale();
     } else if (pc.iceConnectionState === "failed") {
       this.restart(pc);
     } else if (pc.iceConnectionState === "disconnected") {
       if (this.disconnectDue) this.restart(pc);
       else if (this.disconnectTimer === undefined) {
+        // 期限跟著這條 PC 的斷線走，不綁協商代次：Safari 模式的重新協商換代時也照樣到期。
+        // 到期時若還在等重新協商的 answer，restart() 先不動，套用 answer 後由 disconnectDue 立刻接手。
         this.disconnectTimer = setTimeout(() => {
-          if (!round.active || pc.iceConnectionState !== "disconnected") return;
+          if (pc.iceConnectionState !== "disconnected") return;
           this.disconnectDue = true;
           this.restart(pc);
         }, DISCONNECTED_GRACE_MS);
@@ -299,11 +302,13 @@ export class HostPeer {
   /**
    * Safari 模式切換（streaming.md §2）：在同一條連線、同一組 transceiver 上重新協商，
    * 不 ICE restart、不換 track，也不回報 connecting。還在等 answer 時，套用 answer 後再判斷。
+   * ICE 不通時先不協商：ICE restart 的 offer 本來就依當下模式排 codec，ICE 自己恢復時再補。
    */
   renegotiateIfStale() {
     const pc = this.pc;
     const round = this.round;
     if (!pc || !round.active || this.phase !== "answered") return;
+    if (!isIceConnected(pc)) return;
     if (this.offeredSafariMode.get(round) === this.source.safariMode) return;
     const next = this.newRound(round.nextGatheringIsUnambiguous);
     round.cancel();

@@ -120,6 +120,20 @@ function codecKey(codec: RTCRtpCodec | undefined) {
     : "";
 }
 
+/** 讀回 sender 第一個 encoding 目前指定的 codec（瀏覽器不支援 `codec` 參數時為 undefined）。 */
+export function encodingCodec(sender: RtcRtpSender): RTCRtpCodec | undefined {
+  return (sender.getParameters().encodings[0] as EncodingWithCodec | undefined)
+    ?.codec;
+}
+
+/** 兩個 codec 的 MIME 與 fmtp 是否相同（不看 payload type）。 */
+export function sameCodec(
+  a: RTCRtpCodec | undefined,
+  b: RTCRtpCodec | undefined,
+): boolean {
+  return Boolean(a && b) && codecKey(a) === codecKey(b);
+}
+
 /** 是否為 Safari 模式要的 Constrained Baseline（`42e0xx`，`packetization-mode=1`）。 */
 export function isConstrainedBaselineH264(codec: RTCRtpCodec): boolean {
   const fmtp = codec.sdpFmtpLine ?? "";

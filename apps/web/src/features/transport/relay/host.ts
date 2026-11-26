@@ -17,7 +17,9 @@ import {
   applyVideoEncoding,
   browserCodecCapabilities,
   Emitter,
+  encodingCodec,
   isConstrainedBaselineH264,
+  sameCodec,
   isIceConnected,
   selectNegotiatedVideoCodec,
   setVideoContentHint,
@@ -130,27 +132,35 @@ export const createRelayHostTransport: CreateHostTransport = (options) => {
     if (!sender || !current.answered || current.abort.signal.aborted) return;
     if (current.offeredSafariMode === safariMode && !current.codecSelected)
       return;
-    let chosen: RTCRtpCodec | null;
-    try {
-      chosen = await selectNegotiatedVideoCodec(sender, { safariMode });
-    } catch (error) {
-      if (current.abort.signal.aborted) return;
-      throw trackError(error);
-    }
-    if (current.abort.signal.aborted) return;
-    current.codecSelected = true;
-    const applied = (
-      sender.getParameters().encodings[0] as { codec?: RTCRtpCodec } | undefined
-    )?.codec;
-    if (
-      !chosen ||
-      !applied ||
-      (safariMode && !isConstrainedBaselineH264(chosen))
-    ) {
-      throw new TransportError(
+    const requested = safariMode;
+    const deferred = (cause?: unknown) =>
+      new TransportError(
         "TRACK_ERROR",
         "轉發連線無法立即切換 Safari 模式，下次開播時套用",
+        { cause },
       );
+    // 這次結束前又切換了：交給排在後面的那次判斷，這次不回報。
+    const superseded = () =>
+      current.abort.signal.aborted || safariMode !== requested;
+    // 一旦開始指定 codec（即使這次被取代或失敗），之後每次切換都要明確指定。
+    current.codecSelected = true;
+    let chosen: RTCRtpCodec | null;
+    try {
+      chosen = await selectNegotiatedVideoCodec(sender, {
+        safariMode: requested,
+      });
+    } catch (error) {
+      if (superseded()) return;
+      throw deferred(error);
+    }
+    if (superseded()) return;
+    // 逐次比對：讀回的 codec 必須就是這次要的（瀏覽器不支援 codec 參數時讀不回來）。
+    if (
+      !chosen ||
+      !sameCodec(encodingCodec(sender), chosen) ||
+      (requested && !isConstrainedBaselineH264(chosen))
+    ) {
+      throw deferred();
     }
   }
 

@@ -128,7 +128,12 @@ it("defers the switch until a pending answer is applied, then renegotiates once"
 
   answerHost(h.signal);
   await flush();
+  // ICE 還沒連通：先不協商，連通後才補。
+  expect(offers(h)).toHaveLength(1);
+  h.connections[0]!.setIceConnectionState("connected");
+  await flush();
   expect(offers(h)).toHaveLength(2);
+  expect(h.connections[0]!.offerOptions).toEqual([{}, {}]);
   expect(videoTransceiver(h).codecPreferences[0]).toEqual(CONSTRAINED);
   answerHost(h.signal);
   await flush();
@@ -191,4 +196,86 @@ it("applies answers without audio transport-cc, including renegotiation answers"
   await flush();
   expect(pc.remoteDescription?.sdp).toBe(withoutAudioTransportCc(TWCC_ANSWER));
   expect(pc.signalingState).toBe("stable");
+});
+
+it("keeps the five-second ICE restart deadline when switching during a disconnect; the restart offer carries the new mode", async () => {
+  const h = await connected();
+  h.pc.setIceConnectionState("disconnected");
+  await vi.advanceTimersByTimeAsync(2_000);
+  h.host.setSafariMode(true);
+  await flush();
+  expect(h.pc.offerOptions).toEqual([{}]);
+  await vi.advanceTimersByTimeAsync(3_000);
+  expect(h.pc.offerOptions).toEqual([{}, { iceRestart: true }]);
+  expect(videoTransceiver(h).codecPreferences[0]).toEqual(CONSTRAINED);
+  // restart 的 offer 已帶新模式：套用 answer 並連通後不再另外協商。
+  answerHost(h.signal);
+  await flush();
+  h.pc.setIceConnectionState("connected");
+  await flush();
+  expect(h.pc.offerOptions).toEqual([{}, { iceRestart: true }]);
+});
+
+it("restarts ICE as soon as a renegotiation answer lands after the disconnect deadline passed", async () => {
+  const h = await connected();
+  h.host.setSafariMode(true);
+  await flush();
+  expect(h.pc.offerOptions).toEqual([{}, {}]);
+  h.pc.setIceConnectionState("disconnected");
+  await vi.advanceTimersByTimeAsync(5_000);
+  // 還在等重新協商的 answer：不可蓋掉它。
+  expect(h.pc.offerOptions).toEqual([{}, {}]);
+  answerHost(h.signal);
+  await flush();
+  expect(h.pc.offerOptions).toEqual([{}, {}, { iceRestart: true }]);
+});
+
+it("renegotiates once ICE recovers by itself after a switch during a disconnect", async () => {
+  const h = await connected();
+  h.pc.setIceConnectionState("disconnected");
+  h.host.setSafariMode(true);
+  await flush();
+  h.pc.setIceConnectionState("connected");
+  await flush();
+  expect(h.pc.offerOptions).toEqual([{}, {}]);
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(h.pc.offerOptions).toEqual([{}, {}]);
+});
+
+function heldRenegotiation() {
+  return async () => {
+    const v = makeViewer();
+    const states = vi.fn();
+    v.viewer.onState(states);
+    await v.viewer.start();
+    v.signal.deliver("host", { type: "offer", negotiationId: "A", sdp: sdp() });
+    await flush();
+    const pc = v.connections[0]!;
+    pc.setIceConnectionState("connected");
+    vi.spyOn(pc, "setRemoteDescription").mockReturnValueOnce(
+      new Promise<void>(() => {}),
+    );
+    v.signal.deliver("host", {
+      type: "offer",
+      negotiationId: "B",
+      sdp: sdp().replace("100 1 IN", "100 2 IN"),
+    });
+    return { pc, states };
+  };
+}
+
+it("stays playing on a healthy ICE transition while a renegotiation offer is still being applied", async () => {
+  const { pc, states } = await heldRenegotiation()();
+  pc.setIceConnectionState("completed");
+  expect(states.mock.calls.flat()).toEqual(["connecting", "playing"]);
+});
+
+it("still reports a real ICE outage while a renegotiation offer is being applied", async () => {
+  const { pc, states } = await heldRenegotiation()();
+  pc.setIceConnectionState("disconnected");
+  expect(states.mock.calls.flat()).toEqual([
+    "connecting",
+    "playing",
+    "connecting",
+  ]);
 });

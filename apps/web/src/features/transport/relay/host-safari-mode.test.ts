@@ -161,3 +161,69 @@ test("頻寬估計：房主本機套用的 WHIP answer 拿掉音訊的 transport
   expect(pc.remoteDescription?.sdp).toContain("a=rtcp-fb:102 transport-cc");
   expect(pc.remoteDescription?.sdp).not.toContain("a=rtcp-fb:111 transport-cc");
 });
+
+test("讀回的 codec 不是這次要的（例如關閉後仍是 42e01f）：回報 TRACK_ERROR", async () => {
+  const h = await live([BASELINE, CONSTRAINED]);
+  h.host.setSafariMode(true);
+  await flush();
+  expect(encodingCodec(h.sender)).toEqual(CONSTRAINED);
+  vi.spyOn(h.sender, "setParameters").mockResolvedValueOnce(undefined);
+  h.host.setSafariMode(false);
+  await flush();
+  expect(h.errors).toHaveBeenCalledWith(
+    expect.objectContaining({ code: "TRACK_ERROR" }),
+  );
+});
+
+test("setParameters 還沒完成時又切回：舊的那次不回報錯誤，最後以最新設定為準", async () => {
+  const h = await live([BASELINE, CONSTRAINED], { safariMode: true });
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const apply = h.sender.setParameters.bind(h.sender);
+  vi.spyOn(h.sender, "setParameters").mockImplementationOnce(
+    async (parameters) => {
+      await held;
+      await apply(parameters);
+    },
+  );
+  h.host.setSafariMode(false);
+  await flush();
+  h.host.setSafariMode(true);
+  release();
+  await flush();
+  expect(encodingCodec(h.sender)).toEqual(CONSTRAINED);
+  expect(h.errors).not.toHaveBeenCalled();
+});
+
+test("瀏覽器拒絕 codec 參數：以規格的訊息回報 TRACK_ERROR", async () => {
+  const h = await live([BASELINE, CONSTRAINED]);
+  vi.spyOn(h.sender, "setParameters").mockRejectedValueOnce(
+    new DOMException("unsupported", "NotSupportedError"),
+  );
+  h.host.setSafariMode(true);
+  await flush();
+  expect(h.errors).toHaveBeenCalledWith(
+    expect.objectContaining({
+      code: "TRACK_ERROR",
+      message: "轉發連線無法立即切換 Safari 模式，下次開播時套用",
+    }),
+  );
+});
+
+test("被取代的舊請求之後才失敗：不回報，由最新的那次決定", async () => {
+  const h = await live([BASELINE, CONSTRAINED], { safariMode: true });
+  let fail!: () => void;
+  const held = new Promise<void>((_, reject) => {
+    fail = () => reject(new DOMException("busy", "InvalidStateError"));
+  });
+  vi.spyOn(h.sender, "setParameters").mockImplementationOnce(() => held);
+  h.host.setSafariMode(false);
+  await flush();
+  h.host.setSafariMode(true);
+  fail();
+  await flush();
+  expect(encodingCodec(h.sender)).toEqual(CONSTRAINED);
+  expect(h.errors).not.toHaveBeenCalled();
+});
