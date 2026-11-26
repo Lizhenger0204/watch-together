@@ -50,7 +50,7 @@
 | T-130 | T-121 審查遺留（前端）：重產邀請碼期間收到「同碼」的鎖房／畫質廣播後 WS 中斷，成功的 REST 新碼被捨棄（改以單調遞增 `inviteCodeVersion` 與跨分頁共用儲存排序，畫面採用有效碼後才提示成功）；`tab-lock.test.ts` 改用假時鐘，不依賴真實的 `setTimeout`；`identity.ts` 的 `comparedRooms` 在身份清除時淘汰對應項，並限制保留數量；**伺服器已配位、分頁尚未保存身份就關頁會多一席**——加入請求帶冪等鍵 `joinKey`，已更新 protocol.md、room-and-invite.md 與 shared | Claude | T-121, T-129 | DONE |
 | T-131 | T-122 審查遺留（轉發）：收看端 relay `start()` 在套用 answer 前後已失敗時要拒絕並清理（比照房主端的 `ensureNotFailed`）；`ANSWER_TIMEOUT_MS` 補上獨立斷言（改成 20 秒時測試要失敗）；E2E 若可行，加上 SFU 替身的影音流程 | Gemini | T-122 | DONE |
 | T-132 | BUG-001：房主關閉瀏覽器後自動退房；先確認斷線／重整語意並更新契約，再補心跳、生命週期與回歸測試（詳見 [bugs.md](bugs.md)） | Gemini（使用者指定接手） | — | REVIEW |
-| T-133 | BUG 清單修復（詳見 [bugs.md](bugs.md)）：BUG-003 無法播放 HEVC（H.265）影片（GPT 的 `e2e/source.spec.ts` 斷言同時接受「檢查通過」與「影像無法解碼」，故測試期間未顯現）。需先收集實測環境與片源格式並排查 `features/source/` 解碼與試播流程 | GPT 子線程 3（使用者指定） | — | DOING |
+| T-133 | BUG-003：修正 HEVC 試播誤判、保留失敗診斷並補實播測試。已通過 GPT 審查並合併，待原始片源與環境複驗（詳見 [bugs.md](bugs.md)） | GPT 子線程 3（使用者指定） | — | REVIEW |
 | T-134 | BUG-002：明確退房、清除身份與釋放空房；與 T-132 對齊契約並補回歸測試（詳見 [bugs.md](bugs.md)） | Gemini（使用者指定接手） | T-132 契約 | REVIEW |
 
 可平行的組合：T-101 完成後 → T-102（Claude）∥ T-106（GPT）；T-102 完成後 → T-103、T-105（Claude，依序）∥ T-104（GPT）；T-103 完成後 → T-108、T-112（GPT）。T-115（Claude）可與 T-105／T-114 的審查同時進行；T-114 與 T-115 都合併後 → T-107（GPT）∥ T-109、T-110（Claude）。
@@ -85,6 +85,12 @@
 2. 介面變動：WS 新增關閉碼 `4410`（`heartbeat_timeout`）；`wrangler.toml`（頂層與 `env.production`）新增 `ROOM_HOST_OFFLINE_TTL_MS=100000`、`ROOM_IDLE_TTL_MS=100000`；`PROTOCOL_VERSION=1`。
 3. 已知限制：升級前已連線之舊 socket 會在下次訊息／alarm 補齊心跳紀錄。
 4. 驗證：合併後 `pnpm typecheck && pnpm lint && pnpm test && pnpm build` 全綠。
+
+### T-133（GPT，2026-11-26，已合併 `057bb5d`、`530efd4`，GPT 審查通過）
+1. 做了什麼：試播以媒體時間、影格和擷取軌驗證是否可播放，並保存失敗階段與原生媒體錯誤。
+2. 介面變動：片源檢查增加播放與擷取錯誤分類與診斷。
+3. 已知限制：在 macOS Chrome 158 驗證四種 HEVC 樣本。待用回報者的原始片源與瀏覽器複驗。
+4. 驗證：`pnpm typecheck && pnpm lint && pnpm test` 及 `HEVC_REQUIRED=1 pnpm e2e`。相同停滯回歸測試在修正前重現誤判、修正後通過。
 
 ### T-134（Gemini，2026-11-26，已合併 `37d8bfd`..`fc2151d`，第一輪 GPT-6.2 Sol 審查已修正）
 1. 做了什麼：新增 `POST /api/rooms/:roomId/leave`（`204`）明確退房、無人立即釋出空房（邀請碼、轉發資源、DO storage）與 `InviteDirectoryDO` 一次性分批巡檢上版殘留空房／孤兒邀請碼（`legacy-sweep.ts`、`RoomDO.reconcileLegacyRoom()`、建房預留碼保護與 `code:`/`rotation:` 雙階段分批）；前端抽離 `use-leave-room.ts` 於 `room:join` 同源鎖內條件清除身份並抑制回應遺失時的 WS `4401` 跳轉；新增 `leave.test.ts`、`legacy-sweep.test.ts`、`use-leave-room.test.ts`、`e2e/join-room.ts`、`e2e/room-leave.spec.ts`。
