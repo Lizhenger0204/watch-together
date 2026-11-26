@@ -136,4 +136,103 @@ describe("browser source checks", () => {
     expect(video.muted).toBe(false);
     expect(video.loop).toBe(false);
   });
+
+  it("waits for converted output first frame before completing trial and records conversion metadata", async () => {
+    vi.useFakeTimers();
+    const video = media();
+    const track = { readyState: "live" } as unknown as MediaStreamTrack;
+    const stream = Object.assign(new EventTarget(), {
+      getVideoTracks: () => [track],
+      getAudioTracks: () => [],
+    }) as unknown as MediaStream;
+    const outputStream = Object.assign(new EventTarget(), {
+      getVideoTracks: () => [track],
+      getAudioTracks: () => [],
+    }) as unknown as MediaStream;
+
+    let resolveFirstFrame!: () => void;
+    let settled = false;
+    const check = probePlayback(
+      video as unknown as HTMLVideoElement,
+      new AbortController().signal,
+      stream,
+      {
+        prepareCapture: async (_track, _signal, progress) => {
+          progress.setFrameFormat("opaque");
+          progress.setConverted(true);
+          await new Promise<void>((resolve) => {
+            resolveFirstFrame = resolve;
+          });
+          return {
+            stream: outputStream,
+            frameFormat: "opaque",
+            converted: true,
+          };
+        },
+      },
+    ).then((result) => {
+      settled = true;
+      return result;
+    });
+
+    video.currentTime = 1.2;
+    video.getVideoPlaybackQuality = () => ({
+      totalVideoFrames: 12,
+      droppedVideoFrames: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1_500);
+    // 轉換首幀尚未輸出前，不可進入 ready。
+    expect(settled).toBe(false);
+
+    resolveFirstFrame();
+    await expect(check).resolves.toMatchObject({
+      stream: outputStream,
+      frameFormat: "opaque",
+      converted: true,
+    });
+  });
+
+  it("fails with CAPTURE_FAILED and preserves frameFormat/converted when generator never outputs a frame", async () => {
+    vi.useFakeTimers();
+    const video = media();
+    const track = { readyState: "live" } as unknown as MediaStreamTrack;
+    const stream = Object.assign(new EventTarget(), {
+      getVideoTracks: () => [track],
+      getAudioTracks: () => [],
+    }) as unknown as MediaStream;
+
+    const check = probePlayback(
+      video as unknown as HTMLVideoElement,
+      new AbortController().signal,
+      stream,
+      {
+        prepareCapture: async (_track, signal, progress) => {
+          progress.setFrameFormat("opaque");
+          progress.setConverted(true);
+          await new Promise<void>((_, reject) => {
+            signal.addEventListener("abort", () => reject(signal.reason), {
+              once: true,
+            });
+          });
+          return { stream, frameFormat: "opaque", converted: true };
+        },
+      },
+    );
+    const failure = expect(check).rejects.toMatchObject({
+      code: "CAPTURE_FAILED",
+      diagnostic: {
+        stage: "capture",
+        frameFormat: "opaque",
+        converted: true,
+      },
+    });
+
+    video.currentTime = 1.2;
+    video.getVideoPlaybackQuality = () => ({
+      totalVideoFrames: 12,
+      droppedVideoFrames: 0,
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+    await failure;
+  });
 });

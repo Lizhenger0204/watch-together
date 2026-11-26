@@ -28,6 +28,10 @@ export function SourceDiagnostics({
           {diagnostic.audioTracks ?? "尚未擷取"}
         </p>
         <p>
+          畫面格式：{diagnostic.frameFormat ?? "尚未讀取"}；8-bit 轉換：
+          {diagnostic.converted ? "是" : "否"}
+        </p>
+        <p>
           瀏覽器媒體錯誤：
           {diagnostic.mediaError
             ? `${diagnostic.mediaError.code} ${diagnostic.mediaError.message}`

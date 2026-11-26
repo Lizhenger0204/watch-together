@@ -21,6 +21,8 @@ export interface SourceDiagnostic {
   decodedFrames: number;
   videoTracks: number | null;
   audioTracks: number | null;
+  frameFormat: string | null;
+  converted: boolean;
 }
 
 export class SourceCheckError extends Error {

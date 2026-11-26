@@ -206,6 +206,20 @@ export function HostSourcePlayer({
           >
             {statusText}
           </div>
+          {(check.status === "ready" || check.status === "warning") && (
+            <span
+              data-testid="source-conversion"
+              data-converted={String(check.converted)}
+              data-frame-format={check.frameFormat ?? ""}
+              className="mt-1.5 text-xs text-zinc-500"
+            >
+              {check.converted
+                ? `10-bit 片源，送出前轉為 8-bit（${check.frameFormat ?? "opaque"}）`
+                : check.frameFormat
+                  ? `直接送出（${check.frameFormat}）`
+                  : "直接送出"}
+            </span>
+          )}
           {check.status === "warning" && (
             <button
               type="button"

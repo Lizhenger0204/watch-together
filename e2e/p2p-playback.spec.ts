@@ -10,6 +10,11 @@ test("兩人點擊後收到影音，重播、換片與停播重開後仍可觀�
     await test.step("開播後兩人加入，點擊前暫停、點擊後有聲有影", () =>
       openLiveRoom(newRoomPage));
 
+  await expect(host.getByTestId("source-conversion")).toHaveAttribute(
+    "data-converted",
+    "false",
+  );
+
   await test.step("自然播完後重播，兩條原連線恢復出畫", async () => {
     const video = host.locator("video");
     await video.evaluate((element: HTMLVideoElement) => {
