@@ -52,6 +52,7 @@
 - **4K 片源一定要設 `scaleResolutionDownBy`**，否則會以 4K 編碼，頻寬和 CPU 都爆掉。→ streaming.md §2
 - **`captureStream()` 只呼叫一次**，所有連線共用同一個 stream；換片用 `replaceTrack`，不要重建連線。
 - **影片播完時 Chrome 會移除擷取的 track**，重播後是新的 track 物件。傳輸層要監聽 `addtrack`／`removetrack` 再 `replaceTrack`。→ streaming.md §1
+- **10-bit（HEVC Main 10）畫面不可直接交給 WebRTC**：Chrome 會讓房主分頁崩潰。送出前由 `features/source/` 轉成 8-bit。→ streaming.md §1「送出前把 10-bit 畫面轉成 8-bit」
 - **Playwright 內建的 Chromium 不支援 H.264／AAC**。播放真實影片的 E2E 要用 `channel: 'chrome'`（需安裝 Google Chrome）。
 - **送出 codec 優先 H.264**。收看端（尤其 Android）不一定能解 HEVC；房主端解碼後會重新編碼。
 - **音訊要關掉 echoCancellation／noiseSuppression／autoGainControl**，那是給麥克風用的，會把電影音效修壞。

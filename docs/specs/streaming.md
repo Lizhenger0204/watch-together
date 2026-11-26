@@ -45,6 +45,49 @@
 - **影片播完時 Chrome 會把擷取的 track 從 stream 移除**，重播時會加入新 track。換檔、`addtrack` 或 `removetrack` 都由 `useLocalSource(onStreamChange)` 通知房間層，後者以 `host.replaceTrack(kind, track | null)` 更新現有傳輸。需要重建傳輸時，再從 T-106 讀取當下的 stream（§9）。
 - 房主關閉或重新整理分頁 = 停止直播。分頁在背景時要能繼續推流（實測項目）。
 
+### 送出前把 10-bit 畫面轉成 8-bit（BUG-004）
+
+**原因**：Chrome 158（macOS M1）實測，HEVC Main 10 的畫面經 `captureStream()` 直接交給 `RTCRtpSender` 編碼時，房主分頁會崩潰（錯誤代碼 5）。H.264 或 VP8、有沒有設 `scaleResolutionDownBy`、160×90 或 4K、mp4 或 mkv 都一樣會崩潰。只播放，或只擷取不送出，都不會崩潰。8-bit 片源不受影響。WebRTC 的 H.264／VP8 編碼器本來就只輸出 8-bit，提早轉換不會降低收看端的畫質。
+
+**判斷要不要轉換**：開播前檢查第 3 步的試播期間，T-106 從擷取的 video track 的 **clone** 用 `MediaStreamTrackProcessor` 讀第一張 `VideoFrame`，記下 `format`，再停止這個 clone。
+
+| `VideoFrame.format` | 處理 |
+| --- | --- |
+| 8-bit 格式：`I420`、`I420A`、`I422`、`I422A`、`I444`、`I444A`、`NV12`、`RGBA`、`RGBX`、`BGRA`、`BGRX` | 直接送出擷取的 track，跟現行相同 |
+| 其他，包括 `null`（GPU 不透明畫面；macOS 的 Main 10 就是這種）、`I420P10`、`P010` 等 | 經過轉換再送出 |
+
+格式不明時一律轉換。實測 macOS 的 8-bit HEVC／H.264 是 `NV12`，Main 10 是 `null`。Windows 的結果在 T-113 補測。
+
+**轉換流程**（只在要轉換時建立，每次選檔只建一次）：
+
+1. 擷取的 video track → `MediaStreamTrackProcessor` → 在 `OffscreenCanvas` 上 `drawImage` → `new VideoFrame(canvas, { timestamp })` → `MediaStreamTrackGenerator({ kind: 'video' })`。來源畫面處理完立刻 `close()`。
+2. 畫布尺寸：高度取 `min(videoHeight, RESOLUTION_STEPS 的最大值)`，目前是 1080，寬度依比例計算，寬高都取偶數。傳輸層照舊依 track 高度算 §2 的 `scaleResolutionDownBy`，所以轉換後不會重複縮放。`SourceInfo.height` 仍是原片高度，畫質面板照舊顯示「片源」高度。
+3. 送出的 stream 由 T-106 自己組成：generator 的 video track，加上擷取到的 audio track。
+4. **播完與重播**：擷取的 video track 被移除時，該次 pipe 結束，但 generator 不關閉（`pipeTo(..., { preventClose: true })`），送出的 video track 物件不變。重播時加入新的擷取 track，T-106 為它建新的 processor，接回同一個 generator。audio track 的新增與移除，由 T-106 同步到送出的 stream。因為由程式呼叫 `addTrack`／`removeTrack` 不會觸發事件，T-106 要自己呼叫 `onStreamChange`，房間層照舊 `replaceTrack`。
+5. **換檔或卸載**：中止 pipe，停止 generator track 與所有擷取的 track。
+6. 瀏覽器沒有 `MediaStreamTrackProcessor`／`MediaStreamTrackGenerator`，又需要轉換時，回 `CAPTURE_UNSUPPORTED`。房主本來就限桌面 Chrome／Edge，兩者都有這兩個 API。
+
+**試播與診斷**：
+
+- 要轉換的片源，試播期間 generator 至少要輸出 1 張畫面，否則以 `CAPTURE_FAILED` 失敗。
+- `SourceDiagnostic` 增加 `frameFormat`：`VideoFrame.format` 的值；格式為 `null` 時記成 `"opaque"`；沒讀到畫面時為 `null`。另增加 `converted: boolean`。兩者都顯示在「播放診斷」。
+- 檢查通過時，若有轉換，在擷取資訊旁提示「10-bit 片源，送出前轉為 8-bit」。
+
+**已知限制**：
+
+- 經 canvas 轉換會走一次 YUV → RGB → YUV，大片漸層可能有輕微色階斷層。
+- HDR（PQ／HLG）片會由 Chrome 轉成 SDR，顏色與 HDR 螢幕上的原片不同。
+- 房主本機的 `<video>` 仍播放原片，不受轉換影響。
+
+**效能**（同一台 M1 量兩次，4K 片源送出 1080p 30 fps、8 Mbps，1 位收看者）：轉換每張畫面約 0.2～0.4 ms。Chrome 總 CPU 為：現行 8-bit 直接送 51%／54%，10-bit 轉換後送 54%／51%，差距在量測誤差內。Windows、多位收看者、分頁在背景時的表現列入 T-113。
+
+**驗收**：
+
+- E2E（`channel: 'chrome'`）用 `hevc-main10-aac.mp4` 以 P2P 開播，斷言房主分頁沒有崩潰、收看端影格持續前進、診斷為 `converted: true`。這個案例在修正前必須失敗。
+- 缺 HEVC 解碼能力時，照 BUG-003 的規則明示 skip，並遵守 `HEVC_REQUIRED=1`。
+- 8-bit 片源沿用既有案例，並斷言 `converted: false`。
+- 單元測試涵蓋格式判斷與畫布尺寸計算（純函式）。
+
 ## 2. 編碼與畫質（`features/transport/common/`）
 
 ### 畫質（三條分段滑桿，T-126）
@@ -254,7 +297,7 @@ createViewerTransport({ signal, mode, roomId, token }): ViewerTransport
 
 ### 片源、track 所有權與畫質
 
-- T-106 擁有並負責停止 capture tracks。`HostTransport.stream` 是建立該 transport 時傳入的 stream 引用。每次重建都從 T-106 取得當下的 stream，避免換片後又把已結束的舊 tracks 傳給下一個 transport。
+- T-106 擁有並負責停止 capture tracks，以及 10-bit 轉換用的 generator track（§1）。`HostTransport.stream` 是建立該 transport 時傳入的 stream 引用。每次重建都從 T-106 取得當下的 stream，避免換片後又把已結束的舊 tracks 傳給下一個 transport。
 - 房間層從 `useLocalSource(onStreamChange)` 取得最新 stream，按 video、audio 分別呼叫 `host.replaceTrack(kind, track | null)`。沒有 stream 或該 kind 沒有可用的 track 就傳 null，保留 sender 等待補軌。停播另用 `stop()`。
 - 即使當時沒有 peer，傳輸也要記下最新的 tracks 與畫質。換片或補回 video 時依該 track 的高度重算 §2 的縮放。既有及稍後才建立的 sender 都套用最新 tracks、畫質與縮放。
 - `setQuality` 先記住最新設定，再逐一套用到現有的 video sender。連續設定以最新值為準，後加入的成員也用該值。某個成員失敗時透過 `onError` 回報帶該 `memberId` 的 `TRACK_ERROR`（relay 的單一上傳沒有 memberId），繼續處理其餘成員，保留已成功的設定。該次所有 sender 處理完後，若有失敗，Promise 以第一個錯誤 reject。
