@@ -2,8 +2,19 @@ import type { Quality } from "@project/shared";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { ApiError } from "../../lib/api";
 import { SignalDisconnectedError, SignalTimeoutError } from "../../lib/signal";
+import { ENCODER_LAG_DURATION_MS } from "./encoder-health";
 import { QUALITY_BROADCAST_GRACE_MS } from "./host-session-quality";
-import { Q, roomUpdated, setup, snapshot } from "./host-session.fixtures";
+import {
+  FakeStream,
+  Q,
+  fakeTrack,
+  host,
+  readySource,
+  roomUpdated,
+  setup,
+  snapshot,
+  viewer,
+} from "./host-session.fixtures";
 
 // 畫質連續調整（streaming.md §2）：房主「最後的選擇」優先，房間的廣播延遲、
 // 被拒或逾時都要能回到正確的畫質，不靠重開面板。
@@ -163,5 +174,98 @@ describe("房主的畫質請求", () => {
     expect(t.session.getView().pendingQuality).toEqual(Q.smooth);
     vi.advanceTimersByTime(QUALITY_BROADCAST_GRACE_MS);
     expect(t.session.getView().pendingQuality).toBeNull();
+  });
+});
+
+describe("房主編碼健康度（streaming.md §2「編碼跟不上」）", () => {
+  test("原片 FPS 以片源 track.getSettings().frameRate 為目標，連續 10 秒低於 70% 觸發，換畫質或停播立即清除", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const t = setup();
+    const stream = new FakeStream(
+      fakeTrack("video", "v1", { height: 2160, frameRate: 60 }),
+      fakeTrack("audio", "a1"),
+    );
+    const transport = await t.goLive(readySource(stream));
+    // 切到原片 FPS（maxFramerate = null，依片源 60 FPS → 70% 為 42 FPS）
+    t.client.emit(
+      roomUpdated("p2p", { height: 2160, bitrate: 25_000_000, fps: "source" }),
+    );
+
+    transport.emitStats({
+      memberId: "v1",
+      bitrateKbps: 12_000,
+      framesPerSecond: 30,
+      qualityLimitationReason: "none",
+    });
+    vi.advanceTimersByTime(ENCODER_LAG_DURATION_MS - 1);
+    transport.emitStats({
+      memberId: "v1",
+      bitrateKbps: 12_000,
+      framesPerSecond: 30,
+      qualityLimitationReason: "none",
+    });
+    expect(t.session.getView().encoderLagging).toBe(false);
+
+    vi.advanceTimersByTime(1);
+    transport.emitStats({
+      memberId: "v1",
+      bitrateKbps: 12_000,
+      framesPerSecond: 30,
+      qualityLimitationReason: "none",
+    });
+    expect(t.session.getView().encoderLagging).toBe(true);
+
+    // 換畫質立即清除提示
+    t.client.emit(roomUpdated("p2p", Q.standard));
+    expect(t.session.getView().encoderLagging).toBe(false);
+
+    // 再次觸發後停播立即清除提示
+    transport.emitStats({
+      memberId: "v1",
+      bitrateKbps: 8_000,
+      qualityLimitationReason: "cpu",
+    });
+    vi.advanceTimersByTime(ENCODER_LAG_DURATION_MS);
+    transport.emitStats({
+      memberId: "v1",
+      bitrateKbps: 8_000,
+      qualityLimitationReason: "cpu",
+    });
+    expect(t.session.getView().encoderLagging).toBe(true);
+
+    t.session.setIntent(false);
+    await t.client.ack("stream:status off");
+    expect(t.session.getView().encoderLagging).toBe(false);
+  });
+
+  test("跟不上的收看者離線後，滿 10 秒自動清除提示", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const t = setup();
+    const transport = await t.goLive();
+
+    transport.emitStats({
+      memberId: "v1",
+      bitrateKbps: 8_000,
+      qualityLimitationReason: "cpu",
+    });
+    vi.advanceTimersByTime(ENCODER_LAG_DURATION_MS);
+    transport.emitStats({
+      memberId: "v1",
+      bitrateKbps: 8_000,
+      qualityLimitationReason: "cpu",
+    });
+    expect(t.session.getView().encoderLagging).toBe(true);
+
+    // v1 離線：沒有其他跟不上的 sender，10 秒後清除
+    t.client.emit({
+      type: "room:members",
+      members: [host, viewer("v1", false)],
+    });
+    vi.advanceTimersByTime(ENCODER_LAG_DURATION_MS - 1);
+    expect(t.session.getView().encoderLagging).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(t.session.getView().encoderLagging).toBe(false);
   });
 });

@@ -44,6 +44,8 @@ export type HostSessionView = {
   error: string | null;
   /** 房主最後一次選的畫質檔位，還沒被房間廣播追上（畫質面板顯示它而不是舊廣播值）；沒有為 null。 */
   pendingQuality: Quality | null;
+  /** 直播中房主編碼器連續 10 秒跟不上（streaming.md §2「高畫質提示」）。 */
+  encoderLagging: boolean;
 };
 
 export type HostRequest =
@@ -77,6 +79,8 @@ export type HostSessionOptions = {
   createTransport?: CreateHostTransport;
   /** 逾時等計時器（預設瀏覽器 timers）。 */
   timers?: SessionTimers;
+  /** 目前時間（預設 Date.now，測試用假時鐘）。 */
+  now?: () => number;
 };
 
 export type Kind = "video" | "audio";

@@ -292,6 +292,7 @@ describe("整合 SignalClient：切模式第 2 步逾時觸發 resync", () => {
     expect(t.transports[1]!.options.mode).toBe("relay");
     expect(t.session.getView()).toEqual({
       pendingQuality: null,
+      encoderLagging: false,
       intent: true,
       phase: "starting",
       error: null,
@@ -338,6 +339,7 @@ describe("整合 SignalClient：切模式第 2 步逾時觸發 resync", () => {
     await flush();
     expect(t.session.getView()).toEqual({
       pendingQuality: null,
+      encoderLagging: false,
       intent: true,
       phase: "waiting",
       error: null,
@@ -355,6 +357,7 @@ describe("整合 SignalClient：切模式第 2 步逾時觸發 resync", () => {
     expect(t.sockets).toHaveLength(2);
     expect(t.session.getView()).toEqual({
       pendingQuality: null,
+      encoderLagging: false,
       intent: true,
       phase: "waiting",
       error: null,
@@ -367,6 +370,7 @@ describe("整合 SignalClient：切模式第 2 步逾時觸發 resync", () => {
     expect(t.transports[1]!.options.mode).toBe("relay");
     expect(t.session.getView()).toEqual({
       pendingQuality: null,
+      encoderLagging: false,
       intent: true,
       phase: "starting",
       error: null,

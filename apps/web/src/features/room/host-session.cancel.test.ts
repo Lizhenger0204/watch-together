@@ -24,6 +24,7 @@ const idle = {
   phase: "idle",
   error: null,
   pendingQuality: null,
+  encoderLagging: false,
 };
 
 describe("開播途中按停止（假傳輸）", () => {

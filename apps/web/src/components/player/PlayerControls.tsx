@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   Maximize,
   MessageSquareOff,
   MessageSquareText,
@@ -127,8 +128,13 @@ export type PlayerControlsProps = {
     onSeek: (time: number) => void;
   };
   volume: PlayerVolume;
-  /** 房主：畫質按鈕（顯示目前畫質，點開後是 panel）。 */
-  quality?: { label: string; disabled?: boolean; panel: ReactNode };
+  /** 房主：畫質按鈕（顯示目前畫質，點開後是 panel）；warning 為即時編碼警告。 */
+  quality?: {
+    label: string;
+    disabled?: boolean;
+    warning?: string;
+    panel: ReactNode;
+  };
   /** 彈幕設定（有 panel 時點開顯示開關與密度；無 panel 時直接切換）。 */
   danmaku?: { on: boolean; panel?: ReactNode; onToggle?: () => void };
   /** 收看端聊天室入口。 */
@@ -160,7 +166,7 @@ export function PlayerControls({
       ? {
           id: qualityPanelId,
           label: "畫質",
-          widthClass: "w-72",
+          widthClass: "w-80",
           content: quality.panel,
         }
       : popover.open === "danmaku" && danmaku?.panel
@@ -206,6 +212,18 @@ export function PlayerControls({
             className={`pointer-events-auto relative z-10 mx-3 mb-1 min-h-0 max-w-[calc(100%-1.5rem)] self-end overflow-y-auto overscroll-contain rounded-sm bg-zinc-900/95 p-3 text-left text-white shadow-sm focus-visible:outline-none ${activeDialog.widthClass}`}
           >
             {activeDialog.content}
+          </div>
+        )}
+        {!activeDialog && quality?.warning && (
+          <div
+            role="status"
+            className="pointer-events-auto relative z-10 mx-3 mb-1 flex max-w-[calc(100%-1.5rem)] items-center gap-1.5 self-end rounded-sm border border-amber-400/50 bg-zinc-900/95 px-2.5 py-1.5 text-xs text-amber-200"
+          >
+            <AlertTriangle
+              className="size-3.5 shrink-0 text-amber-400"
+              strokeWidth={1.75}
+            />
+            <span>{quality.warning}</span>
           </div>
         )}
       </div>
@@ -264,6 +282,18 @@ export function PlayerControls({
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1">
+            {quality?.warning && (
+              <button
+                type="button"
+                aria-label={quality.warning}
+                title={quality.warning}
+                disabled={quality.disabled}
+                className={`${ICON_BUTTON} text-amber-400 hover:text-amber-300`}
+                onClick={() => popover.toggle("quality")}
+              >
+                <AlertTriangle className="size-4" strokeWidth={1.75} />
+              </button>
+            )}
             {quality && (
               <button
                 ref={popover.qualityButtonRef}

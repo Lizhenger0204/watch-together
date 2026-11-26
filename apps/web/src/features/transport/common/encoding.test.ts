@@ -78,6 +78,83 @@ describe("applyVideoEncoding", () => {
       720,
     );
     expect(sender.lastParameters?.encodings[0]?.scaleResolutionDownBy).toBe(1);
+    expect(sender.lastParameters?.degradationPreference).toBe(
+      "maintain-framerate",
+    );
+  });
+
+  it("keeps scale 1 for source resolution and switches degradationPreference above 1080", async () => {
+    const sender = new FakeRtcRtpSender(null);
+    const sourceTarget = resolveQuality(
+      { height: "source", bitrate: 25_000_000, fps: 30 },
+      null,
+    );
+
+    await applyVideoEncoding(sender, sourceTarget, 2160);
+    expect(sender.lastParameters?.encodings[0]?.scaleResolutionDownBy).toBe(1);
+    expect(sender.lastParameters?.degradationPreference).toBe(
+      "maintain-resolution",
+    );
+
+    await applyVideoEncoding(sender, sourceTarget, 1608);
+    expect(sender.lastParameters?.encodings[0]?.scaleResolutionDownBy).toBe(1);
+    expect(sender.lastParameters?.degradationPreference).toBe(
+      "maintain-resolution",
+    );
+
+    await applyVideoEncoding(sender, sourceTarget, 1080);
+    expect(sender.lastParameters?.encodings[0]?.scaleResolutionDownBy).toBe(1);
+    expect(sender.lastParameters?.degradationPreference).toBe(
+      "maintain-framerate",
+    );
+  });
+
+  it("uses maintain-resolution for sent heights > 1080 and restores maintain-framerate at ≤ 1080", async () => {
+    const sender = new FakeRtcRtpSender(null);
+
+    await applyVideoEncoding(
+      sender,
+      { targetHeight: 2160, maxBitrate: 25_000_000, maxFramerate: 30 },
+      2160,
+    );
+    expect(sender.lastParameters?.encodings[0]?.scaleResolutionDownBy).toBe(1);
+    expect(sender.lastParameters?.degradationPreference).toBe(
+      "maintain-resolution",
+    );
+
+    await applyVideoEncoding(
+      sender,
+      { targetHeight: 1440, maxBitrate: 15_000_000, maxFramerate: 30 },
+      2160,
+    );
+    expect(sender.lastParameters?.encodings[0]?.scaleResolutionDownBy).toBe(
+      1.5,
+    );
+    expect(sender.lastParameters?.degradationPreference).toBe(
+      "maintain-resolution",
+    );
+
+    // 4K 片源切回 1080P：縮放 2 倍、恢復 maintain-framerate
+    await applyVideoEncoding(
+      sender,
+      { targetHeight: 1080, maxBitrate: 8_000_000, maxFramerate: 30 },
+      2160,
+    );
+    expect(sender.lastParameters?.encodings[0]?.scaleResolutionDownBy).toBe(2);
+    expect(sender.lastParameters?.degradationPreference).toBe(
+      "maintain-framerate",
+    );
+
+    // 1080P 片源設定 2160P：實際送出高度是 1080，維持 maintain-framerate
+    await applyVideoEncoding(
+      sender,
+      { targetHeight: 2160, maxBitrate: 25_000_000, maxFramerate: 30 },
+      1080,
+    );
+    expect(sender.lastParameters?.encodings[0]?.scaleResolutionDownBy).toBe(1);
+    expect(sender.lastParameters?.degradationPreference).toBe(
+      "maintain-framerate",
+    );
   });
 
   it("removes a previous framerate cap when switching to source fps", async () => {

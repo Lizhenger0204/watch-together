@@ -4,8 +4,11 @@
  * 純邏輯（codec 偏好）與「套用參數到 sender」分開，前者可以在 Node 測試環境
  * 直接測，後者靠 rtc-fake.ts 的 sender 測。
  */
-import { AUDIO_MAX_BITRATE, type EncodingTarget } from "@project/shared";
-import { computeScaleDownBy } from "../../source/source-check";
+import {
+  AUDIO_MAX_BITRATE,
+  videoEncodingPolicy,
+  type EncodingTarget,
+} from "@project/shared";
 import type { RtcRtpSender, RtcRtpTransceiver } from "./rtc";
 
 export { AUDIO_MAX_BITRATE };
@@ -24,12 +27,12 @@ export async function applyVideoEncoding(
   sourceHeight: number,
 ): Promise<void> {
   const parameters = sender.getParameters();
-  // degradationPreference 是 RTCRtpSendParameters 的欄位，不是 per-encoding。
-  parameters.degradationPreference = "maintain-framerate";
-  const scaleResolutionDownBy = computeScaleDownBy(
+  const { scaleResolutionDownBy, degradationPreference } = videoEncodingPolicy(
     sourceHeight,
     target.targetHeight,
   );
+  // degradationPreference 是 RTCRtpSendParameters 的欄位，不是 per-encoding。
+  parameters.degradationPreference = degradationPreference;
   for (const encoding of parameters.encodings) {
     encoding.maxBitrate = target.maxBitrate;
     // 「原片」FPS 不設上限；要拿掉先前設過的值，否則會沿用舊的上限。

@@ -1,4 +1,5 @@
 export { ChatPanel } from "./ChatPanel";
+export { ENCODER_LAG_MESSAGE } from "./encoder-health";
 export { InviteCodeCard } from "./InviteCodeCard";
 export { MemberList } from "./MemberList";
 export { QualityPanel } from "./QualityPanel";

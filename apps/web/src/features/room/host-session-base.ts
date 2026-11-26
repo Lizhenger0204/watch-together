@@ -9,6 +9,7 @@ import {
   type CreateHostTransport,
   type HostTransport,
   type TransportSignal,
+  type TransportStats,
 } from "../transport";
 import type { HostSessionOptions, HostSource, Op } from "./host-session-types";
 import type { TitleSync } from "./host-session-title";
@@ -59,6 +60,9 @@ export abstract class HostSessionBase {
   protected abstract publish(): void;
   protected abstract showError(error: unknown): void;
   protected abstract failLive(duringStart?: boolean): void;
+  protected abstract handleStats(
+    stats: TransportStats & { memberId?: string },
+  ): void;
 
   /** 目前畫質檔位依片源解析出的編碼目標（streaming.md §2）。 */
   protected encodingTarget(): EncodingTarget {
@@ -148,6 +152,9 @@ export abstract class HostSessionBase {
       quality: (this.appliedTarget = this.encodingTarget()),
       roomId: this.options.roomId,
       token: this.options.token,
+    });
+    transport.onStats((stats) => {
+      if (current()) this.handleStats(stats);
     });
     transport.onError((error) => {
       // 個別收看者的連線失敗由傳輸自己 removePeer；只顯示畫質套用失敗。

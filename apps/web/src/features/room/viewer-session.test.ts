@@ -332,7 +332,14 @@ describe("member:status 回報", () => {
     s.receive(snapshot({ live: true }));
     const t = s.last();
     t.events.emit("state", "playing");
-    t.events.emit("stats", { bitrateKbps: 5000, rttMs: 40 });
+    t.events.emit("stats", {
+      bitrateKbps: 5000,
+      rttMs: 40,
+      // 即使傳輸層意外帶入房主方向統計，收看者也不可送進 member:status（streaming.md §8）。
+      frameHeight: 2160,
+      framesPerSecond: 30,
+      qualityLimitationReason: "cpu",
+    });
     vi.advanceTimersByTime(MEMBER_STATUS_INTERVAL_MS);
     expect(s.sent.at(-1)).toEqual({
       type: "member:status",

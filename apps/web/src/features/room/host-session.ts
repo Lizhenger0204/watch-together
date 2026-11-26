@@ -1,6 +1,7 @@
 import {
   DEFAULT_QUALITY,
   sameEncodingTarget,
+  sameQuality,
   type EncodingTarget,
   type Mode,
   type Quality,
@@ -15,7 +16,9 @@ import {
   type CreateHostTransport,
   type HostTransport,
   type TransportSignal,
+  type TransportStats,
 } from "../transport";
+import { EncoderHealthTracker, targetFramerate } from "./encoder-health";
 import { HostSessionFlows } from "./host-session-flows";
 import { QualityRequests } from "./host-session-quality";
 import { TitleSync } from "./host-session-title";
@@ -71,6 +74,7 @@ export class HostSession extends HostSessionFlows {
   protected serverLive = false;
   protected readonly titles: TitleSync;
   private readonly qualityRequests: QualityRequests;
+  private readonly encoderHealth: EncoderHealthTracker;
   private viewers = new Set<string>();
   protected transport: HostTransport | null = null;
   /** 最後一次交給傳輸的各 kind track。 */
@@ -124,11 +128,17 @@ export class HostSession extends HostSessionFlows {
       rejected: (error) => this.showError(error),
       timers: this.timers,
     });
+    this.encoderHealth = new EncoderHealthTracker({
+      timers: this.timers,
+      now: options.now ?? (() => Date.now()),
+      changed: () => this.publish(),
+    });
     this.view = {
       intent: this.intent,
       phase: this.phase(),
       error: null,
       pendingQuality: null,
+      encoderLagging: false,
     };
   }
 
@@ -266,7 +276,10 @@ export class HostSession extends HostSessionFlows {
       case "room:members": {
         const next = onlineViewers(message.members);
         for (const id of this.viewers) {
-          if (!next.has(id)) this.transport?.removePeer(id);
+          if (!next.has(id)) {
+            this.transport?.removePeer(id);
+            this.encoderHealth.removeSender(id);
+          }
         }
         this.viewers = next;
         return;
@@ -333,14 +346,17 @@ export class HostSession extends HostSessionFlows {
     if (this.appliedTarget && sameEncodingTarget(target, this.appliedTarget))
       return;
     this.appliedTarget = target;
+    this.encoderHealth.reset();
     transport.setQuality(target).catch((error: unknown) => {
       this.showError(error);
     });
   }
 
   private handleRoomUpdated(mode: Mode, quality: Quality) {
+    const qualityChanged = !sameQuality(this.quality, quality);
     this.quality = quality;
     this.qualityRequests.observe(quality);
+    if (qualityChanged) this.encoderHealth.reset();
     this.applyEncoding();
     if (mode !== this.mode) {
       this.mode = mode;
@@ -476,6 +492,18 @@ export class HostSession extends HostSessionFlows {
     }
   }
 
+  protected handleStats(stats: TransportStats & { memberId?: string }) {
+    if (!this.serverLive || !this.transport) return;
+    const maxFramerate =
+      this.appliedTarget?.maxFramerate ?? this.encodingTarget().maxFramerate;
+    const sourceFps = this.applied.video?.getSettings?.().frameRate;
+    this.encoderHealth.observe(
+      stats.memberId ?? "relay",
+      stats,
+      targetFramerate(maxFramerate, sourceFps),
+    );
+  }
+
   protected dropTransport() {
     this.generation += 1;
     this.transport?.destroy();
@@ -484,6 +512,7 @@ export class HostSession extends HostSessionFlows {
     this.peerHandler = null;
     this.applied = NO_TRACKS;
     this.titles.invalidate();
+    this.encoderHealth.reset();
   }
 
   protected cancelIntent() {
@@ -526,13 +555,15 @@ export class HostSession extends HostSessionFlows {
       phase: this.phase(),
       error: this.error,
       pendingQuality: this.qualityRequests.pending,
+      encoderLagging: this.encoderHealth.lagging,
     };
     const prev = this.view;
     if (
       prev.intent === next.intent &&
       prev.phase === next.phase &&
       prev.error === next.error &&
-      prev.pendingQuality === next.pendingQuality
+      prev.pendingQuality === next.pendingQuality &&
+      prev.encoderLagging === next.encoderLagging
     ) {
       return;
     }

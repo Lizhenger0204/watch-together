@@ -204,6 +204,106 @@ describe("computeTransportStats", () => {
         .bitrateKbps,
     ).toBeCloseTo(0.8);
   });
+
+  it("extracts video outbound-rtp height, fps and qualityLimitationReason for send direction", () => {
+    const entries = [
+      entry("outbound-rtp", "audio", {
+        kind: "audio",
+        bytesSent: 500,
+        frameHeight: 9999,
+        framesPerSecond: 99,
+        qualityLimitationReason: "cpu",
+      }),
+      entry("outbound-rtp", "video-low", {
+        kind: "video",
+        bytesSent: 1000,
+        frameHeight: 720,
+        framesPerSecond: 30,
+        qualityLimitationReason: "none",
+      }),
+      entry("outbound-rtp", "video-high", {
+        kind: "video",
+        bytesSent: 4000,
+        frameHeight: 2160,
+        framesPerSecond: 29.5,
+        qualityLimitationReason: "cpu",
+      }),
+    ];
+    expect(computeTransportStats(entries, "send", 1000).stats).toEqual({
+      bitrateKbps: 0,
+      frameHeight: 2160,
+      framesPerSecond: 29.5,
+      qualityLimitationReason: "cpu",
+    });
+  });
+
+  it("omits missing or invalid outbound video encoding fields and keeps 0 fps", () => {
+    const entries = [
+      entry("outbound-rtp", "video-no-height", {
+        kind: "video",
+        bytesSent: 1000,
+        framesPerSecond: 0,
+        qualityLimitationReason: "unknown-reason",
+      }),
+    ];
+    const stats = computeTransportStats(entries, "send", 1000).stats;
+    expect(stats).toEqual({ bitrateKbps: 0, framesPerSecond: 0 });
+    expect(stats).not.toHaveProperty("frameHeight");
+    expect(stats).not.toHaveProperty("qualityLimitationReason");
+
+    const negative = [
+      entry("outbound-rtp", "video-bad", {
+        kind: "video",
+        frameHeight: -10,
+        framesPerSecond: Number.NaN,
+      }),
+    ];
+    const badStats = computeTransportStats(negative, "send", 1000).stats;
+    expect(badStats).toEqual({ bitrateKbps: 0 });
+  });
+
+  it("prefers a video outbound-rtp entry with frameHeight over one without", () => {
+    const entries = [
+      entry("outbound-rtp", "video-idle", {
+        kind: "video",
+        framesPerSecond: 0,
+        qualityLimitationReason: "other",
+      }),
+      entry("outbound-rtp", "video-active", {
+        kind: "video",
+        frameHeight: 1440,
+        framesPerSecond: 30,
+        qualityLimitationReason: "bandwidth",
+      }),
+    ];
+    expect(computeTransportStats(entries, "send", 1000).stats).toEqual({
+      bitrateKbps: 0,
+      frameHeight: 1440,
+      framesPerSecond: 30,
+      qualityLimitationReason: "bandwidth",
+    });
+  });
+
+  it("never reports outbound video encoding fields in receive direction", () => {
+    const entries = [
+      entry("outbound-rtp", "video-out", {
+        kind: "video",
+        frameHeight: 2160,
+        framesPerSecond: 30,
+        qualityLimitationReason: "cpu",
+      }),
+      entry("inbound-rtp", "video-in", {
+        kind: "video",
+        bytesReceived: 2000,
+        frameHeight: 2160,
+        framesPerSecond: 30,
+      }),
+    ];
+    const stats = computeTransportStats(entries, "receive", 1000).stats;
+    expect(stats).not.toHaveProperty("frameHeight");
+    expect(stats).not.toHaveProperty("framesPerSecond");
+    expect(stats).not.toHaveProperty("qualityLimitationReason");
+  });
 });
 
 describe("StatsSampler", () => {

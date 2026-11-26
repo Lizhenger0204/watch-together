@@ -53,6 +53,7 @@ describe("開播", () => {
     await t.client.ack("stream:status live 電影");
     expect(t.session.getView()).toEqual({
       pendingQuality: null,
+      encoderLagging: false,
       intent: true,
       phase: "live",
       error: null,
@@ -298,6 +299,7 @@ describe("開播", () => {
       expect(t.onIntentChange).toHaveBeenLastCalledWith(false);
       expect(t.session.getView()).toEqual({
         pendingQuality: null,
+        encoderLagging: false,
         intent: false,
         phase: "idle",
         error: "無法開始直播：轉發模式目前無法使用，請房主改用「P2P 直連」。",

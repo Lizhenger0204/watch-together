@@ -107,7 +107,8 @@ export interface HostTransport {
   ): Unsubscribe;
   /**
    * 每 2 秒的上傳統計，P2P 依成員，relay 只有一份。rttMs 需有可用的
-   * selectedCandidatePairId 及對應 RTT，packetLoss 取自 remote-inbound-rtp。
+   * selectedCandidatePairId 及對應 RTT，packetLoss 取自 remote-inbound-rtp，
+   * frameHeight／framesPerSecond／qualityLimitationReason 取自 video outbound-rtp。
    * 缺少資料時省略該欄位。
    */
   onStats(

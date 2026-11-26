@@ -15,6 +15,7 @@ import {
   type HostTransport,
   type HostTransportOptions,
   type HostTransportState,
+  type TransportStats,
 } from "../transport";
 import { HostSession } from "./host-session";
 import type { HostSessionClient, HostSource } from "./host-session-types";
@@ -132,6 +133,9 @@ export class FakeTransport implements HostTransport {
   readonly gate = deferred();
   readonly setQualityResult = { error: null as unknown };
   private readonly stateHandlers = new Set<(s: HostTransportState) => void>();
+  private readonly statsHandlers = new Set<
+    (s: TransportStats & { memberId?: string }) => void
+  >();
   private readonly errorHandlers = new Set<(e: TransportError) => void>();
 
   constructor(
@@ -152,6 +156,7 @@ export class FakeTransport implements HostTransport {
   destroy() {
     this.log.push("destroy");
     this.stateHandlers.clear();
+    this.statsHandlers.clear();
     this.errorHandlers.clear();
   }
   replaceTrack(kind: "video" | "audio", track: MediaStreamTrack | null) {
@@ -172,8 +177,9 @@ export class FakeTransport implements HostTransport {
   onPeerState() {
     return () => {};
   }
-  onStats() {
-    return () => {};
+  onStats(handler: (stats: TransportStats & { memberId?: string }) => void) {
+    this.statsHandlers.add(handler);
+    return () => void this.statsHandlers.delete(handler);
   }
   onError(handler: (error: TransportError) => void) {
     this.errorHandlers.add(handler);
@@ -182,13 +188,25 @@ export class FakeTransport implements HostTransport {
   emitState(state: HostTransportState) {
     this.stateHandlers.forEach((handler) => handler(state));
   }
+  emitStats(stats: TransportStats & { memberId?: string }) {
+    this.statsHandlers.forEach((handler) => handler(stats));
+  }
   emitError(error: TransportError) {
     this.errorHandlers.forEach((handler) => handler(error));
   }
 }
 
-export function fakeTrack(kind: "video" | "audio", id: string) {
-  return { id, kind, readyState: "live" } as unknown as MediaStreamTrack;
+export function fakeTrack(
+  kind: "video" | "audio",
+  id: string,
+  settings: MediaTrackSettings = {},
+) {
+  return {
+    id,
+    kind,
+    readyState: "live",
+    getSettings: () => settings,
+  } as unknown as MediaStreamTrack;
 }
 
 export class FakeStream {

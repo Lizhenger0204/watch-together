@@ -10,6 +10,16 @@
  */
 import { P2P_TOTAL_BITRATE_WARNING } from "@project/shared";
 
+/** 房主端 video outbound-rtp 的編碼品質限制原因（streaming.md §8）。 */
+export type QualityLimitationReason = "none" | "cpu" | "bandwidth" | "other";
+
+const QUALITY_LIMITATION_REASONS = new Set<QualityLimitationReason>([
+  "none",
+  "cpu",
+  "bandwidth",
+  "other",
+]);
+
 /** 單條連線的統計。 */
 export interface TransportStats {
   /** 送出（房主）或收到（收看者）的碼率（kbps）。 */
@@ -18,6 +28,10 @@ export interface TransportStats {
   rttMs?: number;
   /** 封包遺失率 0–1。 */
   packetLoss?: number;
+  /** 以下只在房主方向（"send"）提供，來源見 streaming.md §8；收看者不送進 member:status。 */
+  frameHeight?: number;
+  framesPerSecond?: number;
+  qualityLimitationReason?: QualityLimitationReason;
 }
 
 /** 取樣方向：房主送出（bytesSent）、收看者收到（bytesReceived）。 */
@@ -159,7 +173,39 @@ export function computeTransportStats(
   const stats: TransportStats = { bitrateKbps };
   if (rttSeconds !== undefined) stats.rttMs = rttSeconds * 1000;
   if (packetLoss !== undefined) stats.packetLoss = packetLoss;
+  if (direction === "send") {
+    const video = pickOutboundVideo(list);
+    if (video) {
+      const frameHeight = asNonNegativeNumber(video.frameHeight);
+      const framesPerSecond = asNonNegativeNumber(video.framesPerSecond);
+      const reason = asQualityLimitationReason(video.qualityLimitationReason);
+      if (frameHeight !== undefined) stats.frameHeight = frameHeight;
+      if (framesPerSecond !== undefined)
+        stats.framesPerSecond = framesPerSecond;
+      if (reason !== undefined) stats.qualityLimitationReason = reason;
+    }
+  }
   return { stats, snapshot: { bytesByRtp, timestamp: now } };
+}
+
+/**
+ * 房主方向取 video `outbound-rtp`（streaming.md §8）。
+ * 同一 sender 有多個 video `outbound-rtp` 時取 `frameHeight` 最大者。
+ */
+function pickOutboundVideo(entries: StatsEntry[]): StatsEntry | undefined {
+  let chosen: StatsEntry | undefined;
+  let maxHeight = -1;
+  for (const entry of entries) {
+    if (entry.type !== "outbound-rtp") continue;
+    const kind = entry.kind ?? entry.mediaType;
+    if (kind !== "video") continue;
+    const height = asNonNegativeNumber(entry.frameHeight) ?? -1;
+    if (chosen === undefined || height > maxHeight) {
+      chosen = entry;
+      maxHeight = height;
+    }
+  }
+  return chosen;
 }
 
 /**
@@ -193,5 +239,19 @@ export class StatsSampler {
 function asFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value)
     ? value
+    : undefined;
+}
+
+function asNonNegativeNumber(value: unknown): number | undefined {
+  const n = asFiniteNumber(value);
+  return n !== undefined && n >= 0 ? n : undefined;
+}
+
+function asQualityLimitationReason(
+  value: unknown,
+): QualityLimitationReason | undefined {
+  return typeof value === "string" &&
+    QUALITY_LIMITATION_REASONS.has(value as QualityLimitationReason)
+    ? (value as QualityLimitationReason)
     : undefined;
 }

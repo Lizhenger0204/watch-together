@@ -8,6 +8,7 @@ import { ViewerPlayer } from "../features/player";
 import { HostSourcePlayer, useLocalSource } from "../features/source";
 import {
   ChatPanel,
+  ENCODER_LAG_MESSAGE,
   InviteCodeCard,
   MemberList,
   QualityPanel,
@@ -187,11 +188,17 @@ function HostView({
                     sourceInfo?.height ?? null,
                   ),
                   disabled: busy || !online,
+                  warning: session.encoderLagging
+                    ? ENCODER_LAG_MESSAGE
+                    : undefined,
                   panel: (
                     <QualityPanel
                       quality={view.room.quality}
                       pending={session.pendingQuality}
                       source={sourceInfo}
+                      mode={view.room.mode}
+                      viewers={viewers}
+                      encoderLagging={session.encoderLagging}
                       onChange={(quality) => host.setQuality(quality)}
                     />
                   ),
