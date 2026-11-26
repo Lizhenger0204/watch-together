@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { PROTOCOL_VERSION } from "../packages/shared/src/constants";
 
 test("首頁顯示服務狀態", async ({ page }, testInfo) => {
   const errors: string[] = [];
@@ -8,7 +9,9 @@ test("首頁顯示服務狀態", async ({ page }, testInfo) => {
   });
 
   await page.goto("/");
-  await expect(page.getByRole("status")).toHaveText("服務正常（協定版本 1）");
+  await expect(page.getByRole("status")).toHaveText(
+    `服務正常（協定版本 ${PROTOCOL_VERSION}）`,
+  );
   expect(errors).toEqual([]);
   await page.screenshot({ path: testInfo.outputPath("health.png") });
 });

@@ -9,7 +9,10 @@ import {
 } from "./p2p-media";
 import type { NewRoomPage } from "./room-pages";
 
-export async function playMovie(host: Page, name: "h264-aac" | "h264-silent") {
+export async function playMovie(
+  host: Page,
+  name: "h264-aac" | "h264-silent" | "h264-2160p-aac",
+) {
   await host
     .getByLabel("選擇影片")
     .setInputFiles(
