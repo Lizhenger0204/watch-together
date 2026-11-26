@@ -3,7 +3,6 @@ import {
   CHAT_MAX_LENGTH,
   CHAT_RAW_MAX_LENGTH,
   chatTextLength,
-  clampChatRawText,
   normalizeChatText,
   parseClientMessage,
 } from "../src";
@@ -31,17 +30,14 @@ describe("聊天文字計數與正規化", () => {
     expect(send(`   ${"字".repeat(CHAT_MAX_LENGTH)}   `)).toBe(true);
   });
 
-  test("原始字串上限以 code point 截斷：900 空白＋50 個 😀＋尾 不會被截掉", () => {
+  test("原始字串上限以 code point 計：900 空白＋50 個 😀＋尾 可以送出", () => {
     const raw = " ".repeat(900) + "😀".repeat(50) + "尾";
     expect(raw.length).toBeGreaterThan(CHAT_RAW_MAX_LENGTH);
-    expect(clampChatRawText(raw)).toBe(raw);
+    expect(chatTextLength(raw)).toBeLessThanOrEqual(CHAT_RAW_MAX_LENGTH);
     expect(send(raw)).toBe(true);
   });
 
-  test("超過原始上限時只保留前 CHAT_RAW_MAX_LENGTH 個 code point，不切斷 emoji", () => {
-    const raw = "😀".repeat(CHAT_RAW_MAX_LENGTH + 5);
-    const clamped = clampChatRawText(raw);
-    expect(chatTextLength(clamped)).toBe(CHAT_RAW_MAX_LENGTH);
-    expect(clamped).toBe("😀".repeat(CHAT_RAW_MAX_LENGTH));
+  test("原始字串超過 CHAT_RAW_MAX_LENGTH 個 code point 時拒絕", () => {
+    expect(send("😀".repeat(CHAT_RAW_MAX_LENGTH + 1))).toBe(false);
   });
 });

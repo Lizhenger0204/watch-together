@@ -332,7 +332,8 @@ function HostView({
             youId={youId}
             connected={online}
             onSend={actions.sendChat}
-            className={theater ? "h-80" : "h-80 lg:h-auto"}
+            visible={sideTab === "chat"}
+            className={theater ? "h-80" : "h-80 lg:h-auto lg:flex-1"}
           />
         </SidebarTabPanel>
       </aside>
@@ -436,7 +437,8 @@ function ViewerView({ room }: { room: Room }) {
               youId={youId}
               connected={online}
               onSend={actions.sendChat}
-              className="h-80 lg:h-auto"
+              visible={sideTab === "chat"}
+              className="h-80 lg:h-auto lg:flex-1"
             />
           </SidebarTabPanel>
           <SidebarTabPanel

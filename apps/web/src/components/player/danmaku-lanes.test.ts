@@ -221,16 +221,57 @@ describe("DanmakuScheduler", () => {
       startAt: 0,
       durationMs: estimateDanmakuDurationMs(slowText),
       width: 16,
-      stageWidth,
     };
     const fastText = "長".repeat(60);
     const next = {
       durationMs: estimateDanmakuDurationMs(fastText),
       width: 60 * 16,
-      stageWidth,
     };
     const prevSpeed = (stageWidth + prev.width) / prev.durationMs;
     const tailClears = (prev.width + DANMAKU_GAP_PX) / prevSpeed;
-    expect(earliestFollowStart(prev, next)).toBeGreaterThan(tailClears);
+    expect(earliestFollowStart(prev, next, stageWidth)).toBeGreaterThan(
+      tailClears,
+    );
+  });
+
+  test("退出全螢幕後舞台變窄，排程用目前寬度重算在途彈幕，不與前一則重疊", () => {
+    // 重現 GPT 複驗：1280px 全螢幕發射長彈幕，退出到 959px 後才發射 48px 的短彈幕。
+    const scheduler = new DanmakuScheduler();
+    const long = "長".repeat(200);
+    const longWidth = 3_200;
+    const prevs = ["a", "b", "c"].map((id) =>
+      place(scheduler, id, {
+        text: long,
+        textWidth: longWidth,
+        stageWidth: 1_280,
+        now: 0,
+      }),
+    );
+    const durationMs =
+      prevs[0]!.kind === "placed" ? prevs[0]!.item.durationMs : 0;
+    const stageWidth = 959;
+    let now = 1_000;
+    let short = place(scheduler, "s", {
+      text: "短短短",
+      textWidth: 48,
+      stageWidth,
+      now,
+    });
+    while (short.kind === "wait") {
+      now = short.retryAt;
+      short = place(scheduler, "s", {
+        text: "短短短",
+        textWidth: 48,
+        stageWidth,
+        now,
+      });
+    }
+    expect(short.kind).toBe("placed");
+    if (short.kind !== "placed") return;
+    // 在 959px 舞台上，長彈幕的尾巴位置 = 舞台寬 − 進度 × (舞台寬＋文字寬) ＋ 文字寬
+    const progress = now / durationMs;
+    const prevTail =
+      stageWidth - progress * (stageWidth + longWidth) + longWidth;
+    expect(prevTail).toBeLessThanOrEqual(stageWidth - DANMAKU_GAP_PX + 1);
   });
 });

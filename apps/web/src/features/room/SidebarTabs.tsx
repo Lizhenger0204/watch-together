@@ -100,8 +100,8 @@ export function SidebarTabs<T extends string>({
 }
 
 /**
- * 分頁對應的面板。每個分頁的面板元素都一直存在，讓每個分頁的 `aria-controls` 都指得到；
- * 未選中的面板隱藏且不渲染內容（內容掛載時機與只渲染選中分頁時相同）。
+ * 分頁對應的面板。每個分頁的面板一直掛載、未選中時隱藏：
+ * 每個分頁的 `aria-controls` 都指得到，切換分頁也不會丟掉聊天草稿與閱讀位置。
  */
 export function SidebarTabPanel({
   idPrefix,
@@ -123,7 +123,7 @@ export function SidebarTabPanel({
       hidden={!active}
       className={active ? "flex min-h-0 flex-1 flex-col" : "hidden"}
     >
-      {active && children}
+      {children}
     </div>
   );
 }

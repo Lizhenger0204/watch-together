@@ -1,12 +1,18 @@
 import {
   CHAT_MAX_LENGTH,
+  CHAT_RAW_MAX_LENGTH,
   chatTextLength,
-  clampChatRawText,
   normalizeChatText,
   type ChatMessage,
 } from "@project/shared";
 import { SendHorizontal } from "lucide-react";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import { restoreUnsentDraft } from "./chat-draft";
 import { CHAT_NOT_SENT, chatErrorMessage } from "./chat-errors";
 
@@ -26,12 +32,15 @@ export function ChatPanel({
   youId,
   connected,
   onSend,
+  visible = true,
   className = "",
 }: {
   messages: ChatMessage[];
   youId: string;
   connected: boolean;
   onSend: (text: string) => Promise<void> | undefined;
+  /** 所在分頁是否顯示。隱藏時保持掛載（草稿與閱讀位置都保留），切回時還原捲動位置。 */
+  visible?: boolean;
   className?: string;
 }) {
   const [draft, setDraft] = useState("");
@@ -40,29 +49,41 @@ export function ChatPanel({
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const stickToBottomRef = useRef(true);
+  const savedScrollTopRef = useRef(0);
 
   function handleScroll() {
     const el = listRef.current;
-    if (!el) return;
+    if (!el || !visible) return;
+    savedScrollTopRef.current = el.scrollTop;
     stickToBottomRef.current =
       el.scrollHeight - el.scrollTop - el.clientHeight <= 48;
   }
 
+  // 切回聊天分頁：原本停在底部就跟到最新，否則回到離開時的閱讀位置。
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    if (!el || !visible) return;
+    el.scrollTop = stickToBottomRef.current
+      ? el.scrollHeight
+      : savedScrollTopRef.current;
+  }, [visible]);
+
   useEffect(() => {
     const el = listRef.current;
-    if (!el || messages.length === 0) return;
+    if (!el || !visible || messages.length === 0) return;
     const latest = messages[messages.length - 1];
     if (stickToBottomRef.current || latest?.memberId === youId) {
       el.scrollTop = el.scrollHeight;
       stickToBottomRef.current = true;
     }
-  }, [messages, youId]);
+  }, [messages, youId, visible]);
 
   const normalized = normalizeChatText(draft);
   const length = chatTextLength(normalized);
-  const tooLong = length > CHAT_MAX_LENGTH;
+  const rawTooLong = chatTextLength(draft) > CHAT_RAW_MAX_LENGTH;
+  const tooLong = length > CHAT_MAX_LENGTH || rawTooLong;
   const canSend = connected && !sending && length > 0 && !tooLong;
-  const showCounter = length >= CHAT_MAX_LENGTH - 20;
+  const showCounter = length >= CHAT_MAX_LENGTH - 20 || rawTooLong;
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -94,7 +115,7 @@ export function ChatPanel({
   return (
     <section
       aria-label="聊天室"
-      className={`flex min-h-0 flex-1 flex-col bg-white ${className}`}
+      className={`flex min-h-0 flex-col bg-white ${className}`}
     >
       <div
         ref={listRef}
@@ -155,8 +176,8 @@ export function ChatPanel({
             aria-invalid={tooLong || undefined}
             placeholder={connected ? "說點什麼…" : "連線中…"}
             onChange={(event) => {
-              // 原始字串上限以 code point 計（protocol.md），不用 maxLength（那是 UTF-16 長度）。
-              setDraft(clampChatRawText(event.currentTarget.value));
+              // 不用 maxLength 截斷（UTF-16 長度，也會吃掉送出失敗時放回的草稿）；超過上限時停用送出並提示。
+              setDraft(event.currentTarget.value);
               if (error) setError("");
             }}
             className="h-9 min-w-0 flex-1 rounded border border-zinc-200 bg-[#f5f6f7] px-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-[#0072b2] focus:bg-white focus:ring-1 focus:ring-[#0072b2] focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
@@ -175,8 +196,10 @@ export function ChatPanel({
           <p
             className={`text-right text-xs tabular-nums ${tooLong ? "text-red-600" : "text-zinc-500"}`}
           >
-            {length} / {CHAT_MAX_LENGTH}
-            {tooLong && "（超過上限，請刪減後再送出）"}
+            {rawTooLong
+              ? `含空白超過 ${CHAT_RAW_MAX_LENGTH} 字，請刪減後再送出`
+              : `${length} / ${CHAT_MAX_LENGTH}`}
+            {!rawTooLong && tooLong && "（超過上限，請刪減後再送出）"}
           </p>
         )}
       </form>

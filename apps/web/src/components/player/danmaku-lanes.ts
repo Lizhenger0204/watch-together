@@ -51,34 +51,37 @@ export function estimateDanmakuDurationMs(text: string): number {
 /** 同一軌道前後兩則彈幕之間至少保留的水平間隙（px）。 */
 export const DANMAKU_GAP_PX = 24;
 
-/** 一則彈幕的滑行幾何：動畫從舞台右緣（左邊界在 x = 舞台寬）滑到完全離開左緣，共移動「舞台寬＋文字寬」。 */
+/**
+ * 一則彈幕的滑行紀錄。動畫以進度計算位置（`translate: -進度 × (舞台寬＋文字寬)`），
+ * 舞台寬度改變（例如退出全螢幕）時在途彈幕的位置會跟著變，所以紀錄不存舞台寬，
+ * 每次排程都用「目前」的舞台寬度重算。
+ */
 export type DanmakuRun = {
   startAt: number;
   durationMs: number;
   /** 文字實際寬度（px）。 */
   width: number;
-  /** 發射當下的舞台寬度（px）。 */
-  stageWidth: number;
 };
 
 /**
- * 後一則彈幕 `next` 最早可以在同一軌道發射的時間，保證全程不追撞前一則 `prev`：
+ * 後一則彈幕 `next` 最早可以在同一軌道發射的時間，在舞台寬度 `stageWidth` 下保證全程不追撞前一則 `prev`：
  * 1. 發射當下，前一則的尾巴已離開右緣並留出間隙；
  * 2. 前一則尾巴離開左緣的那一刻，後一則的頭還在它後方至少一個間隙（後一則較快時會追上，要再晚一點發）。
- * 兩者都是線性運動，檢查頭尾兩個時間點就涵蓋整段。
+ * 兩者都是線性運動，檢查頭尾兩個時間點就涵蓋整段。發射之後舞台寬度再變動則無法保證。
  */
 export function earliestFollowStart(
   prev: DanmakuRun,
-  next: { durationMs: number; width: number; stageWidth: number },
+  next: { durationMs: number; width: number },
+  stageWidth: number,
   gapPx = DANMAKU_GAP_PX,
 ): number {
-  const prevSpeed = (prev.stageWidth + prev.width) / prev.durationMs;
-  const nextSpeed = (next.stageWidth + next.width) / next.durationMs;
+  const prevSpeed = (stageWidth + prev.width) / prev.durationMs;
+  const nextSpeed = (stageWidth + next.width) / next.durationMs;
   const tailClears = prev.startAt + (prev.width + gapPx) / prevSpeed;
   const noCatchUp =
     prev.startAt +
     prev.durationMs -
-    Math.max(0, next.stageWidth - gapPx) / nextSpeed;
+    Math.max(0, stageWidth - gapPx) / nextSpeed;
   return Math.ceil(Math.max(tailClears, noCatchUp));
 }
 
@@ -106,7 +109,7 @@ const EPSILON = 0.001;
 /**
  * 追蹤畫面上每個高度區段還在滑行的彈幕（純邏輯，方便用假時間測試）。
  * 以絕對高度記錄而不是軌道編號，切換密度後新軌道也會避開舊彈幕。
- * 同軌道的避讓以實際文字寬度、舞台寬度與滑行速度計算（見 `earliestFollowStart`）。
+ * 同軌道的避讓以實際文字寬度、目前舞台寬度與滑行速度計算（見 `earliestFollowStart`）。
  */
 export class DanmakuScheduler {
   private busy: BusyBand[] = [];
@@ -137,11 +140,8 @@ export class DanmakuScheduler {
     );
 
     const durationMs = estimateDanmakuDurationMs(input.text);
-    const next = {
-      durationMs,
-      width: Math.max(1, input.textWidth),
-      stageWidth: Math.max(1, input.stageWidth),
-    };
+    const next = { durationMs, width: Math.max(1, input.textWidth) };
+    const stageWidth = Math.max(1, input.stageWidth);
     let retryAt = Number.POSITIVE_INFINITY;
     for (let lane = 0; lane < preset.lanes; lane++) {
       const { top, height } = laneBand(lane, input.density);
@@ -151,7 +151,7 @@ export class DanmakuScheduler {
         if (band.top < bottom - EPSILON && top < band.bottom - EPSILON) {
           blockedUntil = Math.max(
             blockedUntil,
-            earliestFollowStart(band, next),
+            earliestFollowStart(band, next, stageWidth),
           );
         }
       }
