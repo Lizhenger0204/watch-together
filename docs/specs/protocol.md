@@ -157,7 +157,7 @@ type ChatMessage = {
 
 ### 聊天訊息（`chat:send` / `chat:message`）
 
-- `text`：原始字串上限 1,000 字（`CHAT_RAW_MAX_LENGTH`）；解析時會將換行正規化為空白並移除前後空白，正規化後須為 1–200 字（`CHAT_MAX_LENGTH`）。**字數一律以 Unicode code point 計算**（一個 emoji 算 1 字，不是 JavaScript 的 `.length`）；正規化與計數只用 shared 的 `normalizeChatText()`、`chatTextLength()`，前端輸入框、字數提示與送出檢查不可自行計算。空字串、純空白或超長都由 schema 拒絕，已驗證連線回 `BAD_REQUEST`（未驗證以 `4400` 關閉）。
+- `text`：原始字串上限 1,000 字（`CHAT_RAW_MAX_LENGTH`）；解析時會將換行正規化為空白並移除前後空白，正規化後須為 1–200 字（`CHAT_MAX_LENGTH`）。**字數一律以 Unicode code point 計算**（一個 emoji 算 1 字，不是 JavaScript 的 `.length`）；正規化、計數與輸入框的原始上限截斷只用 shared 的 `normalizeChatText()`、`chatTextLength()`、`clampChatRawText()`，前端輸入框、字數提示與送出檢查不可自行計算（輸入框不可用 `maxLength`，那是 UTF-16 長度）。空字串、純空白或超長都由 schema 拒絕，已驗證連線回 `BAD_REQUEST`（未驗證以 `4400` 關閉）。
 - **身份與權限**：房主與收看者皆可發言。`memberId`、`nickname`、`role`、`id`、`sentAt` 一律由伺服器依當下房間成員狀態與伺服器時間填入，不採信客戶端。被踢出或已不在房間成員清單的連線送出時以 `4401` 關閉，不廣播。
 - **限流**：每位成員每 10 秒最多 5 則（`CHAT_RATE_LIMIT_MAX=5`、`CHAT_RATE_LIMIT_WINDOW_MS=10_000`）。超過時拒絕且不廣播：帶 `reqId` 回 `ack { reqId, ok: false, code: 'RATE_LIMITED' }`，否則回 `error { code: 'RATE_LIMITED', message }`。限流紀錄只放在房間 DO 的記憶體，不寫入 storage：DO 要閒置超過 10 秒才會休眠，屆時窗口已過，一般休眠不影響；同一 DO 實例內重連仍沿用原額度。**例外**：部署或執行環境重啟若發生在窗口內，額度會提早恢復，這是可接受的取捨。
 - **不保留歷史紀錄**：伺服器不持久化聊天訊息，`room:snapshot` 不包含歷史聊天；加入房間後只看得到之後發出的訊息。房主不需要禁言或刪除訊息。

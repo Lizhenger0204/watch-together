@@ -284,56 +284,57 @@ function HostView({
             { id: "chat", label: "聊天", badge: unreadChat },
           ]}
         />
-        {sideTab === "room" ? (
-          <SidebarTabPanel idPrefix="host-side" id="room">
-            <div
-              className={`flex min-h-0 flex-1 flex-col divide-y divide-zinc-200 overflow-y-auto ${
-                theater
-                  ? "lg:grid lg:grid-cols-3 lg:divide-x lg:divide-y-0"
-                  : ""
-              }`}
-            >
-              {view.room?.inviteCode && (
-                <InviteCodeCard
-                  inviteCode={view.room.inviteCode}
-                  inviteCodeVersion={view.room.inviteCodeVersion ?? 0}
-                  hostName={hostMember?.nickname ?? "房主"}
-                  onlineCount={onlineCount}
-                  onRegenerate={actions.regenerateInviteCode}
-                />
-              )}
-              <MemberList
-                members={view.members}
-                youId={youId}
-                isHost
-                memberStatus={view.memberStatus}
-                onKick={(memberId) => run(actions.kick(memberId))}
+        <SidebarTabPanel
+          idPrefix="host-side"
+          id="room"
+          active={sideTab === "room"}
+        >
+          <div
+            className={`flex min-h-0 flex-1 flex-col divide-y divide-zinc-200 overflow-y-auto ${
+              theater ? "lg:grid lg:grid-cols-3 lg:divide-x lg:divide-y-0" : ""
+            }`}
+          >
+            {view.room?.inviteCode && (
+              <InviteCodeCard
+                inviteCode={view.room.inviteCode}
+                inviteCodeVersion={view.room.inviteCodeVersion ?? 0}
+                hostName={hostMember?.nickname ?? "房主"}
+                onlineCount={onlineCount}
+                onRegenerate={actions.regenerateInviteCode}
               />
-              {view.room && (
-                <StreamSettings
-                  room={view.room}
-                  viewers={viewers}
-                  bitrate={bitrate}
-                  busy={busy || !online}
-                  onModeChange={(mode) => host.setMode(mode)}
-                  onLockedChange={(locked) =>
-                    run(actions.updateRoom({ locked }))
-                  }
-                />
-              )}
-            </div>
-          </SidebarTabPanel>
-        ) : (
-          <SidebarTabPanel idPrefix="host-side" id="chat">
-            <ChatPanel
-              messages={view.messages}
+            )}
+            <MemberList
+              members={view.members}
               youId={youId}
-              connected={online}
-              onSend={actions.sendChat}
-              className={theater ? "h-80" : "h-80 lg:h-auto"}
+              isHost
+              memberStatus={view.memberStatus}
+              onKick={(memberId) => run(actions.kick(memberId))}
             />
-          </SidebarTabPanel>
-        )}
+            {view.room && (
+              <StreamSettings
+                room={view.room}
+                viewers={viewers}
+                bitrate={bitrate}
+                busy={busy || !online}
+                onModeChange={(mode) => host.setMode(mode)}
+                onLockedChange={(locked) => run(actions.updateRoom({ locked }))}
+              />
+            )}
+          </div>
+        </SidebarTabPanel>
+        <SidebarTabPanel
+          idPrefix="host-side"
+          id="chat"
+          active={sideTab === "chat"}
+        >
+          <ChatPanel
+            messages={view.messages}
+            youId={youId}
+            connected={online}
+            onSend={actions.sendChat}
+            className={theater ? "h-80" : "h-80 lg:h-auto"}
+          />
+        </SidebarTabPanel>
       </aside>
     </div>
   );
@@ -425,29 +426,34 @@ function ViewerView({ room }: { room: Room }) {
               { id: "members", label: `成員（${onlineCount}）` },
             ]}
           />
-          {sideTab === "chat" ? (
-            <SidebarTabPanel idPrefix="viewer-side" id="chat">
-              <ChatPanel
-                messages={view.messages}
+          <SidebarTabPanel
+            idPrefix="viewer-side"
+            id="chat"
+            active={sideTab === "chat"}
+          >
+            <ChatPanel
+              messages={view.messages}
+              youId={youId}
+              connected={online}
+              onSend={actions.sendChat}
+              className="h-80 lg:h-auto"
+            />
+          </SidebarTabPanel>
+          <SidebarTabPanel
+            idPrefix="viewer-side"
+            id="members"
+            active={sideTab === "members"}
+          >
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <MemberList
+                members={view.members}
                 youId={youId}
-                connected={online}
-                onSend={actions.sendChat}
-                className="h-80 lg:h-auto"
+                isHost={false}
+                memberStatus={{}}
+                onKick={() => {}}
               />
-            </SidebarTabPanel>
-          ) : (
-            <SidebarTabPanel idPrefix="viewer-side" id="members">
-              <div className="min-h-0 flex-1 overflow-y-auto">
-                <MemberList
-                  members={view.members}
-                  youId={youId}
-                  isHost={false}
-                  memberStatus={{}}
-                  onKick={() => {}}
-                />
-              </div>
-            </SidebarTabPanel>
-          )}
+            </div>
+          </SidebarTabPanel>
         </aside>
       )}
     </div>

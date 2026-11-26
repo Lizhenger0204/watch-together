@@ -26,7 +26,12 @@ export function usePlayerDanmaku(
       ),
     },
     danmakuOverlay: (
-      <DanmakuOverlay items={feed.items} onDone={feed.removeItem} />
+      <DanmakuOverlay
+        items={feed.items}
+        onDone={feed.removeItem}
+        stageRef={feed.stageRef}
+        probeRef={feed.probeRef}
+      />
     ),
   };
 }

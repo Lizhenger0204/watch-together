@@ -1,12 +1,13 @@
 import {
   CHAT_MAX_LENGTH,
-  CHAT_RAW_MAX_LENGTH,
   chatTextLength,
+  clampChatRawText,
   normalizeChatText,
   type ChatMessage,
 } from "@project/shared";
 import { SendHorizontal } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { restoreUnsentDraft } from "./chat-draft";
 import { CHAT_NOT_SENT, chatErrorMessage } from "./chat-errors";
 
 function formatClock(epochMs: number): string {
@@ -70,17 +71,20 @@ export function ChatPanel({
     inputRef.current?.focus();
     setError("");
     setSending(true);
-    // 等 ack 期間輸入框保持可用、焦點不動；成功後只清掉這次送出的草稿，期間新打的字保留。
+    // 送出當下就清空輸入框，等確認期間可以接著打下一則；
+    // 失敗時再把這次的文字放回前面，成功時輸入框只剩新打的字，不會殘留已送出的文字。
     const sentDraft = draft;
+    setDraft("");
     try {
       const promise = onSend(normalized);
       if (!promise) {
+        setDraft((current) => restoreUnsentDraft(sentDraft, current));
         setError(CHAT_NOT_SENT);
         return;
       }
       await promise;
-      setDraft((current) => (current === sentDraft ? "" : current));
     } catch (e: unknown) {
+      setDraft((current) => restoreUnsentDraft(sentDraft, current));
       setError(chatErrorMessage(e));
     } finally {
       setSending(false);
@@ -148,11 +152,11 @@ export function ChatPanel({
             type="text"
             aria-label="輸入聊天訊息"
             value={draft}
-            maxLength={CHAT_RAW_MAX_LENGTH}
             aria-invalid={tooLong || undefined}
             placeholder={connected ? "說點什麼…" : "連線中…"}
             onChange={(event) => {
-              setDraft(event.currentTarget.value);
+              // 原始字串上限以 code point 計（protocol.md），不用 maxLength（那是 UTF-16 長度）。
+              setDraft(clampChatRawText(event.currentTarget.value));
               if (error) setError("");
             }}
             className="h-9 min-w-0 flex-1 rounded border border-zinc-200 bg-[#f5f6f7] px-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-[#0072b2] focus:bg-white focus:ring-1 focus:ring-[#0072b2] focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"

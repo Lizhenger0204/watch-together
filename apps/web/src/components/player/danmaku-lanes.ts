@@ -48,16 +48,38 @@ export function estimateDanmakuDurationMs(text: string): number {
   return 7_500 + Math.min(text.length, 60) * 45;
 }
 
-/** 粗估這條彈幕完全離開右邊界並留出間隙所需的時間，供同軌道排程避讓。 */
-export function estimateLaneCooldownMs(
-  text: string,
-  durationMs: number,
+/** 同一軌道前後兩則彈幕之間至少保留的水平間隙（px）。 */
+export const DANMAKU_GAP_PX = 24;
+
+/** 一則彈幕的滑行幾何：動畫從舞台右緣（左邊界在 x = 舞台寬）滑到完全離開左緣，共移動「舞台寬＋文字寬」。 */
+export type DanmakuRun = {
+  startAt: number;
+  durationMs: number;
+  /** 文字實際寬度（px）。 */
+  width: number;
+  /** 發射當下的舞台寬度（px）。 */
+  stageWidth: number;
+};
+
+/**
+ * 後一則彈幕 `next` 最早可以在同一軌道發射的時間，保證全程不追撞前一則 `prev`：
+ * 1. 發射當下，前一則的尾巴已離開右緣並留出間隙；
+ * 2. 前一則尾巴離開左緣的那一刻，後一則的頭還在它後方至少一個間隙（後一則較快時會追上，要再晚一點發）。
+ * 兩者都是線性運動，檢查頭尾兩個時間點就涵蓋整段。
+ */
+export function earliestFollowStart(
+  prev: DanmakuRun,
+  next: { durationMs: number; width: number; stageWidth: number },
+  gapPx = DANMAKU_GAP_PX,
 ): number {
-  const ratio = 0.14 + Math.min(text.length, 40) * 0.012;
-  return Math.min(
-    Math.round(durationMs * 0.75),
-    Math.max(1_200, Math.round(durationMs * ratio)),
-  );
+  const prevSpeed = (prev.stageWidth + prev.width) / prev.durationMs;
+  const nextSpeed = (next.stageWidth + next.width) / next.durationMs;
+  const tailClears = prev.startAt + (prev.width + gapPx) / prevSpeed;
+  const noCatchUp =
+    prev.startAt +
+    prev.durationMs -
+    Math.max(0, next.stageWidth - gapPx) / nextSpeed;
+  return Math.ceil(Math.max(tailClears, noCatchUp));
 }
 
 /** 軌道在彈幕區內的頂部百分比位置與高度。 */
@@ -76,14 +98,15 @@ export function laneTopPercent(lane: number, density: DanmakuDensity): number {
   return laneBand(lane, density).top;
 }
 
-type BusyBand = { top: number; bottom: number; freeAt: number };
+type BusyBand = DanmakuRun & { top: number; bottom: number };
 
 /** 浮點誤差容忍值：相鄰軌道邊界相接不算重疊。 */
 const EPSILON = 0.001;
 
 /**
- * 追蹤畫面上哪些高度區段還有彈幕尾巴沒離開右邊界（純邏輯，方便用假時間測試）。
+ * 追蹤畫面上每個高度區段還在滑行的彈幕（純邏輯，方便用假時間測試）。
  * 以絕對高度記錄而不是軌道編號，切換密度後新軌道也會避開舊彈幕。
+ * 同軌道的避讓以實際文字寬度、舞台寬度與滑行速度計算（見 `earliestFollowStart`）。
  */
 export class DanmakuScheduler {
   private busy: BusyBand[] = [];
@@ -99,14 +122,26 @@ export class DanmakuScheduler {
     activeCount: number;
     now: number;
     isSelf: boolean;
+    /** 文字實際寬度（px）。 */
+    textWidth: number;
+    /** 舞台目前寬度（px）。 */
+    stageWidth: number;
   }): DanmakuScheduleResult {
     const preset = presetForDensity(input.density);
     if (input.activeCount >= preset.maxActive && !input.isSelf) {
       return { kind: "drop" };
     }
 
-    this.busy = this.busy.filter((band) => band.freeAt > input.now);
+    this.busy = this.busy.filter(
+      (band) => band.startAt + band.durationMs > input.now,
+    );
 
+    const durationMs = estimateDanmakuDurationMs(input.text);
+    const next = {
+      durationMs,
+      width: Math.max(1, input.textWidth),
+      stageWidth: Math.max(1, input.stageWidth),
+    };
     let retryAt = Number.POSITIVE_INFINITY;
     for (let lane = 0; lane < preset.lanes; lane++) {
       const { top, height } = laneBand(lane, input.density);
@@ -114,16 +149,14 @@ export class DanmakuScheduler {
       let blockedUntil = 0;
       for (const band of this.busy) {
         if (band.top < bottom - EPSILON && top < band.bottom - EPSILON) {
-          blockedUntil = Math.max(blockedUntil, band.freeAt);
+          blockedUntil = Math.max(
+            blockedUntil,
+            earliestFollowStart(band, next),
+          );
         }
       }
-      if (blockedUntil === 0) {
-        const durationMs = estimateDanmakuDurationMs(input.text);
-        this.busy.push({
-          top,
-          bottom,
-          freeAt: input.now + estimateLaneCooldownMs(input.text, durationMs),
-        });
+      if (blockedUntil <= input.now) {
+        this.busy.push({ top, bottom, startAt: input.now, ...next });
         return {
           kind: "placed",
           item: {
@@ -138,7 +171,7 @@ export class DanmakuScheduler {
       }
       retryAt = Math.min(retryAt, blockedUntil);
     }
-    // 所有軌道的入口都還有彈幕：不硬塞到同一位置，等最早空出的軌道。
+    // 每條軌道現在發射都會碰到前一則：不硬塞，等最早安全的時間再試。
     return { kind: "wait", retryAt };
   }
 }

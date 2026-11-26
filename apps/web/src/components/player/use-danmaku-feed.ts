@@ -1,4 +1,4 @@
-import type { ChatMessage } from "@project/shared";
+import { chatTextLength, type ChatMessage } from "@project/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   DanmakuScheduler,
@@ -13,6 +13,10 @@ const MAX_PENDING = 20;
 const MAX_WAIT_MS = 5_000;
 
 type Pending = { msg: ChatMessage; queuedAt: number };
+
+/** 量不到時的後備值：舞台寬取視窗寬，每字約 16px（sm:text-base）。 */
+const FALLBACK_STAGE_WIDTH = 960;
+const FALLBACK_CHAR_WIDTH = 16;
 
 /**
  * 將房間新增的聊天訊息轉成播放器彈幕佇列。
@@ -29,6 +33,8 @@ export function useDanmakuFeed(messages: ChatMessage[], selfMemberId: string) {
   const seenIdsRef = useRef(new Set<string>(messages.map((m) => m.id)));
   const prefsRef = useRef(prefs);
   const selfRef = useRef(selfMemberId);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const probeRef = useRef<HTMLSpanElement | null>(null);
   // 排在其他 effect 之前，讓 pump() 讀到這次渲染的密度與身份。
   useEffect(() => {
     prefsRef.current = prefs;
@@ -45,6 +51,24 @@ export function useDanmakuFeed(messages: ChatMessage[], selfMemberId: string) {
       window.clearTimeout(retryTimerRef.current);
       retryTimerRef.current = null;
     }
+  }, []);
+
+  // 用彈幕層裡同字型的隱形探針量文字寬度，排程才能算出真實的滑行速度與間距。
+  const measure = useCallback((text: string) => {
+    const stageWidth =
+      stageRef.current?.clientWidth ||
+      (typeof window === "undefined" ? 0 : window.innerWidth) ||
+      FALLBACK_STAGE_WIDTH;
+    let textWidth = 0;
+    const probe = probeRef.current;
+    if (probe) {
+      probe.textContent = text;
+      textWidth = probe.getBoundingClientRect().width;
+      probe.textContent = "";
+    }
+    if (!(textWidth > 0))
+      textWidth = chatTextLength(text) * FALLBACK_CHAR_WIDTH;
+    return { stageWidth, textWidth };
   }, []);
 
   // 依序把排隊中的訊息放上畫面；遇到軌道全滿就停下，排一個計時器在最早空出時再試。
@@ -68,6 +92,7 @@ export function useDanmakuFeed(messages: ChatMessage[], selfMemberId: string) {
         activeCount: alive.length + added.length,
         now,
         isSelf: msg.memberId === selfRef.current,
+        ...measure(msg.text),
       });
       if (result.kind === "wait") {
         retryAt = result.retryAt;
@@ -85,7 +110,7 @@ export function useDanmakuFeed(messages: ChatMessage[], selfMemberId: string) {
         Math.max(16, retryAt - now),
       );
     }
-  }, [clearRetry, commitItems]);
+  }, [clearRetry, commitItems, measure]);
 
   const setEnabled = useCallback(
     (enabled: boolean) => {
@@ -162,6 +187,8 @@ export function useDanmakuFeed(messages: ChatMessage[], selfMemberId: string) {
     enabled: prefs.enabled,
     density: prefs.density,
     items,
+    stageRef,
+    probeRef,
     setEnabled,
     setDensity,
     removeItem,

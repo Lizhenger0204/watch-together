@@ -35,7 +35,7 @@ export function nextTabIndex(
 
 /**
  * 側欄頂部的純文字底線分頁（DESIGN.md §3）。
- * 只有選中的分頁在 Tab 順序裡，方向鍵切換並移動焦點；面板用 `SidebarTabPanel` 包起來。
+ * 只有選中的分頁在 Tab 順序裡，方向鍵切換並移動焦點；每個分頁都要有一個 `SidebarTabPanel`（未選中的隱藏）。
  */
 export function SidebarTabs<T extends string>({
   idPrefix,
@@ -77,7 +77,7 @@ export function SidebarTabs<T extends string>({
             type="button"
             role="tab"
             aria-selected={selected}
-            aria-controls={selected ? panelId : undefined}
+            aria-controls={panelId}
             tabIndex={selected ? 0 : -1}
             onClick={() => onChange(tab.id)}
             className={`relative -mb-px inline-flex h-10 items-center gap-1.5 border-b-2 px-3 text-sm transition-colors focus-visible:ring-2 focus-visible:ring-[#0072b2] focus-visible:outline-none focus-visible:ring-inset ${
@@ -99,14 +99,19 @@ export function SidebarTabs<T extends string>({
   );
 }
 
-/** 分頁對應的面板；只渲染選中的那一個。 */
+/**
+ * 分頁對應的面板。每個分頁的面板元素都一直存在，讓每個分頁的 `aria-controls` 都指得到；
+ * 未選中的面板隱藏且不渲染內容（內容掛載時機與只渲染選中分頁時相同）。
+ */
 export function SidebarTabPanel({
   idPrefix,
   id,
+  active,
   children,
 }: {
   idPrefix: string;
   id: string;
+  active: boolean;
   children: ReactNode;
 }) {
   const { tabId, panelId } = sidebarTabIds(idPrefix, id);
@@ -115,9 +120,10 @@ export function SidebarTabPanel({
       id={panelId}
       role="tabpanel"
       aria-labelledby={tabId}
-      className="flex min-h-0 flex-1 flex-col"
+      hidden={!active}
+      className={active ? "flex min-h-0 flex-1 flex-col" : "hidden"}
     >
-      {children}
+      {active && children}
     </div>
   );
 }

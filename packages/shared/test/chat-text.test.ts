@@ -1,7 +1,9 @@
 import { describe, expect, test } from "vitest";
 import {
   CHAT_MAX_LENGTH,
+  CHAT_RAW_MAX_LENGTH,
   chatTextLength,
+  clampChatRawText,
   normalizeChatText,
   parseClientMessage,
 } from "../src";
@@ -27,5 +29,19 @@ describe("聊天文字計數與正規化", () => {
 
   test("長度以正規化後計算：前後空白不佔字數", () => {
     expect(send(`   ${"字".repeat(CHAT_MAX_LENGTH)}   `)).toBe(true);
+  });
+
+  test("原始字串上限以 code point 截斷：900 空白＋50 個 😀＋尾 不會被截掉", () => {
+    const raw = " ".repeat(900) + "😀".repeat(50) + "尾";
+    expect(raw.length).toBeGreaterThan(CHAT_RAW_MAX_LENGTH);
+    expect(clampChatRawText(raw)).toBe(raw);
+    expect(send(raw)).toBe(true);
+  });
+
+  test("超過原始上限時只保留前 CHAT_RAW_MAX_LENGTH 個 code point，不切斷 emoji", () => {
+    const raw = "😀".repeat(CHAT_RAW_MAX_LENGTH + 5);
+    const clamped = clampChatRawText(raw);
+    expect(chatTextLength(clamped)).toBe(CHAT_RAW_MAX_LENGTH);
+    expect(clamped).toBe("😀".repeat(CHAT_RAW_MAX_LENGTH));
   });
 });

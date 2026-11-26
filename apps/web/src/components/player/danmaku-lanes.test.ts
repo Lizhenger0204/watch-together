@@ -1,6 +1,9 @@
 import { describe, expect, test } from "vitest";
 import {
+  DANMAKU_GAP_PX,
   DanmakuScheduler,
+  earliestFollowStart,
+  estimateDanmakuDurationMs,
   laneBand,
   laneTopPercent,
   presetForDensity,
@@ -17,6 +20,8 @@ function place(
     activeCount?: number;
     isSelf?: boolean;
     text?: string;
+    textWidth?: number;
+    stageWidth?: number;
   } = {},
 ): DanmakuScheduleResult {
   return scheduler.schedule({
@@ -26,6 +31,8 @@ function place(
     activeCount: opts.activeCount ?? 0,
     now: opts.now ?? 1000,
     isSelf: opts.isSelf ?? false,
+    textWidth: opts.textWidth ?? 40,
+    stageWidth: opts.stageWidth ?? 960,
   });
 }
 
@@ -110,5 +117,120 @@ describe("DanmakuScheduler", () => {
     expect(laneTopPercent(low.lanes - 1, "low")).toBeLessThan(
       laneTopPercent(high.lanes - 1, "high"),
     );
+  });
+
+  test("長彈幕排隊後再發射，同軌道全程不重疊（959px 舞台、少、三則 200 字）", () => {
+    // 重現 GPT 複驗：三則 200 個中文字（每字 16px）佔滿「少」的 3 條軌道，約 2 秒後再來第四則。
+    const stageWidth = 959;
+    const long = "長".repeat(200);
+    const longWidth = 200 * 16;
+    const scheduler = new DanmakuScheduler();
+    type Run = {
+      lane: number;
+      startAt: number;
+      durationMs: number;
+      width: number;
+    };
+    const runs: Run[] = [];
+    const record = (
+      result: DanmakuScheduleResult,
+      width: number,
+      now: number,
+    ) => {
+      if (result.kind !== "placed") return;
+      runs.push({
+        lane: Math.round(result.item.topPercent * 1000),
+        startAt: now,
+        durationMs: result.item.durationMs,
+        width,
+      });
+    };
+    for (const id of ["a", "b", "c"]) {
+      record(
+        place(scheduler, id, {
+          text: long,
+          textWidth: longWidth,
+          stageWidth,
+          now: 0,
+        }),
+        longWidth,
+        0,
+      );
+    }
+    let now = 2_000;
+    let fourth = place(scheduler, "d", {
+      text: long,
+      textWidth: longWidth,
+      stageWidth,
+      now,
+    });
+    while (fourth.kind === "wait") {
+      now = fourth.retryAt;
+      fourth = place(scheduler, "d", {
+        text: long,
+        textWidth: longWidth,
+        stageWidth,
+        now,
+      });
+    }
+    record(fourth, longWidth, now);
+    // 短的第五則接在後面（速度不同），也不能撞上前一則
+    let fifth = place(scheduler, "e", {
+      text: "短",
+      textWidth: 16,
+      stageWidth,
+      now,
+    });
+    while (fifth.kind === "wait") {
+      now = fifth.retryAt;
+      fifth = place(scheduler, "e", {
+        text: "短",
+        textWidth: 16,
+        stageWidth,
+        now,
+      });
+    }
+    record(fifth, 16, now);
+    expect(runs).toHaveLength(5);
+
+    // 以實際滑行公式逐 10ms 取樣：左邊界 x = 舞台寬 − 速度 × 經過時間
+    const left = (run: Run, t: number) =>
+      stageWidth -
+      ((stageWidth + run.width) / run.durationMs) * (t - run.startAt);
+    for (const a of runs) {
+      for (const b of runs) {
+        if (a === b || a.lane !== b.lane || b.startAt < a.startAt) continue;
+        if (a.startAt === b.startAt) throw new Error("同軌道同時發射");
+        const end = Math.min(
+          a.startAt + a.durationMs,
+          b.startAt + b.durationMs,
+        );
+        for (let t = b.startAt; t <= end; t += 10) {
+          const aTail = left(a, t) + a.width;
+          if (aTail <= 0) break;
+          expect(left(b, t)).toBeGreaterThanOrEqual(aTail + DANMAKU_GAP_PX - 1);
+        }
+      }
+    }
+  });
+
+  test("後一則較快時要晚一點發，免得在左側追上前一則", () => {
+    const stageWidth = 960;
+    const slowText = "短";
+    const prev = {
+      startAt: 0,
+      durationMs: estimateDanmakuDurationMs(slowText),
+      width: 16,
+      stageWidth,
+    };
+    const fastText = "長".repeat(60);
+    const next = {
+      durationMs: estimateDanmakuDurationMs(fastText),
+      width: 60 * 16,
+      stageWidth,
+    };
+    const prevSpeed = (stageWidth + prev.width) / prev.durationMs;
+    const tailClears = (prev.width + DANMAKU_GAP_PX) / prevSpeed;
+    expect(earliestFollowStart(prev, next)).toBeGreaterThan(tailClears);
   });
 });
