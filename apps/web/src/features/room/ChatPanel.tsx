@@ -1,27 +1,26 @@
-import { CHAT_MAX_LENGTH, type ChatMessage } from "@project/shared";
+import {
+  CHAT_MAX_LENGTH,
+  CHAT_RAW_MAX_LENGTH,
+  chatTextLength,
+  normalizeChatText,
+  type ChatMessage,
+} from "@project/shared";
 import { SendHorizontal } from "lucide-react";
-import { useEffect, useRef, useState, type FormEvent } from "react";
-import { ApiError } from "../../lib/api";
-import { SignalDisconnectedError } from "../../lib/signal";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
+import { restoreUnsentDraft } from "./chat-draft";
+import { CHAT_NOT_SENT, chatErrorMessage } from "./chat-errors";
 
 function formatClock(epochMs: number): string {
   const date = new Date(epochMs);
   const hh = String(date.getHours()).padStart(2, "0");
   const mm = String(date.getMinutes()).padStart(2, "0");
   return `${hh}:${mm}`;
-}
-
-function chatErrorMessage(error: unknown): string {
-  if (error instanceof SignalDisconnectedError) {
-    return "連線中斷，訊息未送出。";
-  }
-  if (error instanceof ApiError) {
-    if (error.code === "RATE_LIMITED") {
-      return "發言太快了，請稍等幾秒再試。";
-    }
-    return error.message;
-  }
-  return "送出失敗，請稍後再試。";
 }
 
 /**
@@ -33,59 +32,85 @@ export function ChatPanel({
   youId,
   connected,
   onSend,
+  visible = true,
   className = "",
 }: {
   messages: ChatMessage[];
   youId: string;
   connected: boolean;
   onSend: (text: string) => Promise<void> | undefined;
+  /** 所在分頁是否顯示。隱藏時保持掛載（草稿與閱讀位置都保留），切回時還原捲動位置。 */
+  visible?: boolean;
   className?: string;
 }) {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const stickToBottomRef = useRef(true);
+  const savedScrollTopRef = useRef(0);
 
   function handleScroll() {
     const el = listRef.current;
-    if (!el) return;
+    if (!el || !visible) return;
+    savedScrollTopRef.current = el.scrollTop;
     stickToBottomRef.current =
       el.scrollHeight - el.scrollTop - el.clientHeight <= 48;
   }
 
+  // 切回聊天分頁：原本停在底部就跟到最新，否則回到離開時的閱讀位置。
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    if (!el || !visible) return;
+    el.scrollTop = stickToBottomRef.current
+      ? el.scrollHeight
+      : savedScrollTopRef.current;
+  }, [visible]);
+
+  // 可見時才處理新訊息：原本在底部就跟到最新；自己剛送出的訊息也捲到底。
+  // 用最後處理過的訊息 id 判斷「新」，切回分頁時不把既有的最後一則當成新訊息。
+  const lastHandledIdRef = useRef<string | null>(messages.at(-1)?.id ?? null);
   useEffect(() => {
     const el = listRef.current;
-    if (!el || messages.length === 0) return;
-    const latest = messages[messages.length - 1];
-    if (stickToBottomRef.current || latest?.memberId === youId) {
+    if (!el || !visible) return;
+    const latest = messages.at(-1);
+    if (!latest || latest.id === lastHandledIdRef.current) return;
+    lastHandledIdRef.current = latest.id;
+    if (stickToBottomRef.current || latest.memberId === youId) {
       el.scrollTop = el.scrollHeight;
       stickToBottomRef.current = true;
     }
-  }, [messages, youId]);
+  }, [messages, youId, visible]);
 
-  const normalized = draft.replace(/[\r\n]+/g, " ").trim();
-  const canSend =
-    connected &&
-    !sending &&
-    normalized.length > 0 &&
-    normalized.length <= CHAT_MAX_LENGTH;
-  const showCounter = draft.length >= CHAT_MAX_LENGTH - 20;
+  const normalized = normalizeChatText(draft);
+  const length = chatTextLength(normalized);
+  const rawTooLong = chatTextLength(draft) > CHAT_RAW_MAX_LENGTH;
+  const tooLong = length > CHAT_MAX_LENGTH || rawTooLong;
+  const canSend = connected && !sending && length > 0 && !tooLong;
+  const showCounter = length >= CHAT_MAX_LENGTH - 20 || rawTooLong;
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     if (!canSend) return;
+    // 用滑鼠按送出時焦點在按鈕上，按鈕送出期間會停用，把焦點留在輸入框才能接著打字。
+    inputRef.current?.focus();
     setError("");
     setSending(true);
+    // 送出當下就清空輸入框，等確認期間可以接著打下一則；
+    // 失敗時再把這次的文字放回前面，成功時輸入框只剩新打的字，不會殘留已送出的文字。
+    const sentDraft = draft;
+    setDraft("");
     try {
       const promise = onSend(normalized);
       if (!promise) {
-        setError("連線中斷，訊息未送出。");
+        setDraft((current) => restoreUnsentDraft(sentDraft, current));
+        setError(CHAT_NOT_SENT);
         return;
       }
       await promise;
-      setDraft("");
     } catch (e: unknown) {
+      setDraft((current) => restoreUnsentDraft(sentDraft, current));
       setError(chatErrorMessage(e));
     } finally {
       setSending(false);
@@ -95,7 +120,7 @@ export function ChatPanel({
   return (
     <section
       aria-label="聊天室"
-      className={`flex min-h-0 flex-1 flex-col bg-white ${className}`}
+      className={`flex min-h-0 flex-col bg-white ${className}`}
     >
       <div
         ref={listRef}
@@ -149,13 +174,14 @@ export function ChatPanel({
         )}
         <div className="flex items-center gap-2">
           <input
+            ref={inputRef}
             type="text"
             aria-label="輸入聊天訊息"
             value={draft}
-            maxLength={CHAT_MAX_LENGTH}
-            disabled={!connected || sending}
+            aria-invalid={tooLong || undefined}
             placeholder={connected ? "說點什麼…" : "連線中…"}
             onChange={(event) => {
+              // 不用 maxLength 截斷（UTF-16 長度，也會吃掉送出失敗時放回的草稿）；超過上限時停用送出並提示。
               setDraft(event.currentTarget.value);
               if (error) setError("");
             }}
@@ -172,8 +198,13 @@ export function ChatPanel({
           </button>
         </div>
         {showCounter && (
-          <p className="text-right text-xs text-zinc-500 tabular-nums">
-            {draft.length} / {CHAT_MAX_LENGTH}
+          <p
+            className={`text-right text-xs tabular-nums ${tooLong ? "text-red-600" : "text-zinc-500"}`}
+          >
+            {rawTooLong
+              ? `含空白超過 ${CHAT_RAW_MAX_LENGTH} 字，請刪減後再送出`
+              : `${length} / ${CHAT_MAX_LENGTH}`}
+            {!rawTooLong && tooLong && "（超過上限，請刪減後再送出）"}
           </p>
         )}
       </form>

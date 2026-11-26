@@ -11,6 +11,7 @@ import {
   InviteCodeCard,
   MemberList,
   QualityPanel,
+  SidebarTabPanel,
   SidebarTabs,
   StreamSettings,
   qualityButtonLabel,
@@ -274,6 +275,8 @@ function HostView({
         }`}
       >
         <SidebarTabs
+          idPrefix="host-side"
+          label="房間側欄"
           active={sideTab}
           onChange={setSideTab}
           tabs={[
@@ -281,7 +284,11 @@ function HostView({
             { id: "chat", label: "聊天", badge: unreadChat },
           ]}
         />
-        {sideTab === "room" ? (
+        <SidebarTabPanel
+          idPrefix="host-side"
+          id="room"
+          active={sideTab === "room"}
+        >
           <div
             className={`flex min-h-0 flex-1 flex-col divide-y divide-zinc-200 overflow-y-auto ${
               theater ? "lg:grid lg:grid-cols-3 lg:divide-x lg:divide-y-0" : ""
@@ -314,15 +321,21 @@ function HostView({
               />
             )}
           </div>
-        ) : (
+        </SidebarTabPanel>
+        <SidebarTabPanel
+          idPrefix="host-side"
+          id="chat"
+          active={sideTab === "chat"}
+        >
           <ChatPanel
             messages={view.messages}
             youId={youId}
             connected={online}
             onSend={actions.sendChat}
-            className={theater ? "h-80" : "h-80 lg:h-auto"}
+            visible={sideTab === "chat"}
+            className={theater ? "h-80 lg:flex-1" : "h-80 lg:h-auto lg:flex-1"}
           />
-        )}
+        </SidebarTabPanel>
       </aside>
     </div>
   );
@@ -341,6 +354,10 @@ function ViewerView({ room }: { room: Room }) {
     chatOpen && sideTab === "chat",
   );
   const { danmaku, danmakuOverlay } = usePlayerDanmaku(view.messages, youId);
+  const openChat = () => {
+    setChatOpen(true);
+    setSideTab("chat");
+  };
 
   return (
     <div
@@ -361,14 +378,8 @@ function ViewerView({ room }: { room: Room }) {
             danmakuOverlay={danmakuOverlay}
             chat={{
               open: chatOpen,
-              onToggle: () => {
-                if (chatOpen) {
-                  setChatOpen(false);
-                } else {
-                  setChatOpen(true);
-                  setSideTab("chat");
-                }
-              },
+              onToggle: () => (chatOpen ? setChatOpen(false) : openChat()),
+              onOpen: openChat,
             }}
           />
         )}
@@ -407,6 +418,8 @@ function ViewerView({ room }: { room: Room }) {
             <p className="text-xs text-zinc-500">{onlineCount} 人在線</p>
           </div>
           <SidebarTabs
+            idPrefix="viewer-side"
+            label="聊天側欄"
             active={sideTab}
             onChange={setSideTab}
             tabs={[
@@ -414,15 +427,25 @@ function ViewerView({ room }: { room: Room }) {
               { id: "members", label: `成員（${onlineCount}）` },
             ]}
           />
-          {sideTab === "chat" ? (
+          <SidebarTabPanel
+            idPrefix="viewer-side"
+            id="chat"
+            active={sideTab === "chat"}
+          >
             <ChatPanel
               messages={view.messages}
               youId={youId}
               connected={online}
               onSend={actions.sendChat}
-              className="h-80 lg:h-auto"
+              visible={sideTab === "chat"}
+              className="h-80 lg:h-auto lg:flex-1"
             />
-          ) : (
+          </SidebarTabPanel>
+          <SidebarTabPanel
+            idPrefix="viewer-side"
+            id="members"
+            active={sideTab === "members"}
+          >
             <div className="min-h-0 flex-1 overflow-y-auto">
               <MemberList
                 members={view.members}
@@ -432,7 +455,7 @@ function ViewerView({ room }: { room: Room }) {
                 onKick={() => {}}
               />
             </div>
-          )}
+          </SidebarTabPanel>
         </aside>
       )}
     </div>

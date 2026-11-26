@@ -204,13 +204,18 @@ describe("SignalClient", () => {
     await expect(pending).rejects.toBeInstanceOf(ApiError);
     // 斷線造成的失敗要能和伺服器拒絕區分（房主換片途中斷線不可取消開播意圖）
     await expect(pending).rejects.toBeInstanceOf(SignalDisconnectedError);
+    // 已寫入 socket 才斷線：結果不明，呼叫端要能和「根本沒送出」區分
+    await expect(pending).rejects.toMatchObject({ inFlight: true });
   });
 
   test("未連上就送 request 也是連線中斷；伺服器拒絕則不是", async () => {
     const offline = setup();
-    await expect(
-      offline.client.request({ type: "room:update", locked: true }),
-    ).rejects.toBeInstanceOf(SignalDisconnectedError);
+    const notSent = offline.client.request({
+      type: "room:update",
+      locked: true,
+    });
+    await expect(notSent).rejects.toBeInstanceOf(SignalDisconnectedError);
+    await expect(notSent).rejects.toMatchObject({ inFlight: false });
 
     const { client, current, connect } = setup();
     connect();

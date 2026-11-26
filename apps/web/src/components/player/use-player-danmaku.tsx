@@ -28,8 +28,9 @@ export function usePlayerDanmaku(
     danmakuOverlay: (
       <DanmakuOverlay
         items={feed.items}
-        density={feed.density}
         onDone={feed.removeItem}
+        stageRef={feed.stageRef}
+        probeRef={feed.probeRef}
       />
     ),
   };
