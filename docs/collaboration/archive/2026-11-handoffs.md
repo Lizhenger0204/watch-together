@@ -688,3 +688,12 @@ T-118 第二輪審查（GPT ultra fast，66a7155）：第一輪 8 項中 6 項�
 > - P2P 基本流程已在本機實測正常。新功能不等 T-113；T-113 等部署到 Cloudflare 之後再做。
 > - 新增 T-124～T-127。T-125 會改到 `features/source`（原本是 GPT 的 UI），由 Claude 主導（後於同日暫由 Gemini 接手 T-124～T-127）。
 > - T-121、T-122 由監工派給 Claude 子對話，各自用自己的 worktree。`claude/test-session-docs`（測試對話規範）刻意先不送審，等功能全部完成後再處理。
+
+### T-127（Gemini 實作，Claude 審查修正，2026-11-26）— DONE
+
+1. 做了什麼：更新 protocol／room-and-invite／streaming／architecture 與 `shared`（`chat:send`／`chat:message`）；後端 `chat-rate-limit.ts`、`process.ts`、`room-do.ts` 實作轉送、成員檢查與限流；前端新增 `DanmakuOverlay`／`DanmakuPanel`（共用 `PlayerControls` 彈出定位與焦點還原）、`ChatPanel`、`SidebarTabs` 接入 `RoomPage`。
+2. 介面變動：WS 新增 `chat:send`／`chat:message`（`PROTOCOL_VERSION=1`）；無新增依賴。
+3. 已知限制：限流在 `RoomDO` 記憶體；iOS Safari 原生全螢幕無自訂彈幕層；前端保留近期 200 則、離房清空。
+4. 驗證：rebase 最新 `main` 後 `pnpm typecheck && pnpm lint && pnpm test && pnpm build` 全綠（web+shared 579、signal 146）。
+5. 審查與修正（Claude，`claude/T-127-review-fixes`，合併於 `f157181`）：GPT（gpt-6.2-sol）首輪退回 7 項，加上三輪複驗，均已修正：字數由 shared 的 `normalizeChatText()`／`chatTextLength()` 統一以 code point 計；彈幕排程依文字寬度與舞台寬度避免同軌道追撞，切換密度不移動已發射的彈幕；全螢幕「開啟聊天室」退出全螢幕後一定切到聊天；送出時焦點留在輸入框；在途斷線顯示「無法確認是否已送出」；側欄分頁支援鍵盤操作與 ARIA 關聯；限流的重啟例外寫進 protocol.md。依使用者指示標為 `DONE`。
+6. 例外與遺留：T-127 改到 `features/source/HostSourcePlayer.tsx`（房主端彈幕接線，屬必要改動，比照 T-125 的 `features/source` 例外）。**已知未修**：`laneBand()` 以舞台高度百分比計算軌道高度，播放器矮時（例如手機寬 390px，彈幕區約 163px）每條軌道只有約 11–12px，小於一行字的 20px，相鄰軌道的彈幕會上下重疊；桌面尺寸不受影響。修法建議：軌道高度至少一行字高（用現有探針量測），播放器太矮時減少可用軌道數。
