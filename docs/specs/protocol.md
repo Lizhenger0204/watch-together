@@ -119,7 +119,7 @@ WHIP 只需房間已切到 relay 即可發布。P2P 模式下，WHIP 的 409 訊
 type Mode = 'p2p' | 'relay';
 // streaming.md §2 的三條畫質滑桿檔位；'source' 代表沿用原片。三個欄位都必填，不可有其他欄位。
 type Quality = {
-  height: 720 | 900 | 1080 | 1440 | 2160 | 'source'; // 'source'：原片解析度，不縮放（T-136）
+  height: 720 | 900 | 1080 | 1440 | 2160 | 'source'; // 'source'：原片解析度，不縮放（T-137）
   bitrate: 8_000_000 | 10_000_000 | 15_000_000 | 25_000_000 | 40_000_000 | 'source'; // bps
   fps: 24 | 30 | 60 | 'source';
 };
@@ -172,4 +172,4 @@ type ChatMessage = {
 | `PROTOCOL_VERSION` | 內容 |
 | --- | --- |
 | 1 | 第一版（尚未正式發布）。發布前的修改不升版：ICE 路徑由 `/api/ice` 改為 `/api/rooms/:roomId/ice`（才能驗證是哪個房間的成員）、加入關閉碼表、房主重新連線的流程、連到不存在或已關閉的房間改為接受後以 `4001` 關閉（原本回 HTTP 404）、P2P 信令必填 `data.negotiationId`、條件式加入支援 `existingRoomId` 沿用及 `excludeRoomIds` 防止重複配位、加入可帶 `joinKey` 重試時沿用已配置的席位、換碼 REST 與房主 `RoomInfo` 帶單調遞增的 `inviteCodeVersion`、`Quality` 由三個預設名稱改為解析度／位元率／FPS 三個檔位的物件（T-126；伺服器讀到舊房間存的預設名稱時回到預設畫質）、新增聊天訊息 `chat:send` 與 `chat:message`（T-127；不保留歷史紀錄，每成員每 10 秒限 5 則，長度上限 200 字）、伺服器端心跳逾時 130 秒以 `4410` 關閉並自判定逾時當下起算離線，房主離線滿 100 秒自動移除席位（有收看者則保留房間並提示房主已離開、不再接受新加入，無成員或無人滿 100 秒釋放房間）、新增 `POST /api/rooms/:roomId/leave` 明確退房與成員歸零／無人 100 秒釋放空房規則。 |
-| 2 | `Quality` 加入解析度 `1440`／`2160`／`'source'` 與位元率 `25_000_000`／`40_000_000`（T-136，ADR 0004）。舊版客戶端的 `qualitySchema` 無法解析新檔位，會丟掉 `room:snapshot`／`room:updated` 而卡住，因此升版：舊分頁送 `auth { protocolVersion: 1 }` 時伺服器以 `4400` 關閉，客戶端照關閉碼表提示重新整理。伺服器讀取儲存的畫質時仍經 `parseStoredQuality`，無法解析的值回到預設畫質。 |
+| 2 | `Quality` 加入解析度 `1440`／`2160`／`'source'` 與位元率 `25_000_000`／`40_000_000`（T-137，ADR 0004）。舊版客戶端的 `qualitySchema` 無法解析新檔位，會丟掉 `room:snapshot`／`room:updated` 而卡住，因此升版：舊分頁送 `auth { protocolVersion: 1 }` 時伺服器以 `4400` 關閉，客戶端照關閉碼表提示重新整理。伺服器讀取儲存的畫質時仍經 `parseStoredQuality`，無法解析的值回到預設畫質。 |

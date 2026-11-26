@@ -1,4 +1,4 @@
-/** protocol.md「版本紀錄」。2：Quality 加入 1440／2160／原片解析度與 25／40 Mbps（T-136）。 */
+/** protocol.md「版本紀錄」。2：Quality 加入 1440／2160／原片解析度與 25／40 Mbps（T-137）。 */
 export const PROTOCOL_VERSION = 2;
 
 /** 去掉易混淆的 0/O/1/I/L。見 docs/specs/room-and-invite.md。 */

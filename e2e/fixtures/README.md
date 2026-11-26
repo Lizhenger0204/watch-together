@@ -1,18 +1,18 @@
 # 片源測試 fixture
 
-全部既有素材為 160 × 90 的小型測試素材，MP4 約 6 秒，MKV 為 2 秒，單檔小於 1 MB；另有一支 4K（3840 × 2160）H.264 + AAC 測試片（8 秒、約 1.7 MB，≤ 2 MB）。
+全部既有素材為 160 × 90 的小型測試素材，MP4 約 6 秒，MKV 為 2 秒，單檔小於 1 MB；另有一支 4K（3840 × 2160）H.264 + AAC 測試片（4 秒、約 0.85 MB）。所有 fixture 單檔須 ≤ 1 MB（git-workflow.md「禁止」）。
 
 - `h264-aac.mp4`、`h264-silent.mp4`：既有 H.264 有聲／無聲片源。
-- `h264-2160p-aac.mp4`：4K（3840 × 2160、30 FPS、8 秒）H.264 + AAC，供 `p2p-high-res.spec.ts` 驗證 2160P／原片不縮放與 1080P 縮放。
+- `h264-2160p-aac.mp4`：4K（3840 × 2160、30 FPS、4 秒）H.264 + AAC，供 `p2p-high-res.spec.ts` 驗證 2160P／原片不縮放與 1080P 縮放。
 - `hevc-aac.mp4`：既有 HEVC Main、8-bit、`hvc1`、AAC LC。
 - `hevc-main10-aac.mp4`：HEVC Main 10、10-bit、`hvc1`、AAC LC；不代表 HDR 或 Dolby Vision 驗證。
 - `hevc-hev1-aac.mp4`：與既有 HEVC 片源相同位元流，改為 `hev1` tag。
 - `hevc-aac.mkv`：HEVC Main、8-bit、AAC LC，取前 2 秒並降低影格率與碼率，以小型 Matroska 素材驗證容器路徑。
 
-4K 測試片產生指令（crf 38 約 3.2 MB，調高為 crf 45 後約 1.7 MB，符合 ≤ 2 MB 上限）：
+4K 測試片產生指令（crf 45、4 秒約 0.85 MB；E2E 會讓房主端循環播放）：
 
 ```sh
-ffmpeg -f lavfi -i "testsrc2=size=3840x2160:rate=30" -f lavfi -i "sine=f=440:sample_rate=48000" -t 8 -c:v libx264 -preset veryfast -crf 45 -pix_fmt yuv420p -c:a aac -b:a 32k -movflags +faststart e2e/fixtures/h264-2160p-aac.mp4
+ffmpeg -f lavfi -i "testsrc2=size=3840x2160:rate=30" -f lavfi -i "sine=f=440:sample_rate=48000" -t 4 -c:v libx264 -preset veryfast -crf 45 -pix_fmt yuv420p -c:a aac -b:a 32k -movflags +faststart e2e/fixtures/h264-2160p-aac.mp4
 ```
 
 HEVC 變體由既有 `hevc-aac.mp4` 產生，沒有使用真實電影：

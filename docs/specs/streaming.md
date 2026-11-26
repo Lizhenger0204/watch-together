@@ -61,7 +61,7 @@
 **轉換流程**（只在要轉換時建立，每次選檔只建一次）：
 
 1. 擷取的 video track → `MediaStreamTrackProcessor` → 在 `OffscreenCanvas` 上 `drawImage` → `new VideoFrame(canvas, { timestamp })` → `MediaStreamTrackGenerator({ kind: 'video' })`。來源畫面處理完立刻 `close()`。
-2. 畫布尺寸：**與原片相同**（`videoWidth`×`videoHeight`，寬高都取偶數），轉換不縮放。縮放一律由傳輸層依 track 高度算 §2 的 `scaleResolutionDownBy`，所以 `2160P`／`原片` 對 10-bit 片源同樣有效，也不會重複縮放（T-136，ADR 0004 D7）。`SourceInfo.height` 仍是原片高度，畫質面板照舊顯示「片源」高度。
+2. 畫布尺寸：**與原片相同**（`videoWidth`×`videoHeight`，寬高都取偶數），轉換不縮放。縮放一律由傳輸層依 track 高度算 §2 的 `scaleResolutionDownBy`，所以 `2160P`／`原片` 對 10-bit 片源同樣有效，也不會重複縮放（T-137，ADR 0004 D7）。`SourceInfo.height` 仍是原片高度，畫質面板照舊顯示「片源」高度。
 3. 送出的 stream 由 T-106 自己組成：generator 的 video track，加上擷取到的 audio track。
 4. **播完與重播**：每條擷取的 video track 各自做一次 pipe，最後一段寫進 generator 的 `pipeTo` 要同時設 `preventClose: true` 與 `preventAbort: true`，並帶該次專用的 `AbortSignal`。這樣擷取 track 被移除、該次 pipe 結束時，generator 不會關閉，送出的 video track 物件不變。
    - **不可重疊 pipe**：前一次 pipe 的 promise 還沒 settle（resolve 或 reject）時，writable 仍被鎖住，這時再呼叫 `pipeTo` 會丟出 `TypeError: Cannot pipe to a locked stream`。實測 `<video>` 觸發 `ended` 的當下，舊 pipe 仍鎖著；`removetrack` 觸發時已解鎖。重播加入新的擷取 track 時，T-106 先等舊 pipe settle，再為新 track 建 processor，接回同一個 generator。
@@ -94,7 +94,7 @@
 
   轉換路徑大約多出 0～15 個百分點，也就是一個核心的 15% 以內。樣本少、波動大，只適用於這個量測條件。
 
-- 4K 畫布（T-136 審查，同一台 M1、Chrome 158，HEVC Main 10 3840×2160 30 fps，畫布 3840×2160，H.264 `maintain-resolution` 30 Mbps）：房主分頁沒有崩潰，收看端 40 秒內維持 3840×2160 @ 29～30；轉換每張畫面平均 0.2 ms、p95 0.3 ms。同片以 1920×1080 畫布送 1080P 時也是平均 0.2 ms。
+- 4K 畫布（T-137 審查，同一台 M1、Chrome 158，HEVC Main 10 3840×2160 30 fps，畫布 3840×2160，H.264 `maintain-resolution` 30 Mbps）：房主分頁沒有崩潰，收看端 40 秒內維持 3840×2160 @ 29～30；轉換每張畫面平均 0.2 ms、p95 0.3 ms。同片以 1920×1080 畫布送 1080P 時也是平均 0.2 ms。
 
 Windows、多位收看者、實際送滿 8 Mbps、分頁在背景時的表現列入 T-113。
 
@@ -118,7 +118,7 @@ Windows、多位收看者、實際送滿 8 Mbps、分頁在背景時的表現列
 | 位元率 | `8 Mbps`／`10 Mbps`／`15 Mbps`／`25 Mbps`／`40 Mbps`／`原片` | 每位收看者的 `maxBitrate` |
 | FPS | `24`／`30`／`60`／`原片` | `maxFramerate`；`原片` 不設上限，沿用片源幀率 |
 
-- 預設 `1080P`、`8 Mbps`、`30`（`DEFAULT_QUALITY`），不因 T-136 改變。高畫質由房主自己選（ADR 0004）。
+- 預設 `1080P`、`8 Mbps`、`30`（`DEFAULT_QUALITY`），不因 T-137 改變。高畫質由房主自己選（ADR 0004）。
 - 房間只記住**檔位**（protocol.md 的 `Quality`）。實際編碼參數由房主端 `resolveQuality(quality, sourceBitrate)` 算出 `EncodingTarget { targetHeight | null, maxBitrate, maxFramerate | null }` 再交給傳輸層。`targetHeight: null` 代表「原片」解析度（不縮放）；**不可**在房間層先換成片源高度，否則換片時傳輸層會拿新 track 的高度配舊的目標高度（§9）。
 - **原片位元率**：選檔後以 `檔案大小 × 8 ÷ 片長` 估計（含音軌，`estimateSourceBitrate`）。量不到時用 15 Mbps（`SOURCE_BITRATE_FALLBACK`），最高 50 Mbps（`SOURCE_BITRATE_MAX`）。檔位是「原片」時換片會依新片重新估計並套用。
 - 調整時房主送 `room:update { quality }`，收到 `room:updated` 後對現有傳輸 `setQuality(encodingTarget)`（`setParameters`，不重建連線）。開播、停播、切換傳送方式或斷線同步中暫時停用畫質面板。
@@ -386,7 +386,7 @@ type TransportStats = {
   bitrateKbps: number;
   rttMs?: number;
   packetLoss?: number; // 0–1
-  // 以下只在房主方向（"send"）提供，來源見 §8；收看者不送進 member:status（T-136）。
+  // 以下只在房主方向（"send"）提供，來源見 §8；收看者不送進 member:status（T-137）。
   frameHeight?: number;
   framesPerSecond?: number;
   qualityLimitationReason?: "none" | "cpu" | "bandwidth" | "other";
