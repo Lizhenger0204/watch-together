@@ -1,27 +1,19 @@
-import { CHAT_MAX_LENGTH, type ChatMessage } from "@project/shared";
+import {
+  CHAT_MAX_LENGTH,
+  CHAT_RAW_MAX_LENGTH,
+  chatTextLength,
+  normalizeChatText,
+  type ChatMessage,
+} from "@project/shared";
 import { SendHorizontal } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { ApiError } from "../../lib/api";
-import { SignalDisconnectedError } from "../../lib/signal";
+import { CHAT_NOT_SENT, chatErrorMessage } from "./chat-errors";
 
 function formatClock(epochMs: number): string {
   const date = new Date(epochMs);
   const hh = String(date.getHours()).padStart(2, "0");
   const mm = String(date.getMinutes()).padStart(2, "0");
   return `${hh}:${mm}`;
-}
-
-function chatErrorMessage(error: unknown): string {
-  if (error instanceof SignalDisconnectedError) {
-    return "連線中斷，訊息未送出。";
-  }
-  if (error instanceof ApiError) {
-    if (error.code === "RATE_LIMITED") {
-      return "發言太快了，請稍等幾秒再試。";
-    }
-    return error.message;
-  }
-  return "送出失敗，請稍後再試。";
 }
 
 /**
@@ -45,6 +37,7 @@ export function ChatPanel({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const stickToBottomRef = useRef(true);
 
   function handleScroll() {
@@ -64,27 +57,29 @@ export function ChatPanel({
     }
   }, [messages, youId]);
 
-  const normalized = draft.replace(/[\r\n]+/g, " ").trim();
-  const canSend =
-    connected &&
-    !sending &&
-    normalized.length > 0 &&
-    normalized.length <= CHAT_MAX_LENGTH;
-  const showCounter = draft.length >= CHAT_MAX_LENGTH - 20;
+  const normalized = normalizeChatText(draft);
+  const length = chatTextLength(normalized);
+  const tooLong = length > CHAT_MAX_LENGTH;
+  const canSend = connected && !sending && length > 0 && !tooLong;
+  const showCounter = length >= CHAT_MAX_LENGTH - 20;
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     if (!canSend) return;
+    // 用滑鼠按送出時焦點在按鈕上，按鈕送出期間會停用，把焦點留在輸入框才能接著打字。
+    inputRef.current?.focus();
     setError("");
     setSending(true);
+    // 等 ack 期間輸入框保持可用、焦點不動；成功後只清掉這次送出的草稿，期間新打的字保留。
+    const sentDraft = draft;
     try {
       const promise = onSend(normalized);
       if (!promise) {
-        setError("連線中斷，訊息未送出。");
+        setError(CHAT_NOT_SENT);
         return;
       }
       await promise;
-      setDraft("");
+      setDraft((current) => (current === sentDraft ? "" : current));
     } catch (e: unknown) {
       setError(chatErrorMessage(e));
     } finally {
@@ -149,11 +144,12 @@ export function ChatPanel({
         )}
         <div className="flex items-center gap-2">
           <input
+            ref={inputRef}
             type="text"
             aria-label="輸入聊天訊息"
             value={draft}
-            maxLength={CHAT_MAX_LENGTH}
-            disabled={!connected || sending}
+            maxLength={CHAT_RAW_MAX_LENGTH}
+            aria-invalid={tooLong || undefined}
             placeholder={connected ? "說點什麼…" : "連線中…"}
             onChange={(event) => {
               setDraft(event.currentTarget.value);
@@ -172,8 +168,11 @@ export function ChatPanel({
           </button>
         </div>
         {showCounter && (
-          <p className="text-right text-xs text-zinc-500 tabular-nums">
-            {draft.length} / {CHAT_MAX_LENGTH}
+          <p
+            className={`text-right text-xs tabular-nums ${tooLong ? "text-red-600" : "text-zinc-500"}`}
+          >
+            {length} / {CHAT_MAX_LENGTH}
+            {tooLong && "（超過上限，請刪減後再送出）"}
           </p>
         )}
       </form>

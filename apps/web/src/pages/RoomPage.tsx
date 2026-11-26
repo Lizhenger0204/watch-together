@@ -11,6 +11,7 @@ import {
   InviteCodeCard,
   MemberList,
   QualityPanel,
+  SidebarTabPanel,
   SidebarTabs,
   StreamSettings,
   qualityButtonLabel,
@@ -274,6 +275,8 @@ function HostView({
         }`}
       >
         <SidebarTabs
+          idPrefix="host-side"
+          label="房間側欄"
           active={sideTab}
           onChange={setSideTab}
           tabs={[
@@ -282,46 +285,54 @@ function HostView({
           ]}
         />
         {sideTab === "room" ? (
-          <div
-            className={`flex min-h-0 flex-1 flex-col divide-y divide-zinc-200 overflow-y-auto ${
-              theater ? "lg:grid lg:grid-cols-3 lg:divide-x lg:divide-y-0" : ""
-            }`}
-          >
-            {view.room?.inviteCode && (
-              <InviteCodeCard
-                inviteCode={view.room.inviteCode}
-                inviteCodeVersion={view.room.inviteCodeVersion ?? 0}
-                hostName={hostMember?.nickname ?? "房主"}
-                onlineCount={onlineCount}
-                onRegenerate={actions.regenerateInviteCode}
+          <SidebarTabPanel idPrefix="host-side" id="room">
+            <div
+              className={`flex min-h-0 flex-1 flex-col divide-y divide-zinc-200 overflow-y-auto ${
+                theater
+                  ? "lg:grid lg:grid-cols-3 lg:divide-x lg:divide-y-0"
+                  : ""
+              }`}
+            >
+              {view.room?.inviteCode && (
+                <InviteCodeCard
+                  inviteCode={view.room.inviteCode}
+                  inviteCodeVersion={view.room.inviteCodeVersion ?? 0}
+                  hostName={hostMember?.nickname ?? "房主"}
+                  onlineCount={onlineCount}
+                  onRegenerate={actions.regenerateInviteCode}
+                />
+              )}
+              <MemberList
+                members={view.members}
+                youId={youId}
+                isHost
+                memberStatus={view.memberStatus}
+                onKick={(memberId) => run(actions.kick(memberId))}
               />
-            )}
-            <MemberList
-              members={view.members}
-              youId={youId}
-              isHost
-              memberStatus={view.memberStatus}
-              onKick={(memberId) => run(actions.kick(memberId))}
-            />
-            {view.room && (
-              <StreamSettings
-                room={view.room}
-                viewers={viewers}
-                bitrate={bitrate}
-                busy={busy || !online}
-                onModeChange={(mode) => host.setMode(mode)}
-                onLockedChange={(locked) => run(actions.updateRoom({ locked }))}
-              />
-            )}
-          </div>
+              {view.room && (
+                <StreamSettings
+                  room={view.room}
+                  viewers={viewers}
+                  bitrate={bitrate}
+                  busy={busy || !online}
+                  onModeChange={(mode) => host.setMode(mode)}
+                  onLockedChange={(locked) =>
+                    run(actions.updateRoom({ locked }))
+                  }
+                />
+              )}
+            </div>
+          </SidebarTabPanel>
         ) : (
-          <ChatPanel
-            messages={view.messages}
-            youId={youId}
-            connected={online}
-            onSend={actions.sendChat}
-            className={theater ? "h-80" : "h-80 lg:h-auto"}
-          />
+          <SidebarTabPanel idPrefix="host-side" id="chat">
+            <ChatPanel
+              messages={view.messages}
+              youId={youId}
+              connected={online}
+              onSend={actions.sendChat}
+              className={theater ? "h-80" : "h-80 lg:h-auto"}
+            />
+          </SidebarTabPanel>
         )}
       </aside>
     </div>
@@ -341,6 +352,10 @@ function ViewerView({ room }: { room: Room }) {
     chatOpen && sideTab === "chat",
   );
   const { danmaku, danmakuOverlay } = usePlayerDanmaku(view.messages, youId);
+  const openChat = () => {
+    setChatOpen(true);
+    setSideTab("chat");
+  };
 
   return (
     <div
@@ -361,14 +376,8 @@ function ViewerView({ room }: { room: Room }) {
             danmakuOverlay={danmakuOverlay}
             chat={{
               open: chatOpen,
-              onToggle: () => {
-                if (chatOpen) {
-                  setChatOpen(false);
-                } else {
-                  setChatOpen(true);
-                  setSideTab("chat");
-                }
-              },
+              onToggle: () => (chatOpen ? setChatOpen(false) : openChat()),
+              onOpen: openChat,
             }}
           />
         )}
@@ -407,6 +416,8 @@ function ViewerView({ room }: { room: Room }) {
             <p className="text-xs text-zinc-500">{onlineCount} 人在線</p>
           </div>
           <SidebarTabs
+            idPrefix="viewer-side"
+            label="聊天側欄"
             active={sideTab}
             onChange={setSideTab}
             tabs={[
@@ -415,23 +426,27 @@ function ViewerView({ room }: { room: Room }) {
             ]}
           />
           {sideTab === "chat" ? (
-            <ChatPanel
-              messages={view.messages}
-              youId={youId}
-              connected={online}
-              onSend={actions.sendChat}
-              className="h-80 lg:h-auto"
-            />
-          ) : (
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              <MemberList
-                members={view.members}
+            <SidebarTabPanel idPrefix="viewer-side" id="chat">
+              <ChatPanel
+                messages={view.messages}
                 youId={youId}
-                isHost={false}
-                memberStatus={{}}
-                onKick={() => {}}
+                connected={online}
+                onSend={actions.sendChat}
+                className="h-80 lg:h-auto"
               />
-            </div>
+            </SidebarTabPanel>
+          ) : (
+            <SidebarTabPanel idPrefix="viewer-side" id="members">
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                <MemberList
+                  members={view.members}
+                  youId={youId}
+                  isHost={false}
+                  memberStatus={{}}
+                  onKick={() => {}}
+                />
+              </div>
+            </SidebarTabPanel>
           )}
         </aside>
       )}

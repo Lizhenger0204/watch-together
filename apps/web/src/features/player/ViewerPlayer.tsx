@@ -55,8 +55,11 @@ export function ViewerPlayer({
   danmaku?: PlayerControlsProps["danmaku"];
   /** 播放器容器內的彈幕層（隨全螢幕一起顯示）。 */
   danmakuOverlay?: ReactNode;
-  /** 控制列的聊天室展開／收起按鈕。 */
-  chat?: PlayerControlsProps["chat"];
+  /**
+   * 控制列的聊天室按鈕。`onOpen` 必須同時展開側欄並切到「聊天」分頁：
+   * 全螢幕時按下會先退出全螢幕再呼叫它，不論側欄原本停在哪個分頁。
+   */
+  chat?: { open: boolean; onToggle: () => void; onOpen: () => void };
 }) {
   const view = useSyncExternalStore(viewer.subscribe, viewer.getView);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -229,12 +232,17 @@ export function ViewerPlayer({
               ? {
                   open: fullscreen.active ? false : chat.open,
                   onToggle: () => {
-                    if (fullscreen.active) {
-                      void document.exitFullscreen?.().catch(() => {});
-                      if (!chat.open) chat.onToggle();
+                    if (!fullscreen.active) {
+                      chat.onToggle();
                       return;
                     }
-                    chat.onToggle();
+                    // 退出全螢幕成功後才打開聊天，避免側欄在全螢幕背後切換、退出失敗時畫面錯亂。
+                    const exit = document.exitFullscreen?.();
+                    if (!exit) {
+                      chat.onOpen();
+                      return;
+                    }
+                    exit.then(chat.onOpen, () => {});
                   },
                 }
               : undefined

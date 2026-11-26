@@ -1,8 +1,4 @@
-import {
-  laneTopPercent,
-  type DanmakuDensity,
-  type DanmakuItem,
-} from "./danmaku-lanes";
+import type { DanmakuItem } from "./danmaku-lanes";
 
 /**
  * 播放器容器內的彈幕層（DESIGN.md §3：與控制列共用全螢幕容器，全螢幕時照常顯示）。
@@ -10,11 +6,9 @@ import {
  */
 export function DanmakuOverlay({
   items,
-  density,
   onDone,
 }: {
   items: DanmakuItem[];
-  density: DanmakuDensity;
   onDone: (id: string) => void;
 }) {
   if (items.length === 0) return null;
@@ -31,7 +25,7 @@ export function DanmakuOverlay({
             item.isSelf ? "border-b border-sky-300/90" : ""
           }`}
           style={{
-            top: `${laneTopPercent(item.lane, density)}%`,
+            top: `${item.topPercent}%`,
             animationDuration: `${item.durationMs}ms`,
           }}
           onAnimationEnd={() => onDone(item.id)}

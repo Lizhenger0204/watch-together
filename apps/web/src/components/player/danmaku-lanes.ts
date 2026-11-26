@@ -23,11 +23,18 @@ export const DEFAULT_DANMAKU_DENSITY: DanmakuDensity = "medium";
 export type DanmakuItem = {
   id: string;
   text: string;
-  lane: number;
+  /** 發射當下算好的頂部位置（%）；之後切換密度也不移動，直到動畫結束。 */
+  topPercent: number;
   durationMs: number;
   expiresAt: number;
   isSelf: boolean;
 };
+
+/** 排程結果：放上畫面、所有軌道都忙要稍後重試，或因數量上限略過。 */
+export type DanmakuScheduleResult =
+  | { kind: "placed"; item: DanmakuItem }
+  | { kind: "wait"; retryAt: number }
+  | { kind: "drop" };
 
 export function presetForDensity(density: DanmakuDensity): DanmakuPreset {
   return (
@@ -53,22 +60,36 @@ export function estimateLaneCooldownMs(
   );
 }
 
-/** 計算軌道在彈幕區內的頂部百分比位置。 */
-export function laneTopPercent(lane: number, density: DanmakuDensity): number {
+/** 軌道在彈幕區內的頂部百分比位置與高度。 */
+export function laneBand(
+  lane: number,
+  density: DanmakuDensity,
+): { top: number; height: number } {
   const preset = presetForDensity(density);
   const clamped = Math.max(0, Math.min(lane, preset.lanes - 1));
   const usable = Math.max(10, preset.areaPercent - 4);
-  return 2 + (clamped / preset.lanes) * usable;
+  const height = usable / preset.lanes;
+  return { top: 2 + clamped * height, height };
 }
 
+export function laneTopPercent(lane: number, density: DanmakuDensity): number {
+  return laneBand(lane, density).top;
+}
+
+type BusyBand = { top: number; bottom: number; freeAt: number };
+
+/** 浮點誤差容忍值：相鄰軌道邊界相接不算重疊。 */
+const EPSILON = 0.001;
+
 /**
- * 追蹤每條軌道下一次可放新彈幕的時間（純邏輯，方便用假時間測試）。
+ * 追蹤畫面上哪些高度區段還有彈幕尾巴沒離開右邊界（純邏輯，方便用假時間測試）。
+ * 以絕對高度記錄而不是軌道編號，切換密度後新軌道也會避開舊彈幕。
  */
 export class DanmakuScheduler {
-  private laneFreeAt: number[] = [];
+  private busy: BusyBand[] = [];
 
   reset(): void {
-    this.laneFreeAt = [];
+    this.busy = [];
   }
 
   schedule(input: {
@@ -78,43 +99,46 @@ export class DanmakuScheduler {
     activeCount: number;
     now: number;
     isSelf: boolean;
-  }): DanmakuItem | null {
+  }): DanmakuScheduleResult {
     const preset = presetForDensity(input.density);
     if (input.activeCount >= preset.maxActive && !input.isSelf) {
-      return null;
+      return { kind: "drop" };
     }
 
-    while (this.laneFreeAt.length < preset.lanes) {
-      this.laneFreeAt.push(0);
-    }
+    this.busy = this.busy.filter((band) => band.freeAt > input.now);
 
-    let chosen = -1;
-    for (let i = 0; i < preset.lanes; i++) {
-      if (this.laneFreeAt[i]! <= input.now) {
-        chosen = i;
-        break;
+    let retryAt = Number.POSITIVE_INFINITY;
+    for (let lane = 0; lane < preset.lanes; lane++) {
+      const { top, height } = laneBand(lane, input.density);
+      const bottom = top + height;
+      let blockedUntil = 0;
+      for (const band of this.busy) {
+        if (band.top < bottom - EPSILON && top < band.bottom - EPSILON) {
+          blockedUntil = Math.max(blockedUntil, band.freeAt);
+        }
       }
-    }
-    if (chosen < 0) {
-      // 所有軌道都還在忙：挑最早釋放的那一條，盡量拉開間距。
-      chosen = 0;
-      for (let i = 1; i < preset.lanes; i++) {
-        if (this.laneFreeAt[i]! < this.laneFreeAt[chosen]!) chosen = i;
+      if (blockedUntil === 0) {
+        const durationMs = estimateDanmakuDurationMs(input.text);
+        this.busy.push({
+          top,
+          bottom,
+          freeAt: input.now + estimateLaneCooldownMs(input.text, durationMs),
+        });
+        return {
+          kind: "placed",
+          item: {
+            id: input.id,
+            text: input.text,
+            topPercent: top,
+            durationMs,
+            expiresAt: input.now + durationMs + 500,
+            isSelf: input.isSelf,
+          },
+        };
       }
+      retryAt = Math.min(retryAt, blockedUntil);
     }
-
-    const durationMs = estimateDanmakuDurationMs(input.text);
-    const cooldownMs = estimateLaneCooldownMs(input.text, durationMs);
-    this.laneFreeAt[chosen] =
-      Math.max(this.laneFreeAt[chosen]!, input.now) + cooldownMs;
-
-    return {
-      id: input.id,
-      text: input.text,
-      lane: chosen,
-      durationMs,
-      expiresAt: input.now + durationMs + 500,
-      isSelf: input.isSelf,
-    };
+    // 所有軌道的入口都還有彈幕：不硬塞到同一位置，等最早空出的軌道。
+    return { kind: "wait", retryAt };
   }
 }

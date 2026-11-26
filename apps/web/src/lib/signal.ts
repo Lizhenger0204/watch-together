@@ -83,9 +83,10 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
 /**
  * 連線中斷（尚未連上、或等待 ack 時 socket 被清掉）造成的請求失敗，不是伺服器拒絕。
  * 呼叫端應保留意圖，等重新連線、重新驗證後再送。
+ * `inFlight` 為 true 表示訊息已寫入 socket、等 ack 時才斷線：伺服器可能已處理，結果不明。
  */
 export class SignalDisconnectedError extends ApiError {
-  constructor() {
+  constructor(readonly inFlight = false) {
     super("INTERNAL");
     this.name = "SignalDisconnectedError";
   }
@@ -357,7 +358,7 @@ export class SignalClient {
     }
     for (const [, entry] of this.pending) {
       this.timers.clearTimeout(entry.timer);
-      entry.reject(new SignalDisconnectedError());
+      entry.reject(new SignalDisconnectedError(true));
     }
     this.pending.clear();
   }

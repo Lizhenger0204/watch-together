@@ -1,5 +1,5 @@
 import type { ChatMessage } from "@project/shared";
-import { useState } from "react";
+import { useState, type KeyboardEvent, type ReactNode } from "react";
 
 export type SidebarTabItem<T extends string> = {
   id: T;
@@ -7,29 +7,78 @@ export type SidebarTabItem<T extends string> = {
   badge?: number;
 };
 
-/** 側欄頂部的純文字底線分頁（DESIGN.md §3）。 */
+/** 分頁與面板互相引用的 id（`aria-controls`／`aria-labelledby`）。 */
+export function sidebarTabIds(prefix: string, id: string) {
+  return { tabId: `${prefix}-tab-${id}`, panelId: `${prefix}-panel-${id}` };
+}
+
+/** WAI-ARIA 分頁的鍵盤操作：左右鍵循環切換，Home／End 到頭尾；其他按鍵回傳 null。 */
+export function nextTabIndex(
+  key: string,
+  current: number,
+  count: number,
+): number | null {
+  if (count === 0) return null;
+  switch (key) {
+    case "ArrowRight":
+      return (current + 1) % count;
+    case "ArrowLeft":
+      return (current - 1 + count) % count;
+    case "Home":
+      return 0;
+    case "End":
+      return count - 1;
+    default:
+      return null;
+  }
+}
+
+/**
+ * 側欄頂部的純文字底線分頁（DESIGN.md §3）。
+ * 只有選中的分頁在 Tab 順序裡，方向鍵切換並移動焦點；面板用 `SidebarTabPanel` 包起來。
+ */
 export function SidebarTabs<T extends string>({
+  idPrefix,
+  label,
   tabs,
   active,
   onChange,
 }: {
+  idPrefix: string;
+  label: string;
   tabs: readonly SidebarTabItem<T>[];
   active: T;
   onChange: (id: T) => void;
 }) {
+  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    const current = tabs.findIndex((tab) => tab.id === active);
+    const next = nextTabIndex(event.key, current, tabs.length);
+    const target = next === null ? undefined : tabs[next];
+    if (!target) return;
+    event.preventDefault();
+    onChange(target.id);
+    document.getElementById(sidebarTabIds(idPrefix, target.id).tabId)?.focus();
+  }
+
   return (
     <div
       role="tablist"
+      aria-label={label}
+      onKeyDown={handleKeyDown}
       className="flex shrink-0 border-b border-zinc-200 bg-white px-4"
     >
       {tabs.map((tab) => {
         const selected = tab.id === active;
+        const { tabId, panelId } = sidebarTabIds(idPrefix, tab.id);
         return (
           <button
             key={tab.id}
+            id={tabId}
             type="button"
             role="tab"
             aria-selected={selected}
+            aria-controls={selected ? panelId : undefined}
+            tabIndex={selected ? 0 : -1}
             onClick={() => onChange(tab.id)}
             className={`relative -mb-px inline-flex h-10 items-center gap-1.5 border-b-2 px-3 text-sm transition-colors focus-visible:ring-2 focus-visible:ring-[#0072b2] focus-visible:outline-none focus-visible:ring-inset ${
               selected
@@ -46,6 +95,29 @@ export function SidebarTabs<T extends string>({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+/** 分頁對應的面板；只渲染選中的那一個。 */
+export function SidebarTabPanel({
+  idPrefix,
+  id,
+  children,
+}: {
+  idPrefix: string;
+  id: string;
+  children: ReactNode;
+}) {
+  const { tabId, panelId } = sidebarTabIds(idPrefix, id);
+  return (
+    <div
+      id={panelId}
+      role="tabpanel"
+      aria-labelledby={tabId}
+      className="flex min-h-0 flex-1 flex-col"
+    >
+      {children}
     </div>
   );
 }
