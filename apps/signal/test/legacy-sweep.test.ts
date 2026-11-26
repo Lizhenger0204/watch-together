@@ -12,14 +12,18 @@ import type { Env } from "../src/runtime/workers/env";
 import { InviteDirectoryDO } from "../src/runtime/workers/invite-directory-do";
 import {
   LEGACY_SWEEP_VERSION,
+  PENDING_RESERVE_TTL_MS,
   SWEEP_CURSOR_KEY,
+  SWEEP_PHASE_KEY,
   SWEEP_VERSION_KEY,
   codeKey,
+  pendingKey,
   rotationKey,
 } from "../src/runtime/workers/legacy-sweep";
-import { connect, createRoom } from "./room-fixture";
+import { connect, createRoom, post, runAlarmAt } from "./room-fixture";
 
 const IDLE_TTL_MS = 100_000;
+const DAY_MS = 24 * 60 * 60_000;
 
 async function seedLegacyRoom(options: {
   roomId?: string;
@@ -67,19 +71,19 @@ async function seedLegacyRoom(options: {
 describe("上個版本未釋放的空房一次性巡檢", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  test("GET /api/health 觸發巡檢：釋放殭屍空房（idleSince: null）與逾時 30 分鐘空房、孤兒碼，保留活房", async () => {
+  test("GET /api/health 觸發巡檢：立即釋放逾 24h 與逾時空房／孤兒碼，缺 idleSince 舊房從當下起算 100 秒，保留活房", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const now = Date.now();
 
-    // 1. 上版無連線且 idleSince: null 的殭屍空房（最後活動 5 分鐘前）
-    const zombie = await seedLegacyRoom({
+    // 1. 上版超過 24 小時且 idleSince: null 的舊房 → 立即關閉
+    const expiredMaxAge = await seedLegacyRoom({
       inviteCode: "23456789",
-      createdAt: now - 300_000,
-      lastSeenAt: now - 300_000,
+      createdAt: now - DAY_MS - 60_000,
+      lastSeenAt: now - DAY_MS - 60_000,
       idleSince: null,
     });
 
-    // 2. 上版 idleSince 為 5 分鐘前的空房（舊版 30 分鐘未到期，新版 100 秒已到期）
+    // 2. 上版 idleSince 為 5 分鐘前的空房（舊版 30 分鐘未到期，新版 100 秒已到期）→ 立即關閉
     const staleIdle = await seedLegacyRoom({
       inviteCode: "ABCDEFGH",
       createdAt: now - 400_000,
@@ -87,11 +91,11 @@ describe("上個版本未釋放的空房一次性巡檢", () => {
       idleSince: now - 300_000,
     });
 
-    // 3. 上版無連線且 idleSince: null，但最後活動僅 30 秒前（尚未滿 100 秒，應保留並補齊期限）
-    const recentOffline = await seedLegacyRoom({
+    // 3. 上版直播 3 小時剛離線、缺 idleSince（lastSeenAt 為 3 小時前但未滿 24h）→ 不回推誤殺，改從當下起算 100 秒
+    const missingIdle = await seedLegacyRoom({
       inviteCode: "JKMNPQRS",
-      createdAt: now - 60_000,
-      lastSeenAt: now - 30_000,
+      createdAt: now - 3 * 60 * 60_000,
+      lastSeenAt: now - 3 * 60 * 60_000,
       idleSince: null,
     });
 
@@ -124,10 +128,11 @@ describe("上個版本未釋放的空房一次性巡檢", () => {
       s.storage.getAlarm(),
     );
     expect(sweepAlarm).not.toBeNull();
+    const sweepStart = Date.now();
     expect(await runDurableObjectAlarm(directory)).toBe(true);
 
-    // 殭屍空房與逾時空房都已關房、釋放邀請碼與清空 RoomDO storage
-    for (const removed of [zombie, staleIdle]) {
+    // 逾 24h 與逾時空房都已立即關房、釋放邀請碼與清空 RoomDO storage
+    for (const removed of [expiredMaxAge, staleIdle]) {
       expect(await directory.lookup(removed.inviteCode)).toBeNull();
       const left = await runInDurableObject(
         env.ROOM.getByName(removed.roomId),
@@ -146,17 +151,24 @@ describe("上個版本未釋放的空房一次性巡檢", () => {
     );
     expect(orphanRotation).toBeUndefined();
 
-    // 不到 100 秒的離線房仍活著，但已補齊 idleSince 與縮短 alarm
-    expect(await directory.lookup("JKMNPQRS")).toBe(recentOffline.roomId);
-    const recentState = await runInDurableObject(
-      env.ROOM.getByName(recentOffline.roomId),
+    // 缺 idleSince 且未滿 24h 的舊房先保留，自確認無人在線起算 100 秒後自動釋放
+    expect(await directory.lookup("JKMNPQRS")).toBe(missingIdle.roomId);
+    const missingState = await runInDurableObject(
+      env.ROOM.getByName(missingIdle.roomId),
       async (_i, s) => ({
         room: await s.storage.get<RoomState>("state"),
         alarm: await s.storage.getAlarm(),
       }),
     );
-    expect(recentState.room?.idleSince).toBe(now - 30_000);
-    expect(recentState.alarm).toBe(now - 30_000 + IDLE_TTL_MS);
+    expect(missingState.room?.idleSince).toBeGreaterThanOrEqual(sweepStart);
+    expect(missingState.alarm).toBe(
+      missingState.room!.idleSince! + IDLE_TTL_MS,
+    );
+    await runAlarmAt(
+      env.ROOM.getByName(missingIdle.roomId),
+      missingState.alarm!,
+    );
+    expect(await directory.lookup("JKMNPQRS")).toBeNull();
 
     // 活房間維持在線
     expect(await directory.lookup(active.inviteCode)).toBe(active.roomId);
@@ -183,7 +195,55 @@ describe("上個版本未釋放的空房一次性巡檢", () => {
     );
   });
 
-  test("邀請碼數量超過單批上限時，分批透過游標推進並在完成後清除 alarm", async () => {
+  test("巡檢遇上建房中尚未 init 的預留邀請碼不可誤刪；逾期預留碼則清除", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const directory = env.INVITE_DIRECTORY.getByName("global");
+
+    // 1. 建房剛呼叫 reserve()、RoomDO.init() 尚未完成
+    const creatingRoomId = crypto.randomUUID();
+    const creatingCode = await directory.reserve(creatingRoomId);
+
+    // 2. 已超過保護期限的廢棄預留碼
+    const staleRoomId = crypto.randomUUID();
+    const staleCode = "BBBBBB22";
+    await runInDurableObject(directory, async (_i, s) => {
+      await s.storage.put(codeKey(staleCode), staleRoomId);
+      await s.storage.put(
+        pendingKey(staleCode),
+        Date.now() - PENDING_RESERVE_TTL_MS - 1_000,
+      );
+      await s.storage.delete(SWEEP_VERSION_KEY);
+      await s.storage.delete(SWEEP_PHASE_KEY);
+      await s.storage.delete(SWEEP_CURSOR_KEY);
+    });
+
+    await directory.ensureLegacySweep();
+    expect(await runDurableObjectAlarm(directory)).toBe(true);
+
+    // 建房中的邀請碼仍保留；init 完成並 confirm 後可正常加入
+    expect(await directory.lookup(creatingCode)).toBe(creatingRoomId);
+    await env.ROOM.getByName(creatingRoomId).init({
+      roomId: creatingRoomId,
+      inviteCode: creatingCode,
+      nickname: "房主",
+    });
+    await directory.confirm(creatingCode, creatingRoomId);
+    const joined = await post("/api/rooms/join", {
+      inviteCode: creatingCode,
+      nickname: "朋友",
+    });
+    expect(joined.status).toBe(200);
+
+    // 逾期的廢棄預留碼與其 pending 標記一併清掉
+    expect(await directory.lookup(staleCode)).toBeNull();
+    expect(
+      await runInDurableObject(directory, (_i, s) =>
+        s.storage.get(pendingKey(staleCode)),
+      ),
+    ).toBeUndefined();
+  });
+
+  test("邀請碼與換碼紀錄皆超過單批上限時，兩階段各自透過游標分批推進並在完成後清除 alarm", async () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     const directory = env.INVITE_DIRECTORY.getByName("global");
     const alphabet = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
@@ -191,30 +251,41 @@ describe("上個版本未釋放的空房一次性巡檢", () => {
       { length: 25 },
       (_, i) => `AAAAAA${alphabet[Math.floor(i / 10)]}${alphabet[i % 10]}`,
     );
+    const rotRoomIds = Array.from({ length: 22 }, () => crypto.randomUUID());
     await runInDurableObject(directory, async (_i, s) => {
       for (const code of codes) {
         await s.storage.put(codeKey(code), crypto.randomUUID());
       }
+      for (const id of rotRoomIds) {
+        await s.storage.put(rotationKey(id), { opId: "op", code: "CCCCCCCC" });
+      }
       await s.storage.delete(SWEEP_VERSION_KEY);
+      await s.storage.delete(SWEEP_PHASE_KEY);
       await s.storage.delete(SWEEP_CURSOR_KEY);
     });
 
     await directory.ensureLegacySweep();
-    // 第一批 20 筆處理後會續排下一次 alarm
-    expect(await runDurableObjectAlarm(directory)).toBe(true);
-    expect(
-      await runInDurableObject(directory, (_i, s) => s.storage.getAlarm()),
-    ).not.toBeNull();
+    // 連續驅動 alarm 直到完成（總計 25 code + 22 rotation + 既有活房，分 3 批）
+    let rounds = 0;
+    while (
+      (await runInDurableObject(directory, (_i, s) => s.storage.getAlarm())) !==
+      null
+    ) {
+      expect(await runDurableObjectAlarm(directory)).toBe(true);
+      rounds += 1;
+      expect(rounds).toBeLessThanOrEqual(5);
+    }
+    expect(rounds).toBeGreaterThanOrEqual(3);
 
-    // 第二批剩餘筆數完成後清掉游標與 alarm
-    expect(await runDurableObjectAlarm(directory)).toBe(true);
     const done = await runInDurableObject(directory, async (_i, s) => ({
       version: await s.storage.get<number>(SWEEP_VERSION_KEY),
+      phase: await s.storage.get<string>(SWEEP_PHASE_KEY),
       cursor: await s.storage.get<string>(SWEEP_CURSOR_KEY),
       alarm: await s.storage.getAlarm(),
     }));
     expect(done).toEqual({
       version: LEGACY_SWEEP_VERSION,
+      phase: undefined,
       cursor: undefined,
       alarm: null,
     });
@@ -222,6 +293,32 @@ describe("上個版本未釋放的空房一次性巡檢", () => {
       codes.map((code) => directory.lookup(code)),
     );
     expect(resolved.every((id) => id === null)).toBe(true);
+    const leftRots = await runInDurableObject(directory, async (_i, s) =>
+      Promise.all(rotRoomIds.map((id) => s.storage.get(rotationKey(id)))),
+    );
+    expect(leftRots.every((v) => v === undefined)).toBe(true);
+  });
+
+  test("巡檢遇到正在關房重試且 retry.at 尚未到期的 RoomDO 時，不提前消耗重試次數", async () => {
+    const roomId = crypto.randomUUID();
+    const futureRetry = Date.now() + 60_000;
+    const stub = env.ROOM.getByName(roomId);
+    await runInDurableObject(stub, async (instance, s) => {
+      const closing = {
+        roomId,
+        reason: "expired" as const,
+        inviteCodes: ["DDDDDD22"],
+        rotation: null,
+      };
+      await s.storage.put("closing", closing);
+      await s.storage.put("cleanupRetry", { attempts: 1, at: futureRetry });
+      (instance as unknown as { closing: unknown }).closing = closing;
+    });
+    expect(await stub.reconcileLegacyRoom()).toBe("closed");
+    const retryAfter = await runInDurableObject(stub, (_i, s) =>
+      s.storage.get<{ attempts: number; at: number | null }>("cleanupRetry"),
+    );
+    expect(retryAfter).toEqual({ attempts: 1, at: futureRetry });
   });
 
   test("目錄實例休眠喚醒且帶有舊紀錄時，建構子會自動排定巡檢", async () => {

@@ -7,6 +7,7 @@ import {
 import { navigate } from "../../lib/router";
 import type { SignalClient } from "../../lib/signal";
 import { liveIntent, roomToken } from "../../lib/storage";
+import { withTabLock } from "../../lib/tab-lock";
 import { comparedRooms } from "./compared-rooms";
 import { forgetRoomIdentity } from "./room-state";
 
@@ -20,6 +21,7 @@ export type UseLeaveRoomOptions = {
 export type PerformLeaveRoomOptions = UseLeaveRoomOptions & {
   confirmLiveExit?: () => boolean;
   requestLeave?: (roomId: string, token: string) => Promise<void>;
+  withLock?: <T>(name: string, fn: () => Promise<T>) => Promise<T>;
   goHome?: () => void;
   setLeaving: (leaving: boolean) => void;
   setError: (error: string) => void;
@@ -27,8 +29,8 @@ export type PerformLeaveRoomOptions = UseLeaveRoomOptions & {
 
 /**
  * 明確退房流程（room-and-invite.md「主動離開房間」）：
- * 僅在伺服器回 204 或明確告知憑證／房間已不存在（401／404）時才條件清除身份並回首頁；
- * 網路錯誤、5xx 或回應遺失時留在原頁保留憑證供重試，並暫停 WS 4401 自動離房。
+ * 僅在伺服器回 204 或明確告知憑證／房間已不存在（401 UNAUTHORIZED／404 ROOM_NOT_FOUND）時，
+ * 於同源鎖內條件清除身份並回首頁；網路錯誤、5xx 或回應遺失時留在原頁保留憑證供重試，並暫停 WS 4401 自動離房。
  */
 export async function performLeaveRoom({
   roomId,
@@ -37,6 +39,7 @@ export async function performLeaveRoom({
   isLiveHost,
   confirmLiveExit = () => window.confirm("目前正在直播中，確定要離開房間嗎？"),
   requestLeave = apiLeaveRoom,
+  withLock = withTabLock,
   goHome = () => navigate("/"),
   setLeaving,
   setError,
@@ -56,7 +59,8 @@ export async function performLeaveRoom({
   } catch (caught: unknown) {
     const confirmedGone =
       caught instanceof ApiError &&
-      (caught.code === "UNAUTHORIZED" || caught.code === "ROOM_NOT_FOUND");
+      ((caught.status === 401 && caught.code === "UNAUTHORIZED") ||
+        (caught.status === 404 && caught.code === "ROOM_NOT_FOUND"));
     if (!confirmedGone) {
       setError(
         caught instanceof ApiError ? caught.message : ERROR_MESSAGES.INTERNAL,
@@ -65,9 +69,12 @@ export async function performLeaveRoom({
       return false;
     }
   }
-  liveIntent.set(roomId, false);
-  forgetRoomIdentity(roomId, token);
-  if (!roomToken.get(roomId)) comparedRooms.forget(roomId);
+  // 收到 REST 結果後才取得與加入流程共用的同源鎖，避免刪除另一分頁剛寫入的新憑證與邀請對照。
+  await withLock("room:join", async () => {
+    liveIntent.set(roomId, false);
+    forgetRoomIdentity(roomId, token);
+    if (!roomToken.get(roomId)) comparedRooms.forget(roomId);
+  });
   client?.stop();
   goHome();
   return true;

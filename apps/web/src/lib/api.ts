@@ -23,7 +23,10 @@ export const ERROR_MESSAGES: Record<ErrorCode, string> = {
 };
 
 export class ApiError extends Error {
-  constructor(readonly code: ErrorCode) {
+  constructor(
+    readonly code: ErrorCode,
+    readonly status?: number,
+  ) {
     super(ERROR_MESSAGES[code]);
   }
 }
@@ -50,7 +53,10 @@ async function request<T>(
   const body: unknown = await response.json().catch(() => null);
   if (!response.ok) {
     const parsed = errorResponseSchema.safeParse(body);
-    throw new ApiError(parsed.success ? parsed.data.error.code : "INTERNAL");
+    throw new ApiError(
+      parsed.success ? parsed.data.error.code : "INTERNAL",
+      response.status,
+    );
   }
   return schema.parse(body);
 }
@@ -105,6 +111,7 @@ export async function leaveRoom(roomId: string, token: string): Promise<void> {
     response.status >= 500 || !parsed.success
       ? "INTERNAL"
       : parsed.data.error.code,
+    response.status,
   );
 }
 

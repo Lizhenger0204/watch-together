@@ -79,11 +79,13 @@ export function heartbeatTimeouts(
     timeoutMs,
     exclude,
     acceptedHeartbeatAt = Infinity,
+    validMemberIds,
   }: {
     now?: number;
     timeoutMs: number;
     exclude?: WebSocket;
     acceptedHeartbeatAt?: number;
+    validMemberIds?: ReadonlySet<string>;
   },
 ) {
   let earliest = acceptedHeartbeatAt;
@@ -92,6 +94,7 @@ export function heartbeatTimeouts(
     if (ws === exclude || !isOpenSocket(ws)) continue;
     const attachment = attachmentOf(ws);
     if (!attachment || attachment.memberId === null) continue;
+    if (validMemberIds && !validMemberIds.has(attachment.memberId)) continue;
     let lastActivityAt = attachment.lastActivityAt;
     if (lastActivityAt === undefined) {
       if (now === undefined) continue;

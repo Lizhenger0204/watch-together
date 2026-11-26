@@ -5,17 +5,23 @@ import {
   armLegacySweepIfNeeded,
   codeKey,
   deleteIfOwned,
+  pendingKey,
   rotationKey,
   sweepLegacyRooms,
 } from "./legacy-sweep";
 
 type Rotation = { opId: string; code: string };
 
-async function reserveCode(txn: DurableObjectTransaction, roomId: string) {
+async function reserveCode(
+  txn: DurableObjectTransaction,
+  roomId: string,
+  markPending = false,
+) {
   for (;;) {
     const code = generateInviteCode();
     if ((await txn.get(codeKey(code))) === undefined) {
       await txn.put(codeKey(code), roomId);
+      if (markPending) await txn.put(pendingKey(code), Date.now());
       return code;
     }
   }
@@ -44,7 +50,18 @@ export class InviteDirectoryDO extends DurableObject<Env> {
   }
 
   async reserve(roomId: string): Promise<string> {
-    return this.ctx.storage.transaction((txn) => reserveCode(txn, roomId));
+    return this.ctx.storage.transaction((txn) =>
+      reserveCode(txn, roomId, true),
+    );
+  }
+
+  /** RoomDO.init 完成後呼叫，清除建房中的預留保護標記。 */
+  async confirm(code: string, roomId: string): Promise<void> {
+    await this.ctx.storage.transaction(async (txn) => {
+      if ((await txn.get(codeKey(code))) === roomId) {
+        await txn.delete(pendingKey(code));
+      }
+    });
   }
 
   async lookup(code: string): Promise<string | null> {

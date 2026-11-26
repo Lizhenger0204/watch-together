@@ -123,7 +123,14 @@ export function createApp(resolveServices: (c: Ctx) => AppServices) {
   });
 
   app.get("/api/health", async (c) => {
-    await c.var.services.rooms.ensureLegacySweep?.().catch(() => {});
+    await c.var.services.rooms.ensureLegacySweep?.().catch((error: unknown) => {
+      console.log(
+        JSON.stringify({
+          event: "directory.legacy_sweep_arm_failed",
+          message: String(error),
+        }),
+      );
+    });
     return c.json({ ok: true, protocolVersion: PROTOCOL_VERSION });
   });
 

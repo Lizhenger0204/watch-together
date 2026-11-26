@@ -124,10 +124,15 @@ export function useRoom(roomId: string) {
   const inviteCodeVersion =
     view.you?.role === "host" ? (view.room?.inviteCodeVersion ?? 0) : null;
   useEffect(() => {
-    if (inviteCode && inviteCodeVersion !== null) {
+    if (
+      inviteCode &&
+      inviteCodeVersion !== null &&
+      token &&
+      roomToken.get(roomId) === token
+    ) {
       roomInviteCode.sync(roomId, inviteCode, inviteCodeVersion);
     }
-  }, [roomId, inviteCode, inviteCodeVersion]);
+  }, [roomId, token, inviteCode, inviteCodeVersion]);
 
   const actions = useMemo(
     () => ({
@@ -139,13 +144,18 @@ export function useRoom(roomId: string) {
       async regenerateInviteCode() {
         if (!token) throw new Error("no token");
         const result = await regenerateInviteCode(roomId, token);
-        // 先和同源共用儲存核對版本：斷線期間另一分頁可能已換到更新的碼，
-        // 一律採用版本較高的有效碼，絕不把共用對照與畫面蓋回失效舊碼。
-        const latest = roomInviteCode.sync(
-          roomId,
-          result.inviteCode,
-          result.inviteCodeVersion,
-        );
+        // 核對目前保存的仍是同一份房主憑證，避免離房或身份失效後晚到的回應寫回邀請對照。
+        const latest =
+          roomToken.get(roomId) === token
+            ? roomInviteCode.sync(
+                roomId,
+                result.inviteCode,
+                result.inviteCodeVersion,
+              )
+            : {
+                inviteCode: result.inviteCode,
+                version: result.inviteCodeVersion,
+              };
         dispatch({
           kind: "invite-code",
           inviteCode: latest.inviteCode,

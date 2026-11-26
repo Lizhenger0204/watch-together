@@ -129,7 +129,17 @@ export const roomToken = {
       memory.local.set(key, stored);
       return;
     }
-    roomToken.clear(roomId);
+    writeIdentity(key, null);
+    // 清除邀請碼對照前再次核對共用 token，避免刪除另一分頁剛寫入的新憑證對照。
+    const afterToken = storedIdentity(key);
+    if (afterToken && afterToken !== token) {
+      lastStoredIdentity.set(key, afterToken);
+      memory.local.set(key, afterToken);
+      return;
+    }
+    writeIdentity(inviteKey(roomId), null);
+    write("session", liveIntentKey(roomId), null);
+    write("local", liveStopKey(roomId), null);
   },
 };
 

@@ -89,7 +89,7 @@ describe("performLeaveRoom", () => {
     expect(roomInviteCode.findRoom("ABCDEFGH")).toBe(roomId);
   });
 
-  test("重試時伺服器回 UNAUTHORIZED（401），條件清除身份並返回首頁", async () => {
+  test("重試時伺服器回 401 UNAUTHORIZED，條件清除身份並返回首頁；狀態碼不符時保留身份", async () => {
     stubStorage();
     const roomId = crypto.randomUUID();
     roomToken.set(roomId, "member-token-12345678");
@@ -98,13 +98,29 @@ describe("performLeaveRoom", () => {
     const stop = vi.fn();
     const goHome = vi.fn();
 
+    // 狀態碼與 code 不符（例如 500 卻誤帶 UNAUTHORIZED）：視為未確認撤銷，保留憑證
+    const denied = await performLeaveRoom({
+      roomId,
+      token: "member-token-12345678",
+      client: { stop },
+      isLiveHost: false,
+      requestLeave: async () => {
+        throw new ApiError("UNAUTHORIZED", 500);
+      },
+      goHome,
+      setLeaving: vi.fn(),
+      setError: vi.fn(),
+    });
+    expect(denied).toBe(false);
+    expect(roomToken.get(roomId)).toBe("member-token-12345678");
+
     const exited = await performLeaveRoom({
       roomId,
       token: "member-token-12345678",
       client: { stop },
       isLiveHost: false,
       requestLeave: async () => {
-        throw new ApiError("UNAUTHORIZED");
+        throw new ApiError("UNAUTHORIZED", 401);
       },
       goHome,
       setLeaving: vi.fn(),
@@ -119,13 +135,14 @@ describe("performLeaveRoom", () => {
     expect(liveIntent.get(roomId)).toBe(false);
   });
 
-  test("退房途中另一分頁寫入新身份時，晚到的回應不清除新憑證與邀請對照", async () => {
+  test("退房清除於 REST 完成後才取得 room:join 同源鎖，不誤刪另一分頁剛寫入的新憑證", async () => {
     stubStorage();
     const roomId = crypto.randomUUID();
     const oldToken = "old-token-1234567890";
     const newToken = "new-token-1234567890";
     roomToken.set(roomId, oldToken);
     roomInviteCode.set(roomId, "ABCDEFGH");
+    const events: string[] = [];
     const stop = vi.fn();
     const goHome = vi.fn();
 
@@ -135,8 +152,14 @@ describe("performLeaveRoom", () => {
       client: { stop },
       isLiveHost: false,
       requestLeave: async () => {
+        events.push("rest");
+      },
+      withLock: async (name, fn) => {
+        events.push(`lock:${name}`);
+        // 模擬另一分頁在取得鎖前寫入新憑證與邀請對照
         shared.set(`room:${roomId}:token`, newToken);
         shared.set(`room:${roomId}:invite`, "ABCDEFGH");
+        return fn();
       },
       goHome,
       setLeaving: vi.fn(),
@@ -144,6 +167,7 @@ describe("performLeaveRoom", () => {
     });
 
     expect(exited).toBe(true);
+    expect(events).toEqual(["rest", "lock:room:join"]);
     expect(shared.get(`room:${roomId}:token`)).toBe(newToken);
     expect(shared.get(`room:${roomId}:invite`)).toBe("ABCDEFGH");
     expect(roomToken.get(roomId)).toBe(newToken);

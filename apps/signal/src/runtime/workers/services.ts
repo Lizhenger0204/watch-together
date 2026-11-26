@@ -19,12 +19,22 @@ export function workersServices(c: Context<AppEnv>): AppServices {
       async createRoom(nickname) {
         const roomId = crypto.randomUUID();
         const inviteCode = await directory().reserve(roomId);
-        const { hostToken, memberId } = await room(roomId).init({
-          roomId,
-          inviteCode,
-          nickname,
-        });
-        return { roomId, inviteCode, hostToken, memberId };
+        try {
+          const { hostToken, memberId } = await room(roomId).init({
+            roomId,
+            inviteCode,
+            nickname,
+          });
+          await directory()
+            .confirm(inviteCode, roomId)
+            .catch(() => {});
+          return { roomId, inviteCode, hostToken, memberId };
+        } catch (error) {
+          await directory()
+            .release(inviteCode, roomId)
+            .catch(() => {});
+          throw error;
+        }
       },
       async reuseRoom(inviteCode, roomId, token) {
         if ((await directory().lookup(inviteCode)) !== roomId) {

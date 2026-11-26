@@ -121,15 +121,6 @@ export function hostRemoveAt(
   const since = hostDisconnectedSince(state, online);
   return since === null ? null : since + config.hostOfflineTtlMs;
 }
-
-/** 房間所有成員之中最近一次活動的時間。 */
-export function roomLastActivityAt(state: RoomState): number {
-  return state.members.reduce(
-    (latest, member) => Math.max(latest, member.lastSeenAt),
-    state.createdAt,
-  );
-}
-
 /** 移除離線太久的收看者，騰出名額。房主永遠保留。 */
 export function pruneStaleMembers(
   state: RoomState,

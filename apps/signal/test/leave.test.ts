@@ -283,4 +283,87 @@ describe("明確退房", () => {
     expect((await leave(room.roomId, viewer.memberToken)).status).toBe(401);
     expect((await ice(room.roomId, room.hostToken)).status).toBe(200);
   });
+
+  test("房主退房後最後一位收看者立刻斷線，不因房主關閉中連線而漏排 100 秒空房計時", async () => {
+    const room = await createRoom();
+    const host = await hostSocket(room);
+    const viewer = await joinRoom(room.inviteCode);
+    const viewerSocket = await connect(room.roomId);
+    viewerSocket.auth(viewer.memberToken);
+    await viewerSocket.next("room:snapshot");
+    await host.next("room:members");
+
+    expect((await leave(room.roomId, room.hostToken)).status).toBe(204);
+    await viewerSocket.next("room:members");
+
+    const stub = env.ROOM.getByName(room.roomId);
+    const beforeClose = Date.now();
+    await runInDurableObject(stub, async (instance, state) => {
+      const ws = state
+        .getWebSockets()
+        .find(
+          (sock) => sock.deserializeAttachment()?.memberId === viewer.memberId,
+        )!;
+      await instance.webSocketClose(ws, 1000);
+    });
+    const saved = await runInDurableObject(stub, async (_i, state) => ({
+      room: await state.storage.get<{ idleSince: number | null }>("state"),
+      alarm: await state.storage.getAlarm(),
+    }));
+    expect(saved.room?.idleSince).not.toBeNull();
+    expect(saved.alarm).toBeGreaterThanOrEqual(beforeClose + 100_000);
+    expect(saved.alarm).toBeLessThanOrEqual(Date.now() + 101_000);
+    host.close();
+    viewerSocket.close();
+  });
+
+  test("換碼進行中房主退房：依 lifecycle 序列化執行，不會拋出 500 也不留孤兒邀請碼", async () => {
+    const room = await createRoom();
+    const stub = env.ROOM.getByName(room.roomId);
+    let onEntered!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      onEntered = resolve;
+    });
+    let onResume!: () => void;
+    const resume = new Promise<void>((resolve) => {
+      onResume = resolve;
+    });
+
+    const outcome = await runInDurableObject(stub, async (instance) => {
+      const target = instance as unknown as {
+        directory: () => {
+          replace: (
+            oldCode: string,
+            roomId: string,
+            opId: string,
+          ) => Promise<string>;
+          release: (code: string, roomId: string) => Promise<void>;
+        };
+      };
+      const real = target.directory.bind(instance);
+      let rotatedCode = "";
+      target.directory = () => ({
+        release: (code, id) => real().release(code, id),
+        replace: async (oldCode, roomId, opId) => {
+          onEntered();
+          await resume;
+          rotatedCode = await real().replace(oldCode, roomId, opId);
+          return rotatedCode;
+        },
+      });
+      const rotation = instance.regenerateInviteCode(room.memberId);
+      await entered;
+      const leaving = instance.leave(room.memberId);
+      onResume();
+      const [rotated, left] = await Promise.all([rotation, leaving]);
+      target.directory = real;
+      return { rotated, left, rotatedCode };
+    });
+
+    expect(outcome.rotated.ok).toBe(true);
+    expect(outcome.left.ok).toBe(true);
+    const directory = env.INVITE_DIRECTORY.getByName("global");
+    expect(await directory.lookup(room.inviteCode)).toBeNull();
+    expect(await directory.lookup(outcome.rotatedCode)).toBeNull();
+  });
 });

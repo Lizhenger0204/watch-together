@@ -23,8 +23,8 @@ import {
   createRoomState,
   findMember,
   findMemberByTokenHash,
+  hostOf,
   hostRemoveAt,
-  roomLastActivityAt,
   toRoomInfo,
   type RoomState,
 } from "../../room/room";
@@ -280,42 +280,45 @@ export class RoomDO extends DurableObject<Env> {
   }
 
   async leave(memberId: string): Promise<Result<null>> {
-    const outcome = await this.changes.run(async () => {
-      if (!this.room) {
-        return {
-          ok: false as const,
-          code: "UNAUTHORIZED" as const,
-          closed: false,
-        };
-      }
-      const result = onLeave(this.room, memberId, this.online(), Date.now(), {
-        chatLimiter: this.chatLimiter,
+    // 與換碼／關房共用 lifecycle 順序，避免進行中的換碼與明確退房／關房互搶狀態。
+    return this.lifecycle.run(async () => {
+      const outcome = await this.changes.run(async () => {
+        if (!this.room) {
+          return {
+            ok: false as const,
+            code: "UNAUTHORIZED" as const,
+            closed: false,
+          };
+        }
+        const result = onLeave(this.room, memberId, this.online(), Date.now(), {
+          chatLimiter: this.chatLimiter,
+        });
+        if (!result) {
+          return {
+            ok: false as const,
+            code: "UNAUTHORIZED" as const,
+            closed: false,
+          };
+        }
+        if (result.empty) {
+          const reason: CloseReason =
+            findMember(this.room, memberId)?.role === "host"
+              ? "host_closed"
+              : "expired";
+          await this.closeRoom(reason);
+          return { ok: true as const, closed: true };
+        }
+        await this.saveTransition(result.state);
+        this.apply(result.effects, null);
+        return { ok: true as const, closed: false };
       });
-      if (!result) {
-        return {
-          ok: false as const,
-          code: "UNAUTHORIZED" as const,
-          closed: false,
-        };
-      }
-      if (result.empty) {
-        const reason: CloseReason =
-          findMember(this.room, memberId)?.role === "host"
-            ? "host_closed"
-            : "expired";
-        await this.closeRoom(reason);
-        return { ok: true as const, closed: true };
-      }
-      await this.saveTransition(result.state);
-      this.apply(result.effects, null);
-      return { ok: true as const, closed: false };
+      if (!outcome.ok) return { ok: false, code: outcome.code };
+      if (outcome.closed) await this.runCleanup();
+      return { ok: true, value: null };
     });
-    if (!outcome.ok) return { ok: false, code: outcome.code };
-    if (outcome.closed) await this.lifecycle.run(() => this.runCleanup());
-    return { ok: true, value: null };
   }
 
-  /** 上版空房一次性巡檢用：補齊遺漏的閒置起算時間並縮短或關閉已到期空房。 */
+  /** 上版空房一次性巡檢用：釋放已到期空房，缺少 idleSince 時自首次確認無人在線起算 100 秒。 */
   async reconcileLegacyRoom(): Promise<"alive" | "closed" | "orphan"> {
     return this.lifecycle.run(async () => {
       const action = await this.changes.run(async () => {
@@ -326,9 +329,17 @@ export class RoomDO extends DurableObject<Env> {
         const online = this.online();
         let next = room;
         if (online.size === 0 && next.idleSince === null) {
+          if (now >= next.createdAt + this.config.maxAgeMs) {
+            await this.closeRoom("expired");
+            return "just_closed" as const;
+          }
+          // 舊版 lastSeenAt 在直播中不會持續更新，不以此回推；自本次確認無人在線起算 100 秒。
           next = {
             ...next,
-            idleSince: Math.min(now, roomLastActivityAt(next)),
+            idleSince: now,
+            ...(hostOf(next) && next.hostDisconnectedAt === undefined
+              ? { hostDisconnectedAt: now }
+              : {}),
           };
         }
         if (next.members.length === 0 || now >= closeAt(next, this.config)) {
@@ -346,7 +357,10 @@ export class RoomDO extends DurableObject<Env> {
       if (action === "alive") return "alive";
       if (action === "closing") {
         const retry = await this.ctx.storage.get<Retry>(RETRY_KEY);
-        if (retry?.at === null) return "closed";
+        // 尊重既有的重試退避排程，不提前消耗尚未到期的清理次數。
+        if (!retry || retry.at === null || Date.now() < retry.at) {
+          return "closed";
+        }
       }
       await this.runCleanup();
       return "closed";
@@ -386,17 +400,20 @@ export class RoomDO extends DurableObject<Env> {
       roomId,
       rotation.opId,
     );
-    const applied = await this.applyRotation(inviteCode, hostMemberId);
-    return { ok: true, value: applied };
+    return this.applyRotation(inviteCode, hostMemberId);
   }
 
   /** 換碼完成：記下新碼、遞增版本、清空舊碼冪等紀錄並清掉進行中換碼（同一筆交易）。 */
   private async applyRotation(
     inviteCode: string,
     hostMemberId?: string,
-  ): Promise<{ inviteCode: string; inviteCodeVersion: number }> {
+  ): Promise<Result<{ inviteCode: string; inviteCodeVersion: number }>> {
     return this.changes.run(async () => {
-      const current = this.openRoom();
+      const current = this.room;
+      if (!current) return { ok: false, code: "ROOM_NOT_FOUND" };
+      if (hostMemberId && findMember(current, hostMemberId)?.role !== "host") {
+        return { ok: false, code: "FORBIDDEN" };
+      }
       const changed = current.inviteCode !== inviteCode;
       const inviteCodeVersion =
         (current.inviteCodeVersion ?? 0) + (changed ? 1 : 0);
@@ -425,7 +442,10 @@ export class RoomDO extends DurableObject<Env> {
           null,
         );
       }
-      return { inviteCode: room.inviteCode, inviteCodeVersion };
+      return {
+        ok: true,
+        value: { inviteCode: room.inviteCode, inviteCodeVersion },
+      };
     });
   }
 
@@ -918,11 +938,13 @@ export class RoomDO extends DurableObject<Env> {
   ) {
     let next = Infinity;
     if (room) {
-      const online = this.online(closingSocket);
+      const valid = new Set(room.members.map((member) => member.memberId));
+      const online = onlineMembers(this.ctx, closingSocket, valid);
       const heartbeatAlarm = heartbeatTimeouts(this.ctx, {
         timeoutMs: this.config.heartbeatTimeoutMs,
         exclude: closingSocket,
         acceptedHeartbeatAt,
+        validMemberIds: valid,
       }).alarm;
       const hostAt = hostRemoveAt(room, online, this.config);
       next = Math.min(
