@@ -29,9 +29,9 @@ export function QualityPanel({
   quality,
   pending,
   source,
-  mode = "p2p",
-  viewers = 0,
-  encoderLagging = false,
+  mode,
+  viewers,
+  encoderLagging,
   onChange,
 }: {
   /** 房間目前的畫質（最近一次廣播）。 */
@@ -41,11 +41,11 @@ export function QualityPanel({
   /** 片源高度與估計位元率；還沒選片時為 null。 */
   source: { height: number; bitrate: number | null } | null;
   /** 房間目前的傳送方式（P2P 多人高畫質提示用）。 */
-  mode?: Mode;
+  mode: Mode;
   /** 目前在線收看人數（P2P 且 ≥ 2 人時高畫質提示用警告樣式）。 */
-  viewers?: number;
+  viewers: number;
   /** 房主端編碼器連續 10 秒跟不上（streaming.md §2）。 */
-  encoderLagging?: boolean;
+  encoderLagging: boolean;
   onChange: (quality: Quality) => void;
 }) {
   // 只在拖曳／按鍵調整到放開之前存在。

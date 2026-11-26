@@ -32,29 +32,28 @@ export function initialEncoderHealth(): EncoderHealthState {
 
 /**
  * 計算用來對照送出 FPS 的目標幀率（streaming.md §2）：
- * 優先用 `maxFramerate`；原片 FPS（null）時用片源 FPS（`track.getSettings().frameRate`）；
- * 兩者都量不到時回 null，不判斷 FPS 條件。
+ * 目標 = `min(maxFramerate, 片源 FPS)`，片源 FPS 取 `track.getSettings().frameRate`；
+ * 只量得到其中一個就用那一個（原片 FPS 時 `maxFramerate` 為 null），兩者都量不到時回 null，不判斷 FPS 條件。
  */
 export function targetFramerate(
   maxFramerate: number | null,
   sourceFps?: number | null,
 ): number | null {
-  if (
-    maxFramerate !== null &&
-    Number.isFinite(maxFramerate) &&
-    maxFramerate > 0
-  ) {
-    return maxFramerate;
-  }
-  if (
+  const validMax =
+    maxFramerate !== null && Number.isFinite(maxFramerate) && maxFramerate > 0
+      ? maxFramerate
+      : null;
+  const validSource =
     sourceFps !== null &&
     sourceFps !== undefined &&
     Number.isFinite(sourceFps) &&
     sourceFps > 0
-  ) {
-    return sourceFps;
+      ? sourceFps
+      : null;
+  if (validMax !== null && validSource !== null) {
+    return Math.min(validMax, validSource);
   }
-  return null;
+  return validMax ?? validSource;
 }
 
 /** 單次房主統計是否符合「編碼跟不上」條件（CPU 受限或送出 FPS < 目標 70%）。 */

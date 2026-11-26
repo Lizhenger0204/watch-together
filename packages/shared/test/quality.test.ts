@@ -86,7 +86,7 @@ describe("畫質檔位（streaming.md §2）", () => {
     expect(resolveQuality(q, null).maxBitrate).toBe(SOURCE_BITRATE_FALLBACK);
   });
 
-  test("sentVideoHeight 與 videoEncodingPolicy：縮放與降級策略（ADR 0003 D3）", () => {
+  test("sentVideoHeight 與 videoEncodingPolicy：縮放與降級策略（ADR 0004 D3）", () => {
     expect(MAINTAIN_RESOLUTION_ABOVE_HEIGHT).toBe(1080);
     expect(HIGH_RESOLUTION_HINT_ABOVE_HEIGHT).toBe(1440);
     expect(HIGH_RESOLUTION_BITRATE_HINT).toBe(25_000_000);

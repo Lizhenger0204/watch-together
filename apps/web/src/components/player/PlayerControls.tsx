@@ -214,18 +214,6 @@ export function PlayerControls({
             {activeDialog.content}
           </div>
         )}
-        {!activeDialog && quality?.warning && (
-          <div
-            role="status"
-            className="pointer-events-auto relative z-10 mx-3 mb-1 flex max-w-[calc(100%-1.5rem)] items-center gap-1.5 self-end rounded-sm border border-amber-400/50 bg-zinc-900/95 px-2.5 py-1.5 text-xs text-amber-200"
-          >
-            <AlertTriangle
-              className="size-3.5 shrink-0 text-amber-400"
-              strokeWidth={1.75}
-            />
-            <span>{quality.warning}</span>
-          </div>
-        )}
       </div>
       <div className="pointer-events-auto shrink-0 bg-gradient-to-t from-black/80 via-black/45 to-transparent px-3 pt-5 pb-1.5">
         {progress && (

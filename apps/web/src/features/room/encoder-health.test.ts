@@ -14,12 +14,54 @@ import { browserTimers } from "./host-session-types";
 afterEach(() => vi.useRealTimers());
 
 describe("encoder-health（streaming.md §2「編碼跟不上」）", () => {
-  test("目標幀率：優先 maxFramerate，原片 FPS 用片源 FPS，都量不到回 null", () => {
+  test("目標幀率：取 min(maxFramerate, 片源 FPS)，只量到一個用那一個，都量不到回 null", () => {
+    expect(targetFramerate(60, 24)).toBe(24);
+    expect(targetFramerate(24, 30)).toBe(24);
     expect(targetFramerate(30, 60)).toBe(30);
+    expect(targetFramerate(30, undefined)).toBe(30);
+    expect(targetFramerate(30, null)).toBe(30);
+    expect(targetFramerate(30, 0)).toBe(30);
+    expect(targetFramerate(null, 30)).toBe(30);
     expect(targetFramerate(null, 24)).toBe(24);
     expect(targetFramerate(null, undefined)).toBeNull();
+    expect(targetFramerate(null, null)).toBeNull();
     expect(targetFramerate(null, 0)).toBeNull();
     expect(targetFramerate(null, Number.NaN)).toBeNull();
+  });
+
+  test("FPS 目標規則（片源與設定組合）：避免 24 FPS 片設 60 誤報，其餘低於目標 70% 連續 10 秒才報", () => {
+    const runTenSeconds = (
+      maxFramerate: number | null,
+      sourceFps: number | null | undefined,
+      sentFps: number,
+      reason: "none" | "cpu" = "none",
+    ) => {
+      const targetFps = targetFramerate(maxFramerate, sourceFps);
+      let state = initialEncoderHealth();
+      for (let t = 0; t <= ENCODER_LAG_DURATION_MS; t += 2_000) {
+        state = recordEncoderSample(state, {
+          senderId: "v1",
+          stats: { framesPerSecond: sentFps, qualityLimitationReason: reason },
+          targetFps,
+          now: t,
+        });
+      }
+      return state.lagging;
+    };
+
+    // 片源 24、設定 60、送出 24 → 目標 24，不報（避免誤報）
+    expect(runTenSeconds(60, 24, 24)).toBe(false);
+    // 片源 30、設定 24、送出 15 → 目標 24（70% 為 16.8），報；送出 17 不報
+    expect(runTenSeconds(24, 30, 15)).toBe(true);
+    expect(runTenSeconds(24, 30, 17)).toBe(false);
+    // 片源未知、設定 30、送出 15 → 目標 30（70% 為 21），報
+    expect(runTenSeconds(30, undefined, 15)).toBe(true);
+    expect(runTenSeconds(30, null, 15)).toBe(true);
+    // 原片 FPS（null）、片源 30、送出 15 → 目標 30，報
+    expect(runTenSeconds(null, 30, 15)).toBe(true);
+    // 兩者都未知 → 不判斷 FPS，只看 cpu
+    expect(runTenSeconds(null, undefined, 15, "none")).toBe(false);
+    expect(runTenSeconds(null, undefined, 15, "cpu")).toBe(true);
   });
 
   test("單次取樣條件：CPU 受限、送出 FPS < 目標 70%；剛好 70% 或量不到 FPS 不觸發", () => {

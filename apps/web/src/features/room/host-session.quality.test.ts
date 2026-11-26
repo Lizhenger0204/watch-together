@@ -268,4 +268,50 @@ describe("房主編碼健康度（streaming.md §2「編碼跟不上」）", () 
     vi.advanceTimersByTime(1);
     expect(t.session.getView().encoderLagging).toBe(false);
   });
+
+  test("24 FPS 片源設 60 FPS 時以 min(60, 24)=24 為目標：送 24 FPS 不誤報，降到 15 FPS 滿 10 秒才報", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const t = setup();
+    const stream = new FakeStream(
+      fakeTrack("video", "v1", { height: 2160, frameRate: 24 }),
+      fakeTrack("audio", "a1"),
+    );
+    const transport = await t.goLive(readySource(stream));
+    t.client.emit(
+      roomUpdated("p2p", { height: 2160, bitrate: 25_000_000, fps: 60 }),
+    );
+
+    // 連續超過 10 秒送 24 FPS（若錯拿 60 當目標，24 < 42 會誤報）
+    for (
+      let elapsed = 0;
+      elapsed <= ENCODER_LAG_DURATION_MS;
+      elapsed += 2_000
+    ) {
+      transport.emitStats({
+        memberId: "v1",
+        bitrateKbps: 20_000,
+        framesPerSecond: 24,
+        qualityLimitationReason: "none",
+      });
+      if (elapsed < ENCODER_LAG_DURATION_MS) vi.advanceTimersByTime(2_000);
+    }
+    expect(t.session.getView().encoderLagging).toBe(false);
+
+    // 掉到 15 FPS（< 24 * 0.7）連續 10 秒後才觸發
+    transport.emitStats({
+      memberId: "v1",
+      bitrateKbps: 12_000,
+      framesPerSecond: 15,
+      qualityLimitationReason: "none",
+    });
+    vi.advanceTimersByTime(ENCODER_LAG_DURATION_MS);
+    transport.emitStats({
+      memberId: "v1",
+      bitrateKbps: 12_000,
+      framesPerSecond: 15,
+      qualityLimitationReason: "none",
+    });
+    expect(t.session.getView().encoderLagging).toBe(true);
+  });
 });
