@@ -63,15 +63,18 @@
 1. 擷取的 video track → `MediaStreamTrackProcessor` → 在 `OffscreenCanvas` 上 `drawImage` → `new VideoFrame(canvas, { timestamp })` → `MediaStreamTrackGenerator({ kind: 'video' })`。來源畫面處理完立刻 `close()`。
 2. 畫布尺寸：高度取 `min(videoHeight, RESOLUTION_STEPS 的最大值)`，目前是 1080，寬度依比例計算，寬高都取偶數。傳輸層照舊依 track 高度算 §2 的 `scaleResolutionDownBy`，所以轉換後不會重複縮放。`SourceInfo.height` 仍是原片高度，畫質面板照舊顯示「片源」高度。
 3. 送出的 stream 由 T-106 自己組成：generator 的 video track，加上擷取到的 audio track。
-4. **播完與重播**：擷取的 video track 被移除時，該次 pipe 結束，但 generator 不關閉（`pipeTo(..., { preventClose: true })`），送出的 video track 物件不變。重播時加入新的擷取 track，T-106 為它建新的 processor，接回同一個 generator。audio track 的新增與移除，由 T-106 同步到送出的 stream。因為由程式呼叫 `addTrack`／`removeTrack` 不會觸發事件，T-106 要自己呼叫 `onStreamChange`，房間層照舊 `replaceTrack`。
-5. **換檔或卸載**：中止 pipe，停止 generator track 與所有擷取的 track。
+4. **播完與重播**：每條擷取的 video track 各自做一次 pipe，最後一段寫進 generator 的 `pipeTo` 要同時設 `preventClose: true` 與 `preventAbort: true`，並帶該次專用的 `AbortSignal`。這樣擷取 track 被移除、該次 pipe 結束時，generator 不會關閉，送出的 video track 物件不變。
+   - **不可重疊 pipe**：前一次 pipe 的 promise 還沒 settle（resolve 或 reject）時，writable 仍被鎖住，這時再呼叫 `pipeTo` 會丟出 `TypeError: Cannot pipe to a locked stream`。實測 `<video>` 觸發 `ended` 的當下，舊 pipe 仍鎖著；`removetrack` 觸發時已解鎖。重播加入新的擷取 track 時，T-106 先等舊 pipe settle，再為新 track 建 processor，接回同一個 generator。
+   - **提早拆除舊 pipe**：例如新 track 已加入、舊 pipe 還沒結束，就 abort 該次 pipe 的 signal，等它 settle 後再接新的。一定要有 `preventAbort: true`。只設 `preventClose` 時，abort 會一路傳到 generator，使它變成 `ended`，之後無法再接。
+   - audio track 的新增與移除，由 T-106 同步到送出的 stream。實測原擷取 stream 的音軌增刪會各觸發一次事件，但由程式呼叫 `addTrack`／`removeTrack` 不會觸發事件，所以 T-106 同步後要自己呼叫 `onStreamChange`，房間層照舊 `replaceTrack`。
+5. **換檔或卸載**：abort 進行中的 pipe，停止 generator track 與所有擷取的 track。
 6. 瀏覽器沒有 `MediaStreamTrackProcessor`／`MediaStreamTrackGenerator`，又需要轉換時，回 `CAPTURE_UNSUPPORTED`。房主本來就限桌面 Chrome／Edge，兩者都有這兩個 API。
 
 **試播與診斷**：
 
-- 要轉換的片源，試播期間 generator 至少要輸出 1 張畫面，否則以 `CAPTURE_FAILED` 失敗。
-- `SourceDiagnostic` 增加 `frameFormat`：`VideoFrame.format` 的值；格式為 `null` 時記成 `"opaque"`；沒讀到畫面時為 `null`。另增加 `converted: boolean`。兩者都顯示在「播放診斷」。
-- 檢查通過時，若有轉換，在擷取資訊旁提示「10-bit 片源，送出前轉為 8-bit」。
+- 要轉換的片源，**generator 輸出第 1 張畫面**是試播通過的條件之一。在這之前不可進入 `ready`／`warning`，也不可把 stream 交給房間層，否則以 `CAPTURE_FAILED` 失敗（沿用試播的 10 秒逾時）。原因是 generator 寫入第一張畫面前，`getSettings()` 沒有 `height`，傳輸層無法計算縮放；之後尺寸補齊時 track 物件不變，房間層的 `applyTracks()` 也不會重新套用。
+- `SourceDiagnostic` 增加 `frameFormat`：`VideoFrame.format` 的值；格式為 `null` 時記成 `"opaque"`；沒讀到畫面時為 `null`。另增加 `converted: boolean`。兩者都顯示在失敗時的「播放診斷」。
+- 成功（`ready`）與無音軌警告（`warning`）時，也要在擷取資訊旁顯示 `converted`：有轉換時提示「10-bit 片源，送出前轉為 8-bit」，並附上 `frameFormat`。
 
 **已知限制**：
 
@@ -79,11 +82,24 @@
 - HDR（PQ／HLG）片會由 Chrome 轉成 SDR，顏色與 HDR 螢幕上的原片不同。
 - 房主本機的 `<video>` 仍播放原片，不受轉換影響。
 
-**效能**（同一台 M1 量兩次，4K 片源送出 1080p 30 fps、8 Mbps，1 位收看者）：轉換每張畫面約 0.2～0.4 ms。Chrome 總 CPU 為：現行 8-bit 直接送 51%／54%，10-bit 轉換後送 54%／51%，差距在量測誤差內。Windows、多位收看者、分頁在背景時的表現列入 T-113。
+**效能**：在 M1、macOS、Chrome 158 上，以 4K 片源送 1080p、約 30 fps，`maxBitrate` 上限 8 Mbps，實際送出約 6.3～6.9 Mbps，1 位收看者，loopback 接收端也在同一個 Chrome 裡，量測結果如下：
+
+- 轉換本身的同步處理時間：每張畫面平均 0.2～0.3 ms，p95 0.4 ms。
+- Chrome 總 CPU（單核 100% 計），兩位審查者共 6 組：
+
+  | 情境 | 範圍 |
+  | --- | --- |
+  | 直接送 | 41.7～57.2% |
+  | 轉換後送 | 49.3～62.3% |
+
+  轉換路徑大約多出 0～15 個百分點，也就是一個核心的 15% 以內。樣本少、波動大，只適用於這個量測條件。
+
+Windows、多位收看者、實際送滿 8 Mbps、分頁在背景時的表現列入 T-113。
 
 **驗收**：
 
 - E2E（`channel: 'chrome'`）用 `hevc-main10-aac.mp4` 以 P2P 開播，斷言房主分頁沒有崩潰、收看端影格持續前進、診斷為 `converted: true`。這個案例在修正前必須失敗。
+- 同一個案例接著播完再重播：送出的 video track 物件不變，收看端影格在重播後繼續前進。
 - 缺 HEVC 解碼能力時，照 BUG-003 的規則明示 skip，並遵守 `HEVC_REQUIRED=1`。
 - 8-bit 片源沿用既有案例，並斷言 `converted: false`。
 - 單元測試涵蓋格式判斷與畫布尺寸計算（純函式）。
