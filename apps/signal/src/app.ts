@@ -122,9 +122,10 @@ export function createApp(resolveServices: (c: Ctx) => AppServices) {
     await next();
   });
 
-  app.get("/api/health", (c) =>
-    c.json({ ok: true, protocolVersion: PROTOCOL_VERSION }),
-  );
+  app.get("/api/health", async (c) => {
+    await c.var.services.rooms.ensureLegacySweep?.().catch(() => {});
+    return c.json({ ok: true, protocolVersion: PROTOCOL_VERSION });
+  });
 
   app.post("/api/rooms", async (c) => {
     const { nickname } = await parseBody(c.req.json(), createRoomRequestSchema);
@@ -166,6 +167,12 @@ export function createApp(resolveServices: (c: Ctx) => AppServices) {
       memberId,
     );
     return result.ok ? c.json(result.value) : fail(c, result.code);
+  });
+
+  app.post("/api/rooms/:roomId/leave", requireMember, async (c) => {
+    const { roomId, memberId } = c.var.member;
+    const result = await c.var.services.rooms.leaveRoom(roomId, memberId);
+    return result.ok ? c.body(null, 204) : fail(c, result.code);
   });
 
   app.get("/api/rooms/:roomId/ws", async (c) => {

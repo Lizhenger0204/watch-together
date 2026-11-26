@@ -459,6 +459,43 @@ export function onHostOfflineTimeout(
   return { removed: true, state: next, effects };
 }
 
+/** 成員明確退房：移除席位與憑證並關閉連線；還有其他人時廣播名單與停播（若為房主）。 */
+export function onLeave(
+  state: RoomState,
+  memberId: string,
+  online: Online,
+  now: number,
+  deps?: Pick<MessageDeps, "chatLimiter">,
+): (Outcome & { empty: boolean }) | null {
+  const member = findMember(state, memberId);
+  if (!member) return null;
+
+  let next = removeMember(state, memberId);
+  deps?.chatLimiter?.forget(memberId);
+  const onlineAfter = new Set(online);
+  onlineAfter.delete(memberId);
+  const effects: Effect[] = [
+    {
+      kind: "close",
+      to: to(memberId),
+      code: CLOSE.UNAUTHORIZED,
+      reason: "left",
+    },
+  ];
+  if (next.members.length === 0) {
+    return { state: next, effects, empty: true };
+  }
+  if (onlineAfter.size === 0 && next.idleSince === null) {
+    next = { ...next, idleSince: now };
+  }
+  effects.push(...membersTo(next, onlineAfter));
+  if (member.role === "host" && state.stream.live) {
+    next = { ...next, stream: OFFLINE_STREAM };
+    effects.push(...streamTo(next, onlineAfter));
+  }
+  return { state: next, effects, empty: false };
+}
+
 export function closeRoomEffects(
   online: Online,
   reason: "expired" | "host_closed",

@@ -24,6 +24,7 @@ import {
   findMember,
   findMemberByTokenHash,
   hostRemoveAt,
+  roomLastActivityAt,
   toRoomInfo,
   type RoomState,
 } from "../../room/room";
@@ -33,6 +34,7 @@ import {
   onAuth,
   onDisconnect,
   onHostOfflineTimeout,
+  onLeave,
   onMessage,
   type Effect,
 } from "../../signaling/process";
@@ -275,6 +277,80 @@ export class RoomDO extends DurableObject<Env> {
         relayGeneration: member.relayGeneration ?? 0,
       },
     };
+  }
+
+  async leave(memberId: string): Promise<Result<null>> {
+    const outcome = await this.changes.run(async () => {
+      if (!this.room) {
+        return {
+          ok: false as const,
+          code: "UNAUTHORIZED" as const,
+          closed: false,
+        };
+      }
+      const result = onLeave(this.room, memberId, this.online(), Date.now(), {
+        chatLimiter: this.chatLimiter,
+      });
+      if (!result) {
+        return {
+          ok: false as const,
+          code: "UNAUTHORIZED" as const,
+          closed: false,
+        };
+      }
+      if (result.empty) {
+        const reason: CloseReason =
+          findMember(this.room, memberId)?.role === "host"
+            ? "host_closed"
+            : "expired";
+        await this.closeRoom(reason);
+        return { ok: true as const, closed: true };
+      }
+      await this.saveTransition(result.state);
+      this.apply(result.effects, null);
+      return { ok: true as const, closed: false };
+    });
+    if (!outcome.ok) return { ok: false, code: outcome.code };
+    if (outcome.closed) await this.lifecycle.run(() => this.runCleanup());
+    return { ok: true, value: null };
+  }
+
+  /** 上版空房一次性巡檢用：補齊遺漏的閒置起算時間並縮短或關閉已到期空房。 */
+  async reconcileLegacyRoom(): Promise<"alive" | "closed" | "orphan"> {
+    return this.lifecycle.run(async () => {
+      const action = await this.changes.run(async () => {
+        if (!this.room && !this.closing) return "orphan" as const;
+        if (!this.room && this.closing) return "closing" as const;
+        const room = this.room!;
+        const now = Date.now();
+        const online = this.online();
+        let next = room;
+        if (online.size === 0 && next.idleSince === null) {
+          next = {
+            ...next,
+            idleSince: Math.min(now, roomLastActivityAt(next)),
+          };
+        }
+        if (next.members.length === 0 || now >= closeAt(next, this.config)) {
+          await this.closeRoom("expired");
+          return "just_closed" as const;
+        }
+        if (next !== room) {
+          await this.saveTransition(next);
+        } else {
+          await this.scheduleAlarm(authTimeouts(this.ctx).alarm);
+        }
+        return "alive" as const;
+      });
+      if (action === "orphan") return "orphan";
+      if (action === "alive") return "alive";
+      if (action === "closing") {
+        const retry = await this.ctx.storage.get<Retry>(RETRY_KEY);
+        if (retry?.at === null) return "closed";
+      }
+      await this.runCleanup();
+      return "closed";
+    });
   }
 
   async regenerateInviteCode(

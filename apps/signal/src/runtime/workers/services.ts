@@ -50,6 +50,8 @@ export function workersServices(c: Context<AppEnv>): AppServices {
       authenticate: (roomId, token) => room(roomId).authenticate(token),
       regenerateInviteCode: (roomId, hostMemberId) =>
         room(roomId).regenerateInviteCode(hostMemberId),
+      leaveRoom: (roomId, memberId) => room(roomId).leave(memberId),
+      ensureLegacySweep: () => directory().ensureLegacySweep(),
       // 格式錯誤的 roomId 不建 DO，回應與不存在的房間相同。
       connect: async (roomId, request) =>
         isRoomId(roomId) ? room(roomId).fetch(request) : roomClosedSocket(),

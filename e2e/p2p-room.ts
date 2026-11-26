@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { expect, type Page } from "@playwright/test";
+import { submitJoin } from "./join-room";
 import {
   beginWatching,
   expectPeers,
@@ -68,22 +69,10 @@ export async function openLiveRoom(newRoomPage: NewRoomPage) {
         .filter({ has: viewer.getByLabel("邀請碼") });
       await join.getByLabel("邀請碼").fill(invite);
       await join.getByLabel("你的暱稱").fill(index === 0 ? "朋友甲" : "朋友乙");
-      // 同一台電腦連跑三輪會加入 12 人；只有收到每分鐘 10 次的限流才重試。
-      await expect
-        .poll(
-          async () => {
-            const [response] = await Promise.all([
-              viewer.waitForResponse("**/api/rooms/join"),
-              join.getByRole("button", { name: "加入", exact: true }).click(),
-            ]);
-            if (!response.ok() && response.status() !== 429) {
-              throw new Error(`加入房間失敗（HTTP ${response.status()}）`);
-            }
-            return response.status();
-          },
-          { intervals: [2_000, 5_000], timeout: 30_000 },
-        )
-        .not.toBe(429);
+      await submitJoin(
+        viewer,
+        join.getByRole("button", { name: "加入", exact: true }),
+      );
       await beginWatching(viewer);
     }),
   );

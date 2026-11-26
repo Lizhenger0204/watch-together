@@ -1,27 +1,24 @@
 import { DurableObject } from "cloudflare:workers";
 import { generateInviteCode } from "../../room/crypto";
 import type { Env } from "./env";
+import {
+  armLegacySweepIfNeeded,
+  codeKey,
+  deleteIfOwned,
+  rotationKey,
+  sweepLegacyRooms,
+} from "./legacy-sweep";
 
-const key = (code: string) => `code:${code}`;
-const rotationKey = (roomId: string) => `rotation:${roomId}`;
 type Rotation = { opId: string; code: string };
 
 async function reserveCode(txn: DurableObjectTransaction, roomId: string) {
   for (;;) {
     const code = generateInviteCode();
-    if ((await txn.get(key(code))) === undefined) {
-      await txn.put(key(code), roomId);
+    if ((await txn.get(codeKey(code))) === undefined) {
+      await txn.put(codeKey(code), roomId);
       return code;
     }
   }
-}
-
-async function deleteIfOwned(
-  txn: DurableObjectTransaction,
-  code: string,
-  roomId: string,
-) {
-  if ((await txn.get(key(code))) === roomId) await txn.delete(key(code));
 }
 
 /**
@@ -29,12 +26,29 @@ async function deleteIfOwned(
  * 不用 KV：KV 是最終一致，重新產生後舊碼可能還查得到。
  */
 export class InviteDirectoryDO extends DurableObject<Env> {
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    void ctx.blockConcurrencyWhile(() => armLegacySweepIfNeeded(ctx.storage));
+  }
+
+  async ensureLegacySweep(): Promise<void> {
+    await armLegacySweepIfNeeded(this.ctx.storage);
+  }
+
+  async sweepLegacyRooms() {
+    return sweepLegacyRooms(this.ctx.storage, this.env);
+  }
+
+  override async alarm(): Promise<void> {
+    await sweepLegacyRooms(this.ctx.storage, this.env);
+  }
+
   async reserve(roomId: string): Promise<string> {
     return this.ctx.storage.transaction((txn) => reserveCode(txn, roomId));
   }
 
   async lookup(code: string): Promise<string | null> {
-    return (await this.ctx.storage.get<string>(key(code))) ?? null;
+    return (await this.ctx.storage.get<string>(codeKey(code))) ?? null;
   }
 
   /** 只刪除仍指向這個房間的碼，避免誤刪。關房時呼叫，一併忘掉這個房間的換碼紀錄。 */

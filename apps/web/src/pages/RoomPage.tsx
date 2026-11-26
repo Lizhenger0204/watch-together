@@ -25,6 +25,7 @@ import {
   uploadHint,
   type RoomView,
 } from "../features/room/room-state";
+import { useLeaveRoom } from "../features/room/use-leave-room";
 import { ApiError } from "../lib/api";
 import { navigate } from "../lib/router";
 import type { ConnectionState } from "../lib/signal";
@@ -441,9 +442,17 @@ function ViewerView({ room }: { room: Room }) {
 export function RoomPage({ roomId }: { roomId: string }) {
   const room = useRoom(roomId);
   const { view } = room;
+  const leave = useLeaveRoom({
+    roomId,
+    token: room.token,
+    client: room.client,
+    isLiveHost: view.you?.role === "host" && view.stream.live,
+  });
   const exit = room.corrupted
     ? { notice: "本機儲存的身份資料損壞了，請重新用邀請碼加入。" }
-    : roomExit(view);
+    : leave.suppressAutoExit
+      ? null
+      : roomExit(view);
   const exitNotice = exit?.notice;
 
   // 房間關閉、被踢、身份失效：這份 token 已經沒用，清掉並回首頁顯示原因。
@@ -500,33 +509,20 @@ export function RoomPage({ roomId }: { roomId: string }) {
   const showTopNotices =
     view.connection.status === "connecting" ||
     view.connection.status === "reconnecting" ||
+    Boolean(leave.error) ||
     Boolean(view.lastError) ||
     !roomToken.persisted(roomId);
-
-  function leaveRoom() {
-    if (
-      view.you?.role === "host" &&
-      view.stream.live &&
-      !window.confirm("目前正在直播中，確定要離開房間嗎？")
-    ) {
-      return;
-    }
-    // 不論快照是否已送達（view.you 可能尚未建立），主動離房只撤銷「本分頁」已保存的開播意圖
-    // 並保留房主憑證；不呼叫會寫入跨分頁停播標記的 setIntent(false)，避免同步中的第二分頁離房
-    // 時連帶讓原直播分頁的開播意圖失效。
-    liveIntent.set(roomId, false);
-    navigate("/");
-  }
 
   return (
     <Layout
       flush
-      onBrandClick={leaveRoom}
+      onBrandClick={() => void leave.leave()}
       headerRight={
         <Button
           variant="ghost"
           className="min-h-8 px-2.5 text-xs"
-          onClick={leaveRoom}
+          disabled={leave.leaving}
+          onClick={() => void leave.leave()}
         >
           <LogOut className="size-3.5" strokeWidth={1.75} />
           離開房間
@@ -536,6 +532,7 @@ export function RoomPage({ roomId }: { roomId: string }) {
       {showTopNotices && (
         <div className="grid gap-2 border-b border-zinc-200 bg-white px-4 py-2">
           <ConnectionNotice connection={view.connection} />
+          {leave.error && <Notice tone="error">{leave.error}</Notice>}
           {view.lastError && <Notice tone="error">{view.lastError}</Notice>}
           {!roomToken.persisted(roomId) && (
             <Notice tone="warning">

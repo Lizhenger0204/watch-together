@@ -6,6 +6,7 @@ import {
   onAuth,
   onDisconnect,
   onHostOfflineTimeout,
+  onLeave,
   onMessage,
   type Effect,
 } from "../src/signaling/process";
@@ -674,5 +675,69 @@ describe("onHostOfflineTimeout 與無房主房間", () => {
       { generateId: () => "m1" },
     );
     expect(typesTo(chat.effects, "a")).toEqual(["chat:message"]);
+  });
+});
+
+describe("onLeave 與無房主房間", () => {
+  test("找不到成員回 null", () => {
+    expect(onLeave(roomWith(), "missing", new Set(["host"]), T0)).toBeNull();
+  });
+
+  test("收看者明確退房：移除席位、關閉 4401 並廣播給其餘成員", () => {
+    const outcome = onLeave(
+      roomWith({ idleSince: null }),
+      "a",
+      new Set(["host", "a"]),
+      T0 + 5,
+    );
+    expect(outcome?.empty).toBe(false);
+    expect(outcome?.state.members.map((m) => m.memberId)).toEqual([
+      "host",
+      "b",
+    ]);
+    expect(outcome?.effects).toContainEqual({
+      kind: "close",
+      to: { memberId: "a" },
+      code: CLOSE.UNAUTHORIZED,
+      reason: "left",
+    });
+    expect(typesTo(outcome!.effects, "host")).toEqual(["room:members"]);
+  });
+
+  test("房主在有收看者時離房：移除房主、停播並保留房間，收看者可繼續聊天", () => {
+    const outcome = onLeave(
+      roomWith({ stream: LIVE, idleSince: null }),
+      "host",
+      new Set(["host", "a"]),
+      T0 + 5,
+    );
+    expect(outcome?.empty).toBe(false);
+    expect(outcome?.state.members.map((m) => m.memberId)).toEqual(["a", "b"]);
+    expect(outcome?.state.stream.live).toBe(false);
+    expect(typesTo(outcome!.effects, "a")).toEqual([
+      "room:members",
+      "stream:status",
+    ]);
+    expect(
+      onMessage(
+        outcome!.state,
+        "a",
+        { type: "member:status", state: "playing" },
+        new Set(["a"]),
+        T0 + 6,
+      ),
+    ).toEqual({ state: outcome!.state, effects: [] });
+  });
+
+  test("最後一位成員離房回傳 empty: true", () => {
+    const solo = createRoomState({
+      roomId: "r1",
+      inviteCode: "ABCDEFGH",
+      host: { memberId: "host", nickname: "房主", tokenHash: "h-host" },
+      now: T0,
+    });
+    const outcome = onLeave(solo, "host", new Set(["host"]), T0 + 1);
+    expect(outcome?.empty).toBe(true);
+    expect(outcome?.state.members).toEqual([]);
   });
 });

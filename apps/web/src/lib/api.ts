@@ -87,6 +87,27 @@ export function regenerateInviteCode(roomId: string, token: string) {
   );
 }
 
+export async function leaveRoom(roomId: string, token: string): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/rooms/${roomId}/leave`, {
+      method: "POST",
+      redirect: "error",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch {
+    throw new ApiError("INTERNAL");
+  }
+  if (response.status === 204) return;
+  const body: unknown = await response.json().catch(() => null);
+  const parsed = errorResponseSchema.safeParse(body);
+  throw new ApiError(
+    response.status >= 500 || !parsed.success
+      ? "INTERNAL"
+      : parsed.data.error.code,
+  );
+}
+
 export function getIceServers(roomId: string, token: string) {
   return request(`/api/rooms/${roomId}/ice`, iceResponseSchema, { token });
 }
