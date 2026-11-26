@@ -697,3 +697,15 @@ T-118 第二輪審查（GPT ultra fast，66a7155）：第一輪 8 項中 6 項�
 4. 驗證：rebase 最新 `main` 後 `pnpm typecheck && pnpm lint && pnpm test && pnpm build` 全綠（web+shared 579、signal 146）。
 5. 審查與修正（Claude，`claude/T-127-review-fixes`，合併於 `f157181`）：GPT（gpt-6.2-sol）首輪退回 7 項，加上三輪複驗，均已修正：字數由 shared 的 `normalizeChatText()`／`chatTextLength()` 統一以 code point 計；彈幕排程依文字寬度與舞台寬度避免同軌道追撞，切換密度不移動已發射的彈幕；全螢幕「開啟聊天室」退出全螢幕後一定切到聊天；送出時焦點留在輸入框；在途斷線顯示「無法確認是否已送出」；側欄分頁支援鍵盤操作與 ARIA 關聯；限流的重啟例外寫進 protocol.md。依使用者指示標為 `DONE`。
 6. 例外與遺留：T-127 改到 `features/source/HostSourcePlayer.tsx`（房主端彈幕接線，屬必要改動，比照 T-125 的 `features/source` 例外）。**已知未修**：`laneBand()` 以舞台高度百分比計算軌道高度，播放器矮時（例如手機寬 390px，彈幕區約 163px）每條軌道只有約 11–12px，小於一行字的 20px，相鄰軌道的彈幕會上下重疊；桌面尺寸不受影響。修法建議：軌道高度至少一行字高（用現有探針量測），播放器太矮時減少可用軌道數。
+
+### T-132（Gemini，2026-11-26，已合併 `64d7e2d`..`00b6d73`，第一輪 Claude Opus 5.5 審查已修正）— DONE
+1. 做了什麼：更新 `protocol.md`、`room-and-invite.md`、`development.md` 與 `packages/shared/src/constants.ts`（`WS_HEARTBEAT_TIMEOUT_MS = 130_000`）；實作伺服器端 WebSocket 心跳逾時（`4410`、自判定逾時當下起算離線）、前端 `visibilitychange` 補送 `ping`、房主離線滿 100 秒自動移除席位並撤銷 token／轉發發布（保留有收看者的聊天室、不再接受新成員加入，無成員則立即關房）、收看端「房主已離開房間」提示與 `host-lifecycle.test.ts` 回歸測試。
+2. 介面變動：WS 新增關閉碼 `4410`（`heartbeat_timeout`）；`wrangler.toml`（頂層與 `env.production`）新增 `ROOM_HOST_OFFLINE_TTL_MS=100000`、`ROOM_IDLE_TTL_MS=100000`；`PROTOCOL_VERSION=1`。
+3. 已知限制：升級前已連線之舊 socket 會在下次訊息／alarm 補齊心跳紀錄。
+4. 驗證：合併後 `pnpm typecheck && pnpm lint && pnpm test && pnpm build` 全綠。
+
+### T-134（Gemini，2026-11-26，已合併 `37d8bfd`..`fc2151d`，第一輪 GPT-6.2 Sol 審查已修正）— DONE
+1. 做了什麼：新增 `POST /api/rooms/:roomId/leave`（`204`）明確退房、無人立即釋出空房（邀請碼、轉發資源、DO storage）與 `InviteDirectoryDO` 一次性分批巡檢上版殘留空房／孤兒邀請碼（`legacy-sweep.ts`、`RoomDO.reconcileLegacyRoom()`、建房預留碼保護與 `code:`/`rotation:` 雙階段分批）；前端抽離 `use-leave-room.ts` 於 `room:join` 同源鎖內條件清除身份並抑制回應遺失時的 WS `4401` 跳轉；新增 `leave.test.ts`、`legacy-sweep.test.ts`、`use-leave-room.test.ts`、`e2e/join-room.ts`、`e2e/room-leave.spec.ts`。
+2. 介面變動：新增 REST `POST /api/rooms/:roomId/leave`（成員歸零時 WS 收到 `room:closed` 與 `4001`，尚有成員時 `4401`）；`GET /api/health` 非同步確認啟動上版空房一次性巡檢。
+3. 已知限制：部署新版本至 Cloudflare 後，呼叫一次 `GET /api/health`（或等目錄喚醒）即於約 5 秒後自動分批清理上版殘留空房。
+4. 驗證：合併後 `pnpm typecheck && pnpm lint && pnpm test && pnpm build` 與 Playwright E2E（`room-leave.spec.ts`、`p2p-recovery.spec.ts` 10/10）全綠。

@@ -52,6 +52,8 @@
 | T-132 | BUG-001：房主關閉瀏覽器後自動退房；先確認斷線／重整語意並更新契約，再補心跳、生命週期與回歸測試（詳見 [bugs.md](bugs.md)） | Gemini（使用者指定接手） | — | DONE |
 | T-133 | BUG-003：修正 HEVC 試播誤判、保留失敗診斷並補實播測試。已通過 GPT 審查並合併；macOS 可播，但 **Windows 實測仍出錯，未修復**，需重新排查（詳見 [bugs.md](bugs.md)） | Gemini（修 BUG 改由 Gemini 負責，待派工） | — | TODO |
 | T-134 | BUG-002：明確退房、清除身份與釋放空房；與 T-132 對齊契約並補回歸測試（詳見 [bugs.md](bugs.md)） | Gemini（使用者指定接手） | T-132 契約 | DONE |
+| T-135 | 房主端正式支援 MKV 容器的 H.264／HEVC（ADR 0003 草稿：MKV 轉封裝 fMP4 + MSE，套件 mediabunny）。**擱置**：實測的兩個 HEVC 問題（Windows 解碼錯誤、Mac Main 10 崩潰）都與容器無關；等 Windows 上 mp4／mkv 對照測試確認確實有容器問題再重啟。ADR 草稿在 `claude/T-135-mkv-hevc`（`8953498`），未合併 | Claude（ADR） | — | BLOCKED |
+| T-136 | BUG-004：HEVC Main 10 片源開播後房主分頁崩潰；送出前把 10-bit 畫面轉成 8-bit（streaming.md §1，規格已合併 `daa794a`、`c892004`）。實作在 `gemini/BUG-004-10bit-capture`（`00432ae`，已推上遠端），**GPT 審查退回 1 項阻擋**：換片後 Chrome 仍往舊擷取 stream 加入 track，舊 track 一直是 `live`（詳見 [bugs.md](bugs.md)） | Gemini（實作）、GPT（審查） | — | DOING |
 
 可平行的組合：T-101 完成後 → T-102（Claude）∥ T-106（GPT）；T-102 完成後 → T-103、T-105（Claude，依序）∥ T-104（GPT）；T-103 完成後 → T-108、T-112（GPT）。T-115（Claude）可與 T-105／T-114 的審查同時進行；T-114 與 T-115 都合併後 → T-107（GPT）∥ T-109、T-110（Claude）。
 
@@ -73,20 +75,23 @@
 > - **T-124** 已由 Gemini 對話「登記播放器與聊天室功能需求」與使用者定案並完成合併（`DONE`）；**T-125～T-127** 維持 `TODO`，待使用者指示再開工。
 > - T-125 的 `features/source` 例外同樣由 Gemini 主導；跨模組契約與實作仍依既有流程交由 GPT 審查。
 
-### T-132（Gemini，2026-11-26，已合併 `64d7e2d`..`00b6d73`，第一輪 Claude Opus 5.5 審查已修正）
-1. 做了什麼：更新 `protocol.md`、`room-and-invite.md`、`development.md` 與 `packages/shared/src/constants.ts`（`WS_HEARTBEAT_TIMEOUT_MS = 130_000`）；實作伺服器端 WebSocket 心跳逾時（`4410`、自判定逾時當下起算離線）、前端 `visibilitychange` 補送 `ping`、房主離線滿 100 秒自動移除席位並撤銷 token／轉發發布（保留有收看者的聊天室、不再接受新成員加入，無成員則立即關房）、收看端「房主已離開房間」提示與 `host-lifecycle.test.ts` 回歸測試。
-2. 介面變動：WS 新增關閉碼 `4410`（`heartbeat_timeout`）；`wrangler.toml`（頂層與 `env.production`）新增 `ROOM_HOST_OFFLINE_TTL_MS=100000`、`ROOM_IDLE_TTL_MS=100000`；`PROTOCOL_VERSION=1`。
-3. 已知限制：升級前已連線之舊 socket 會在下次訊息／alarm 補齊心跳紀錄。
-4. 驗證：合併後 `pnpm typecheck && pnpm lint && pnpm test && pnpm build` 全綠。
-
 ### T-133（GPT，2026-11-26，已合併 `057bb5d`、`530efd4`，GPT 審查通過）
 1. 做了什麼：試播以媒體時間、影格和擷取軌驗證是否可播放，並保存失敗階段與原生媒體錯誤。
 2. 介面變動：片源檢查增加播放與擷取錯誤分類與診斷。
 3. 已知限制：在 macOS Chrome 158 驗證四種 HEVC 樣本。待用回報者的原始片源與瀏覽器複驗。
 4. 驗證：`pnpm typecheck && pnpm lint && pnpm test` 及 `HEVC_REQUIRED=1 pnpm e2e`。相同停滯回歸測試在修正前重現誤判、修正後通過。
 
-### T-134（Gemini，2026-11-26，已合併 `37d8bfd`..`fc2151d`，第一輪 GPT-6.2 Sol 審查已修正）
-1. 做了什麼：新增 `POST /api/rooms/:roomId/leave`（`204`）明確退房、無人立即釋出空房（邀請碼、轉發資源、DO storage）與 `InviteDirectoryDO` 一次性分批巡檢上版殘留空房／孤兒邀請碼（`legacy-sweep.ts`、`RoomDO.reconcileLegacyRoom()`、建房預留碼保護與 `code:`/`rotation:` 雙階段分批）；前端抽離 `use-leave-room.ts` 於 `room:join` 同源鎖內條件清除身份並抑制回應遺失時的 WS `4401` 跳轉；新增 `leave.test.ts`、`legacy-sweep.test.ts`、`use-leave-room.test.ts`、`e2e/join-room.ts`、`e2e/room-leave.spec.ts`。
-2. 介面變動：新增 REST `POST /api/rooms/:roomId/leave`（成員歸零時 WS 收到 `room:closed` 與 `4001`，尚有成員時 `4401`）；`GET /api/health` 非同步確認啟動上版空房一次性巡檢。
-3. 已知限制：部署新版本至 Cloudflare 後，呼叫一次 `GET /api/health`（或等目錄喚醒）即於約 5 秒後自動分批清理上版殘留空房。
-4. 驗證：合併後 `pnpm typecheck && pnpm lint && pnpm test && pnpm build` 與 Playwright E2E（`room-leave.spec.ts`、`p2p-recovery.spec.ts` 10/10）全綠。
+> 2026-11-26 使用者決定：
+> - BUG-004 的規格（`daa794a`、`c892004`）依使用者直接指示，在 GPT 實證審查後由主對話合進 `main`。當時規則仍是「只有監工能改 main」，之後於 `26a9108` 改為主對話＝協調者。
+> - 使用者指示：T-136 的 GPT 審查通過後，直接合進 `main` 並推送。第一輪審查未通過，因此尚未合併。
+
+### T-136（Gemini，2026-11-26，`gemini/BUG-004-10bit-capture` `00432ae`，未合併）
+1. 做了什麼：新增 `features/source/video-conversion.ts`（8-bit 格式判斷、畫布尺寸、clone 首幀偵測、`MediaStreamTrackProcessor` → `OffscreenCanvas` → `MediaStreamTrackGenerator` 轉換、pipe 重接、音軌同步）；`browser-source.ts`、`use-local-source.ts` 在試播時建立轉換，首幀輸出後才進入 `ready`／`warning`；`SourceDiagnostic` 加上 `frameFormat`、`converted`，診斷與成功提示都會顯示；新增 `e2e/p2p-hevc-main10.spec.ts`。
+2. 介面變動：只改 `features/source/` 與 `e2e/`；`useLocalSource().check` 在 `ready`／`warning` 時附帶 `frameFormat`、`converted`；無新增依賴。
+3. 已知限制：canvas 轉換可能有輕微色階斷層；HDR 會被轉成 SDR；Windows、多位收看者、背景分頁待 T-113。
+4. 驗證：`pnpm typecheck && pnpm lint && pnpm test` 通過 822；`HEVC_REQUIRED=1` 的 source／p2p-hevc-main10／p2p-playback／layout E2E 通過 11；新 E2E 在修正前會失敗。
+5. GPT 審查（gpt-6.2-sol、high，第一輪）：真 Chrome 在房間頁實測 4K Main 10 mp4／mkv，送出 1080p，房主沒有崩潰，收看端有畫面與聲音；拖進度、重播、換 8-bit 再換回都正常；改壞驗證（拿掉 `preventAbort`、首幀前就通過）都會讓測試失敗。**退回**：
+   - （阻擋）換片後 Chrome 仍往**每一條舊的擷取 stream** 加入新的影音 track，而清理只停止當下的 track，舊 stream 上的新 track 一直是 `live`，換越多片累積越多。基底 `c892004` 也能重現，屬既有問題，但不符合 §1 第 5 點。
+   - （建議）把「延後首幀」的房間案例納入正式回歸測試。現有單元測試用替身頂掉了 hook 的首幀等待。
+   - （小問題）`video-conversion.test.ts:338` 的「缺 generator」測試傳入 `runtime: {}`，應該只拿掉 generator。
+   - 證據：`/Users/lizheng/.t3/projects/bug004-evidence/review-impl/`。
