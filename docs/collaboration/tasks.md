@@ -44,7 +44,7 @@
 | T-124 | 介面改善計畫（SPEC／文件）：截圖檢查現有所有頁面，提出改善計畫給使用者挑選，同意後再實作；建議最先做，決定 T-125 的視覺方向。**由 Gemini 對話「登記播放器與聊天室功能需求」直接與使用者討論並完成實作**（含 `DESIGN.md` 與全站藍白扁平改版） | Gemini | — | DONE |
 | T-125 | 播放器圖示化控制列（Gemini 主導，含 `features/source` 例外）：參考使用者提供的截圖，控制列改用圖示按鈕（播放／暫停、時間、音量、彈幕開關、畫質、劇院模式、全螢幕），每個按鈕都要有提示文字與 `aria-label`。做成共用的控制列元件，房主播放器（`features/source`，原本是 GPT 的 UI）與收看端播放器（`features/player`）共用。收看端只有音量、全螢幕、彈幕、聊天，不能暫停或拖進度。若要新增圖示套件，要確認沒有被標成 deprecated，並且符合冷卻期 | Gemini | T-124 | DONE |
 | T-126 | 細緻畫質調整：房主透過三條分段滑桿即時套用 720／900／1080P（不超過片源）、8／10／15 Mbps／原片位元率、24／30／60 FPS／原片。更新 streaming.md、protocol.md 與 shared 畫質契約，保留 P2P 超過 60 Mbps 的提示 | Claude | T-125 | DONE |
-| T-127 | 聊天室與彈幕（Gemini 先改 spec，實作分工待定；暫不派工）：新增聊天訊息（protocol.md 與 shared schema）。不保留歷史紀錄，加入後只看得到之後的訊息；房主不需要禁言或刪訊息。伺服器仍要檢查成員身份、被踢的人不能發言、限流、長度上限，並以純文字顯示。房主與收看者都能發言。彈幕從右往左，有開關與密度設定，全螢幕時仍會顯示（全螢幕的對象改成播放器容器） | Gemini | T-125 | TODO |
+| T-127 | 聊天室與彈幕：聊天訊息（不保留歷史、成員驗證、被踢禁言、10 秒限 5 則、200 字純文字）與全螢幕容器內彈幕（開關＋少／中／多密度） | Gemini | T-125 | REVIEW |
 | T-128 | 切模式第 2 步等待 `room:updated` 逾時（結果不明）的處理（T-121 第 11 項，與 streaming.md §6 現行條文衝突）：先改 §6，區分兩種情況——**被拒**（`ack ok:false`）時照原模式重建；**逾時**時不要重建，維持「直播暫停中」。再由 `SignalClient` 提供重新驗證的方法（例如 `resync()`），拿到新的 snapshot 後依 snapshot 的模式重建 | Gemini | T-121, T-122 | DONE |
 | T-129 | **RoomDO 產品競態**（從不穩定測試查出）：加入與踢人都從記憶體的 `this.room` 算出新成員清單後才交給 `saveTransition()`，提交後才更新 `this.room`。兩個操作讀到同一份舊清單時，後寫的會蓋掉先前已成功加入的席位（新成員拿到 200，卻立刻驗證失敗）。`relay-lifecycle.test.ts:440` 50 輪中失敗 2 輪。要把會改寫房間狀態的操作序列化，範圍從讀取最新狀態、計算變更，一直到提交交易、更新記憶體，並補上能穩定重現的回歸測試 | GPT | T-120 | DONE |
 | T-130 | T-121 審查遺留（前端）：重產邀請碼期間收到「同碼」的鎖房／畫質廣播後 WS 中斷，成功的 REST 新碼被捨棄（改以單調遞增 `inviteCodeVersion` 與跨分頁共用儲存排序，畫面採用有效碼後才提示成功）；`tab-lock.test.ts` 改用假時鐘，不依賴真實的 `setTimeout`；`identity.ts` 的 `comparedRooms` 在身份清除時淘汰對應項，並限制保留數量；**伺服器已配位、分頁尚未保存身份就關頁會多一席**——加入請求帶冪等鍵 `joinKey`，已更新 protocol.md、room-and-invite.md 與 shared | Claude | T-121, T-129 | DONE |
@@ -108,3 +108,9 @@
 > - 因 Claude 額度暫時不足，**T-124、T-125、T-126、T-127** 暫時改由 **Gemini** 負責執行（屬 `ownership.md` 的暫時分工調整）。
 > - **T-124** 已由 Gemini 對話「登記播放器與聊天室功能需求」與使用者定案並完成合併（`DONE`）；**T-125～T-127** 維持 `TODO`，待使用者指示再開工。
 > - T-125 的 `features/source` 例外同樣由 Gemini 主導；跨模組契約與實作仍依既有流程交由 GPT 審查。
+
+### T-127（Gemini，2026-11-26，已合併 `fbdb8be`..`0a561a5`，待審查）
+1. 做了什麼：更新 protocol／room-and-invite／streaming／architecture 與 `shared`（`chat:send`／`chat:message`）；後端 `chat-rate-limit.ts`、`process.ts`、`room-do.ts` 實作轉送、成員檢查與限流；前端新增 `DanmakuOverlay`／`DanmakuPanel`（共用 `PlayerControls` 彈出定位與焦點還原）、`ChatPanel`、`SidebarTabs` 接入 `RoomPage`。
+2. 介面變動：WS 新增 `chat:send`／`chat:message`（`PROTOCOL_VERSION=1`）；無新增依賴。
+3. 已知限制：限流在 `RoomDO` 記憶體；iOS Safari 原生全螢幕無自訂彈幕層；前端保留近期 200 則、離房清空。
+4. 驗證：rebase 最新 `main` 後 `pnpm typecheck && pnpm lint && pnpm test && pnpm build` 全綠（web+shared 579、signal 146）。
