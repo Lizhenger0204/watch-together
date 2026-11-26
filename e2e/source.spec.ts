@@ -24,6 +24,10 @@ test("plays a local movie and replaces its captured stream after selecting anoth
   await page.screenshot({ path: testInfo.outputPath("source-empty.png") });
   await input.setInputFiles(fixture("h264-aac.mp4"));
   await expect(page.getByRole("status")).toHaveText("檢查通過，可以播放。");
+  await expect(page.getByTestId("source-conversion")).toHaveAttribute(
+    "data-converted",
+    "false",
+  );
   await expect(video).toHaveJSProperty("paused", true);
   await expect(video).toHaveJSProperty("currentTime", 0);
   await expect(video).toHaveJSProperty("muted", false);
@@ -66,6 +70,10 @@ test("plays a local movie and replaces its captured stream after selecting anoth
 
   await input.setInputFiles(fixture("h264-silent.mp4"));
   await expect(page.getByRole("status")).toContainText("影片沒有音軌");
+  await expect(page.getByTestId("source-conversion")).toHaveAttribute(
+    "data-converted",
+    "false",
+  );
   await expect(play).toBeDisabled();
   await expect(stageToggle).toHaveCount(0);
   await expect(page.getByText("擷取音軌 0・擷取影像軌 0")).toBeVisible();
@@ -76,6 +84,10 @@ test("plays a local movie and replaces its captured stream after selecting anoth
 
   await page.getByRole("button", { name: "繼續播放無聲影片" }).click();
   await expect(page.getByRole("status")).toHaveText("可以播放（無聲）");
+  await expect(page.getByTestId("source-conversion")).toHaveAttribute(
+    "data-converted",
+    "false",
+  );
   await expect(page.getByText("擷取音軌 0・擷取影像軌 1")).toBeVisible();
   await play.click();
   await expect
@@ -118,6 +130,13 @@ for (const name of [
     await page.screenshot({ path: testInfo.outputPath("source-empty.png") });
     await page.getByLabel("選擇影片").setInputFiles(path);
     await expect(page.getByRole("status")).toHaveText("檢查通過，可以播放。");
+    const conversion = page.getByTestId("source-conversion");
+    if (name === "hevc-main10-aac.mp4") {
+      await expect(conversion).toHaveAttribute("data-converted", "true");
+      await expect(conversion).toContainText("10-bit 片源，送出前轉為 8-bit");
+    } else {
+      await expect(conversion).toHaveAttribute("data-converted", "false");
+    }
     await expect(page.getByText("擷取音軌 1・擷取影像軌 1")).toBeVisible();
     const video = page.locator("video");
     await expect(video).toHaveJSProperty("paused", true);
@@ -156,6 +175,7 @@ test("reports a stalled native trial instead of accepting play() alone", async (
   ).toBeDisabled();
   await page.getByText("播放診斷", { exact: true }).click();
   await expect(page.getByText("失敗階段：靜音試播")).toBeVisible();
+  await expect(page.getByText(/^畫面格式：.+；8-bit 轉換：否$/)).toBeVisible();
   await page.screenshot({
     path: testInfo.outputPath("source-stalled-diagnostic.png"),
     fullPage: true,
@@ -191,6 +211,9 @@ test("diagnoses a host with native HEVC decoding disabled separately from playba
     await page.getByText("播放診斷", { exact: true }).click();
     await expect(page.getByText("失敗階段：載入中繼資料")).toBeVisible();
     await expect(page.getByText("影像：0 × 0", { exact: false })).toBeVisible();
+    await expect(
+      page.getByText("畫面格式：尚未讀取；8-bit 轉換：否"),
+    ).toBeVisible();
     await page.screenshot({
       path: testInfo.outputPath("source-hevc-unsupported.png"),
       fullPage: true,
