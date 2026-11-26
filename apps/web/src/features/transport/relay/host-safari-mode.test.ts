@@ -224,6 +224,43 @@ test("被取代的舊請求之後才失敗：不回報，由最新的那次決�
   h.host.setSafariMode(true);
   fail();
   await flush();
+  // 舊請求沒寫入成功：沿用 offer 協商的 42e0xx，不必另外指定。
+  expect(encodingCodec(h.sender)).toBeUndefined();
+  expect(h.errors).not.toHaveBeenCalled();
+});
+
+test("快速「開→關→開」、第一次延後失敗：已被取代的錯誤不回報，最後套用 42e0xx", async () => {
+  const h = await live([BASELINE, CONSTRAINED]);
+  let rejectFirst!: (error: Error) => void;
+  const first = new Promise<void>((_resolve, reject) => {
+    rejectFirst = reject;
+  });
+  const setter = vi
+    .spyOn(h.sender, "setParameters")
+    .mockImplementationOnce(() => first);
+  h.host.setSafariMode(true);
+  await flush();
+  expect(setter).toHaveBeenCalledTimes(1);
+  h.host.setSafariMode(false);
+  h.host.setSafariMode(true);
+  rejectFirst(new DOMException("transient", "InvalidStateError"));
+  await flush();
   expect(encodingCodec(h.sender)).toEqual(CONSTRAINED);
   expect(h.errors).not.toHaveBeenCalled();
+});
+
+test("開啟被瀏覽器拒絕後再關閉：原本的設定仍有效，不再寫入也不再回報", async () => {
+  const h = await live([BASELINE, CONSTRAINED]);
+  const setter = vi
+    .spyOn(h.sender, "setParameters")
+    .mockRejectedValue(new DOMException("unsupported", "NotSupportedError"));
+  h.host.setSafariMode(true);
+  await flush();
+  expect(h.errors).toHaveBeenCalledTimes(1);
+  expect(encodingCodec(h.sender)).toBeUndefined();
+  h.errors.mockClear();
+  h.host.setSafariMode(false);
+  await flush();
+  expect(h.errors).not.toHaveBeenCalled();
+  expect(setter).toHaveBeenCalledTimes(1);
 });
