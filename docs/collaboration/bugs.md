@@ -71,7 +71,7 @@
 
 ## BUG-004：HEVC Main 10 片源開播後，房主分頁崩潰
 
-- **狀態**：OPEN。規格已合併（streaming.md §1「送出前把 10-bit 畫面轉成 8-bit」，`daa794a`、`c892004`）。實作在 `gemini/BUG-004-10bit-capture`（`00432ae`），GPT 審查退回 1 項阻擋，尚未合併。
+- **狀態**：OPEN。規格已合併（streaming.md §1「送出前把 10-bit 畫面轉成 8-bit」，`daa794a`、`c892004`）。實作在 `gemini/BUG-004-10bit-capture`（`00432ae`），GPT 審查退回 1 項阻擋，尚未合併。另外 T-137 已修改規格：畫布改用原片尺寸（streaming.md §1 第 2 點）。下一輪修正須一併處理，並 rebase 到 `main`（`RESOLUTION_STEPS` 已加入 `"source"`，`Math.max(...RESOLUTION_STEPS)` 會型別錯誤）。
 - **發現來源**：使用者在 macOS 播放 Main 10 時，Chrome 分頁閃退，顯示錯誤代碼 5。Claude 以 Playwright 真 Chrome 重現，GPT 以獨立腳本驗證（共 41 個情境）。
 - **現象與原因**：
   - HEVC Main 10 的畫面經 `captureStream()` 直接交給 WebRTC 編碼時，房主分頁崩潰。

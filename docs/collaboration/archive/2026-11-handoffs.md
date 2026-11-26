@@ -709,3 +709,10 @@ T-118 第二輪審查（GPT ultra fast，66a7155）：第一輪 8 項中 6 項�
 2. 介面變動：新增 REST `POST /api/rooms/:roomId/leave`（成員歸零時 WS 收到 `room:closed` 與 `4001`，尚有成員時 `4401`）；`GET /api/health` 非同步確認啟動上版空房一次性巡檢。
 3. 已知限制：部署新版本至 Cloudflare 後，呼叫一次 `GET /api/health`（或等目錄喚醒）即於約 5 秒後自動分批清理上版殘留空房。
 4. 驗證：合併後 `pnpm typecheck && pnpm lint && pnpm test && pnpm build` 與 Playwright E2E（`room-leave.spec.ts`、`p2p-recovery.spec.ts` 10/10）全綠。
+
+### T-137（Claude 規格與審查、Gemini 實作，2026-11-27，已合併 `9af9db4`～`c971b4d`）— DONE
+1. 做了什麼：Chrome 158／M1 實測 4K 編碼後定案 ADR 0004（H.264 維持優先、>1080 用 `maintain-resolution`、P2P 只提示不強制、協定升 v2、10-bit 畫布用原片尺寸）；shared 新增檔位與 `videoEncodingPolicy`／`sentVideoHeight`；前端 `encoding.ts`、`stats.ts`、`encoder-health.ts`、畫質面板與控制列；`e2e/p2p-high-res.spec.ts` 與 4K 測試片（4 秒、0.85 MB）。
+2. 介面變動：`PROTOCOL_VERSION` 2（舊分頁驗證時收到 `4400`，提示重新整理）；`Quality` 新檔位；`EncodingTarget.targetHeight` 可為 null；房主方向 `TransportStats` 加 `frameHeight`、`framesPerSecond`、`qualityLimitationReason`（不進協定）。
+3. 已知限制：轉發模式的 4K 未實測（本機沒有 Realtime 金鑰，假 SFU 會重編成 720）；Windows 房主硬體編碼、Windows／Android 收看端解 4K 未驗證，皆列入 T-113。P2P 兩人 4K 在 M1 上約 13～21 FPS（會出現「編碼跟不上」提示）。
+4. 驗證：`pnpm typecheck && pnpm lint && pnpm test`（637 + 181）；`pnpm e2e e2e/p2p-high-res.spec.ts --project=chrome` 收看端 `frameHeight` 2160／2160／1080；反向驗證三種改壞都會失敗。Claude 兩輪審查，並以 HEVC 4K 片、P2P 兩位收看者實際開播確認收看端 3840×2160、按鈕與面板一致。
+5. 合併前協調者處理：任務改號 T-137；測試片原為 1.7 MB，超過 fixture ≤ 1 MB 的規定，合併前改寫未推送的分支歷史換成 0.85 MB 版本。
