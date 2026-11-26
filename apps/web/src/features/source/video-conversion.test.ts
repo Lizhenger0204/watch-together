@@ -122,14 +122,14 @@ describe("video conversion pure helpers", () => {
     expect(normalizeFrameFormat("I420P10")).toBe("I420P10");
   });
 
-  it("computes even canvas dimensions capped at maxHeight while preserving aspect ratio", () => {
+  it("computes even canvas dimensions matching the source without downscaling", () => {
     expect(computeConversionSize(3840, 2160)).toEqual({
-      width: 1920,
-      height: 1080,
+      width: 3840,
+      height: 2160,
     });
     expect(computeConversionSize(2560, 1440)).toEqual({
-      width: 1920,
-      height: 1080,
+      width: 2560,
+      height: 1440,
     });
     expect(computeConversionSize(1920, 1080)).toEqual({
       width: 1920,
@@ -140,27 +140,27 @@ describe("video conversion pure helpers", () => {
       height: 720,
     });
     expect(computeConversionSize(160, 90)).toEqual({ width: 160, height: 90 });
-    expect(computeConversionSize(3840, 1600)).toEqual({
-      width: 2592,
-      height: 1080,
+    expect(computeConversionSize(3840, 1608)).toEqual({
+      width: 3840,
+      height: 1608,
     });
     expect(computeConversionSize(1080, 1920)).toEqual({
-      width: 608,
-      height: 1080,
+      width: 1080,
+      height: 1920,
     });
     expect(computeConversionSize(1281, 721)).toEqual({
       width: 1280,
       height: 720,
     });
-    expect(computeConversionSize(1921, 1081)).toEqual({
-      width: 1920,
-      height: 1080,
+    expect(computeConversionSize(3841, 2161)).toEqual({
+      width: 3840,
+      height: 2160,
+    });
+    expect(computeConversionSize(7680, 4320)).toEqual({
+      width: 7680,
+      height: 4320,
     });
     expect(computeConversionSize(1, 1)).toEqual({ width: 2, height: 2 });
-    expect(computeConversionSize(3840, 2160, 720)).toEqual({
-      width: 1280,
-      height: 720,
-    });
   });
 });
 
@@ -335,7 +335,8 @@ describe("createEightBitVideoConverter", () => {
     };
   }
 
-  it("throws ConversionUnsupportedError when generator API is missing", () => {
+  it("throws ConversionUnsupportedError when MediaStreamTrackGenerator alone is missing", () => {
+    const env = setupConverterTest();
     const captured = new FakeMediaStream();
     const videoTrack = new FakeTrack("v1", "video");
     expect(() =>
@@ -345,7 +346,10 @@ describe("createEightBitVideoConverter", () => {
         width: 160,
         height: 90,
         onTracksChange: () => {},
-        runtime: {},
+        runtime: {
+          ...env.runtime,
+          TrackGenerator: undefined,
+        },
       }),
     ).toThrow(ConversionUnsupportedError);
   });

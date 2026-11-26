@@ -1,5 +1,3 @@
-import { RESOLUTION_STEPS } from "@project/shared";
-
 /** streaming.md §1（BUG-004）：已知 8-bit VideoFrame.format 清單，其餘（含 null）一律先轉 8-bit。 */
 export const EIGHT_BIT_PIXEL_FORMATS: ReadonlySet<string> = new Set([
   "I420",
@@ -15,8 +13,6 @@ export const EIGHT_BIT_PIXEL_FORMATS: ReadonlySet<string> = new Set([
   "BGRX",
 ]);
 
-export const MAX_CONVERSION_HEIGHT = Math.max(...RESOLUTION_STEPS);
-
 export function normalizeFrameFormat(
   format: string | null | undefined,
 ): string {
@@ -29,17 +25,13 @@ export function needsEightBitConversion(
   return !(typeof format === "string" && EIGHT_BIT_PIXEL_FORMATS.has(format));
 }
 
-/** 依 streaming.md §1：高度取 min(videoHeight, RESOLUTION_STEPS 最大值)，寬度等比，寬高均取偶數。 */
+/** 依 streaming.md §1（T-137，ADR 0004 D7）：畫布與原片同尺寸（寬高取偶數），轉換不縮放。 */
 export function computeConversionSize(
   videoWidth: number,
   videoHeight: number,
-  maxHeight = MAX_CONVERSION_HEIGHT,
 ): { width: number; height: number } {
-  const cappedHeight = Math.min(videoHeight, maxHeight);
-  const height = Math.max(2, Math.floor(cappedHeight / 2) * 2);
-  const scaledWidth =
-    videoHeight > 0 ? videoWidth * (height / videoHeight) : videoWidth;
-  const width = Math.max(2, Math.round(scaledWidth / 2) * 2);
+  const width = Math.max(2, Math.floor(videoWidth / 2) * 2);
+  const height = Math.max(2, Math.floor(videoHeight / 2) * 2);
   return { width, height };
 }
 

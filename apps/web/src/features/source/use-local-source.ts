@@ -4,6 +4,7 @@ import {
   captureVideo,
   loadMetadata,
   probePlayback,
+  retireCapturedStream,
   sourceFailure,
 } from "./browser-source";
 import {
@@ -53,9 +54,15 @@ export function useLocalSource(
   onStreamChange?: (stream: MediaStream | null) => void,
 ) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const capturedVideoRef = useRef<HTMLVideoElement | null>(null);
   const release = useRef<() => void>(undefined);
   const pendingSource = useRef<PendingSource | null>(null);
   const activeStreamRef = useRef<MediaStream | null>(null);
+  const pendingLoadRef = useRef<{ file: File; selectionId: number } | null>(
+    null,
+  );
+  const selectionIdRef = useRef(0);
+  const [videoKey, setVideoKey] = useState(0);
   const [check, setCheck] = useState<SourceCheck>({ status: "idle" });
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [title, setTitle] = useState("");
@@ -66,7 +73,14 @@ export function useLocalSource(
     },
   );
 
-  useEffect(() => () => release.current?.(), []);
+  useEffect(
+    () => () => {
+      pendingLoadRef.current = null;
+      selectionIdRef.current += 1;
+      release.current?.();
+    },
+    [],
+  );
 
   useEffect(() => {
     activeStreamRef.current = stream;
@@ -80,17 +94,12 @@ export function useLocalSource(
     };
   }, [stream]);
 
-  async function selectFile(file: File) {
-    const video = videoRef.current;
-    if (!video) return;
-
-    release.current?.();
-    pendingSource.current = null;
-    activeStreamRef.current = null;
-    setStream(null);
-    setInfo(null);
-    setTitle(file.name.replace(/\.[^.]+$/, "") || file.name);
-    setCheck({ status: "checking" });
+  async function loadFileOnVideo(
+    file: File,
+    video: HTMLVideoElement,
+    selectionId: number,
+  ) {
+    if (selectionId !== selectionIdRef.current) return;
 
     const controller = new AbortController();
     const { signal } = controller;
@@ -98,12 +107,15 @@ export function useLocalSource(
     let captured: MediaStream | undefined;
     let disposeConverter: (() => void) | undefined;
 
+    let released = false;
     release.current = () => {
+      if (released) return;
+      released = true;
       controller.abort();
       activeStreamRef.current = null;
       disposeConverter?.();
       disposeConverter = undefined;
-      captured?.getTracks().forEach((track) => track.stop());
+      if (captured) retireCapturedStream(captured);
       video.pause();
       video.muted = false;
       video.loop = false;
@@ -124,6 +136,7 @@ export function useLocalSource(
       });
       const capturedStream = captureVideo(video);
       captured = capturedStream;
+      capturedVideoRef.current = video;
       const prepared = await probePlayback(video, signal, capturedStream, {
         prepareCapture: async (track, trialSignal, progress) => {
           const probed = await probeVideoFrameFormat(track, trialSignal);
@@ -155,6 +168,7 @@ export function useLocalSource(
             };
           }
 
+          trialSignal.throwIfAborted();
           const { width, height } = computeConversionSize(
             video.videoWidth,
             video.videoHeight,
@@ -260,6 +274,46 @@ export function useLocalSource(
     }
   }
 
+  const startPendingLoad = useEffectEvent(() => {
+    const pending = pendingLoadRef.current;
+    const video = videoRef.current;
+    if (!pending || !video || pending.selectionId !== selectionIdRef.current) {
+      return;
+    }
+    pendingLoadRef.current = null;
+    void loadFileOnVideo(pending.file, video, pending.selectionId);
+  });
+
+  useEffect(() => {
+    startPendingLoad();
+  }, [videoKey]);
+
+  async function selectFile(file: File) {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const selectionId = ++selectionIdRef.current;
+    pendingLoadRef.current = null;
+    release.current?.();
+    pendingSource.current = null;
+    activeStreamRef.current = null;
+    setStream(null);
+    setInfo(null);
+    setTitle(file.name.replace(/\.[^.]+$/, "") || file.name);
+    setCheck({ status: "checking" });
+
+    // Chrome 會持續把同一個 <video> 的新片源軌道塞進先前 captureStream() 產生的舊 stream，
+    // 而且停掉舊 stream 的音軌會把同一 <video> 共用的音訊擷取源也一起靜音。
+    // 換檔時為新片源掛載全新的 <video>（同時對舊 stream 執行 retireCapturedStream）。
+    if (capturedVideoRef.current === video) {
+      pendingLoadRef.current = { file, selectionId };
+      setVideoKey((current) => current + 1);
+      return;
+    }
+
+    await loadFileOnVideo(file, video, selectionId);
+  }
+
   function continueWithoutAudio() {
     const pending = pendingSource.current;
     if (!pending) return;
@@ -276,6 +330,7 @@ export function useLocalSource(
 
   return {
     videoRef,
+    videoKey,
     title,
     stream,
     info,

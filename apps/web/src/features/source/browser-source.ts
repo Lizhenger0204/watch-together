@@ -159,6 +159,25 @@ export function captureVideo(video: HTMLVideoElement) {
   }
 }
 
+const retiredCaptureStreams = new WeakSet<MediaStream>();
+
+function stopRetiredTrack(event: MediaStreamTrackEvent) {
+  event.track.stop();
+}
+
+/**
+ * 停用已退役的擷取 MediaStream：立即停止目前所有 track，並持續監聽 addtrack 立即停止
+ * 同一個 <video> 在後續換片或重播時由 Chrome 補進舊 stream 的新 track（BUG-004）。
+ */
+export function retireCapturedStream(stream: MediaStream) {
+  if (retiredCaptureStreams.has(stream)) return;
+  retiredCaptureStreams.add(stream);
+  stream.addEventListener("addtrack", stopRetiredTrack);
+  for (const track of stream.getTracks()) {
+    track.stop();
+  }
+}
+
 export async function probePlayback(
   video: HTMLVideoElement,
   signal: AbortSignal,

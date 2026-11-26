@@ -45,7 +45,8 @@ export function HostSourcePlayer({
   /** 控制列的劇院模式按鈕（房間頁提供）。 */
   theater?: PlayerControlsProps["theater"];
 }) {
-  const { videoRef, check, selectFile, continueWithoutAudio, title } = source;
+  const { videoRef, videoKey, check, selectFile, continueWithoutAudio, title } =
+    source;
   const playerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [playing, setPlaying] = useState(false);
@@ -61,7 +62,7 @@ export function HostSourcePlayer({
   const { audible } = volume;
   useEffect(() => {
     if (videoRef.current) videoRef.current.volume = audible;
-  }, [videoRef, audible]);
+  }, [videoRef, audible, videoKey]);
 
   const statusText =
     check.status === "checking"
@@ -101,6 +102,7 @@ export function HostSourcePlayer({
         className="group relative bg-black text-white fullscreen:grid fullscreen:place-items-center"
       >
         <video
+          key={videoKey}
           ref={videoRef}
           className="aspect-video max-h-[calc(100dvh-3rem)] w-full bg-black object-contain group-fullscreen:h-full group-fullscreen:max-h-none group-fullscreen:aspect-auto"
           playsInline
@@ -191,6 +193,9 @@ export function HostSourcePlayer({
                   event.currentTarget.value = "";
                   if (!file) return;
                   setControlError("");
+                  setDuration(0);
+                  setTime(0);
+                  setPlaying(false);
                   void selectFile(file);
                 }}
               />

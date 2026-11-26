@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadMetadata, probePlayback } from "./browser-source";
+import {
+  loadMetadata,
+  probePlayback,
+  retireCapturedStream,
+} from "./browser-source";
 
 function media() {
   return Object.assign(new EventTarget(), {
@@ -234,5 +238,49 @@ describe("browser source checks", () => {
     });
     await vi.advanceTimersByTimeAsync(10_000);
     await failure;
+  });
+
+  it("stops existing and subsequently added tracks on a retired capture stream", () => {
+    const makeTrack = () => {
+      const track = {
+        readyState: "live" as MediaStreamTrackState,
+        stopCalls: 0,
+        stop() {
+          this.stopCalls += 1;
+          this.readyState = "ended";
+        },
+      };
+      return track;
+    };
+
+    const existingVideo = makeTrack();
+    const existingAudio = makeTrack();
+    const tracks = [existingVideo, existingAudio];
+    const stream = Object.assign(new EventTarget(), {
+      getTracks: () => [...tracks],
+    }) as unknown as MediaStream;
+
+    retireCapturedStream(stream);
+    retireCapturedStream(stream);
+
+    expect(existingVideo.readyState).toBe("ended");
+    expect(existingAudio.readyState).toBe("ended");
+    expect(existingVideo.stopCalls).toBe(1);
+    expect(existingAudio.stopCalls).toBe(1);
+
+    const lateVideo = makeTrack();
+    const lateAudio = makeTrack();
+    tracks.push(lateVideo, lateAudio);
+    stream.dispatchEvent(
+      Object.assign(new Event("addtrack"), { track: lateVideo }),
+    );
+    stream.dispatchEvent(
+      Object.assign(new Event("addtrack"), { track: lateAudio }),
+    );
+
+    expect(lateVideo.readyState).toBe("ended");
+    expect(lateAudio.readyState).toBe("ended");
+    expect(lateVideo.stopCalls).toBe(1);
+    expect(lateAudio.stopCalls).toBe(1);
   });
 });
