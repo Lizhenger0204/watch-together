@@ -134,8 +134,12 @@ export const createRelayViewerTransport: CreateViewerTransport = (options) => {
       options.getCodecCapabilities ?? browserReceiverCodecCapabilities;
     for (const kind of ["video", "audio"] as const) {
       const transceiver = pc.addTransceiver(kind, { direction: "recvonly" });
-      const codecs = capabilities(kind);
-      if (codecs.length > 0) applyCodecPreferences(transceiver, codecs);
+      try {
+        const codecs = capabilities(kind);
+        if (codecs.length > 0) applyCodecPreferences(transceiver, codecs);
+      } catch {
+        // 收看端可能為舊瀏覽器或拒絕偏好清單，降級沿用瀏覽器預設 codec 順序（§4）。
+      }
     }
 
     // 已取消回 null；沒有有效 offer 會丟 RELAY_FAILED。

@@ -133,7 +133,7 @@ Windows、多位收看者、實際送滿 8 Mbps、分頁在背景時的表現列
   - 實測：`maintain-framerate` 下選 4K，Chrome 的頻寬估計約 30 秒才爬到 30 Mbps，這段期間只送 1440P；頻寬不足時會一直停在 1440P，和面板顯示不一致（ADR 0004 實測 2）。
 - `videoTrack.contentHint = 'motion'`。
 - Codec 偏好：**H.264 優先**（收看端 Android 硬體解碼最普遍），其次 VP8。用 `RTCRtpTransceiver.setCodecPreferences` 設定。高畫質也不改用 VP9／AV1（Chrome 為軟體編碼，CPU 是硬體 H.264 的 3～5 倍）或 H.265（收看端不一定能解）。
-  - **H.264 profile 排序（T-139）**：在 H.264 內進一步固定排序為 `packetization-mode=1` 優先——**Baseline `4200xx`（`packetization-mode=1`）→ Constrained Baseline `42e0xx`（`packetization-mode=1`）→ 其餘 `packetization-mode=1` 或未指定 fmtp 的 H.264 → 其餘 H.264（例如 `packetization-mode=0`）→ VP8 → 其餘 video codec（保留相對順序）**。原因是 macOS Chrome 的硬體編碼器 `VideoToolbox` 只宣告 `42001f`／`4d001f`／`6400xx`，`42e01f` 會退回軟體 `OpenH264`；搭配 §3 的 P2P SDP 相容映射，確保 Chrome 與 Safari 收看者都走同一條硬體編碼路徑、位元率與畫質一致，且不影響 4K（T-137）。
+  - **H.264 profile 排序（T-139）**：在 H.264 內進一步固定排序為 `packetization-mode=1` 優先——**Baseline `4200xx`（`packetization-mode=1`）→ Constrained Baseline `42e0xx`（`packetization-mode=1`）→ 其餘 `packetization-mode=1` 或未指定 fmtp 的 H.264 → 其餘 H.264（例如 `packetization-mode=0`）→ VP8 → 其餘 video codec（保留相對順序）**。原因是 macOS Chrome 的硬體編碼器 `VideoToolbox` 只宣告 `42001f`／`4d001f`／`6400xx`，`42e01f` 會退回軟體 `OpenH264`；搭配 §3 的 P2P SDP 相容映射，確保 Chrome 與 Safari 收看者都走同一條硬體編碼路徑、1080P 下位元率與畫質一致，且單人 4K（含 Safari）能維持硬體編碼 4K30（多位收看者 4K 時表現與雙 Chrome 同受硬體編碼上限約束，見 ADR 0004 §3）。
 
 ### 高畫質提示（實際送出高度 > 1080，房主端）
 
@@ -172,7 +172,7 @@ Windows、多位收看者、實際送滿 8 Mbps、分頁在背景時的表現列
 2. 開播時，伺服器對每位在線收看者送 `peer:request { memberId }` 給房主。直播中有收看者驗證成功時，伺服器也會為這位成員送出請求。
 3. 房主收到請求後，先登記該成員這次的 `negotiationId` 再建連。**首次 offer 前，video、audio 各保留一個 sendonly transceiver**。每個 kind 用 `addTransceiver(track ?? kind, { direction: 'sendonly' })` 建立。缺軌時 `sender.track` 為 null，之後以同一個 sender 的 `replaceTrack` 補上。例如無聲片換有聲片時，沿用原本協商好的 audio transceiver。
 4. 房主在兩個 transceiver 設定 codec 偏好，套用最新 tracks、畫質與縮放（§2），再 `createOffer()` → `setLocalDescription(offer)` → 送 `signal { to: memberId, data: { type: 'offer', negotiationId, sdp } }`。
-   - **跨瀏覽器 H.264 profile 相容映射（T-139）**：Safari／WebKit 接收端只宣告 `640c1f` 與 `42e01f`，會拒絕 macOS Chrome 硬體 `VideoToolbox` 排第一位的 `42001f` 而退回 `42e01f`（軟體 `OpenH264`），造成同網路下 Chrome 與 Safari 編碼器與位元率明顯分歧（預設 1080P 約差 2 倍、4K 下 Safari 因軟體編碼 CPU 受限掉幀）。因此房主 `setLocalDescription(offer)` 維持原始 offer 不變；送出信令前，若 video 區段首個 H.264 payload type 為 `packetization-mode=1` 的 Baseline（`profile-level-id=4200LL`），僅把該 payload type 的 `a=fmtp` 映射為 Constrained Baseline（`42e0LL`）送出，並隨當次協商代次記下該 payload type。收到同代次的 answer 後，於 `setRemoteDescription(answer)` 前，僅將該 payload type 的 `42e0YY` 還原為 `4200YY`（保留對端回傳的 level `YY`），其餘 payload type（含原生 `42e01f` 備援或 VP8）不動。ICE restart 的新協商代次同理套用；收看端維持標準協商、不改 SDP。WebRTC Baseline 編碼不輸出 B-frame／FMO／ASO，實測 WebKit 27.2 對 Chrome `VideoToolbox` 串流在 1080P 與 4K 皆零掉格解碼。
+   - **跨瀏覽器 H.264 profile 相容映射（T-139）**：Safari／WebKit 接收端只宣告 `640c1f` 與 `42e01f`，會拒絕 macOS Chrome 硬體 `VideoToolbox` 排第一位的 `42001f` 而退回 `42e01f`（軟體 `OpenH264`），造成同網路下 Chrome 與 Safari 編碼器與位元率明顯分歧（預設 1080P 約差 2 倍、4K 下 Safari 則退回軟體編碼受 CPU 限制）。因此房主 `setLocalDescription(offer)` 維持原始 offer 不變；送出信令前，若 video 區段首個 H.264 payload type 為 `packetization-mode=1` 的 Baseline（`profile-level-id=4200LL`），僅把該 payload type 的 `a=fmtp` 映射為 Constrained Baseline（`42e0LL`）送出，並隨當次協商代次記下該 payload type。收到同代次的 answer 後，於 `setRemoteDescription(answer)` 前，僅將該 payload type 的 `42e0YY` 還原為 `4200YY`（保留對端回傳的 level `YY`），其餘 payload type（含原生 `42e01f` 備援或 VP8）不動。ICE restart 的新協商代次同理套用；收看端維持標準協商、不改 SDP。WebRTC Baseline 編碼不輸出 B-frame／FMO／ASO，實測 WebKit 27.2 對 Chrome `VideoToolbox` 串流在 1080P 與單人 4K（2160P@30）皆零掉格解碼；多位收看者同時 4K（含 Safari＋Chrome）時，兩路皆走硬體編碼，表現與雙 Chrome 4K 相同（M1 約 19 fps、`cpu` 受限，見 ADR 0004 §3）。
 5. 收看者記下房主及 offer 的 `negotiationId`，依序 `setRemoteDescription(offer)` → `createAnswer()` → `setLocalDescription(answer)`，再回 `signal { to: hostId, data: { type: 'answer', negotiationId, sdp } }`。房主依下列規則比對後才套用 answer。
 6. 雙方用 `signal { to, data: { type: 'ice', negotiationId, candidate } }` 交換 trickle ICE，包括 `candidate: null`。連通後收看者的房間層依 `onState` 回報 `member:status { state: 'playing' }`（§8）。
 
@@ -226,7 +226,7 @@ Windows、多位收看者、實際送滿 8 Mbps、分頁在背景時的表現列
 ## 4. 轉發模式（`features/transport/relay/` + `apps/signal/src/relay/`）
 
 - 房主：`POST /api/rooms/:roomId/whip`，body 為 SDP offer（`Content-Type: application/sdp`），回應 `201` + SDP answer + `Location` header（資源 URL）。停止時 `DELETE` 該 `Location`。
-- 收看者：`POST /api/rooms/:roomId/whep`，流程相同。建立 video／audio 的 `recvonly` transceiver 後，以接收端能力（未注入 `getCodecCapabilities` 時取 `RTCRtpReceiver.getCapabilities(kind)`）套用 `applyCodecPreferences`，讓 WHEP offer 同樣優先 H.264（其次 VP8）、音訊只留 Opus（T-139）。
+- 收看者：`POST /api/rooms/:roomId/whep`，流程相同。建立 video／audio 的 `recvonly` transceiver 後，以接收端能力（未注入 `getCodecCapabilities` 時取 `RTCRtpReceiver.getCapabilities(kind)`）套用 `applyCodecPreferences`，讓 WHEP offer 同樣優先 H.264（其次 VP8）、音訊只留 Opus；若收看端瀏覽器不支援 `setCodecPreferences` 或拒絕該清單，則靜默降級沿用瀏覽器預設 codec 順序，不中斷建連（T-139）。
 - **WHIP 與 WHEP 每次建連都只送一份 HTTP offer**。T-109 先 `setLocalDescription(offer)`，再 `await pc.waitForIceGatheringComplete(2000)`。
   若 `iceGatheringState` 已是 `complete` 就立即 resolve，否則等到 `complete` 或 2 秒上限。兩種情況都重新讀取唯讀的 `pc.localDescription`，將整份 `pc.localDescription.sdp` 作為 POST body，包含截至當時收集到的 candidates。
   若這次啟動已取消，或沒有有效的 local offer，就不送 POST。協定只提供 POST、DELETE，不支援 trickle PATCH。
