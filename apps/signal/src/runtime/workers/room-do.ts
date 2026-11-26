@@ -405,6 +405,10 @@ export class RoomDO extends DurableObject<Env> {
       closeSocket(ws, CLOSE.BAD_REQUEST, "binary_not_supported");
       return;
     }
+    const now = Date.now();
+    if (attachment.memberId !== null) {
+      touchSocket(ws, attachment, now);
+    }
     const parsed = parseClientMessage(data);
     if (!parsed.ok) {
       if (attachment.memberId === null) {
@@ -426,8 +430,8 @@ export class RoomDO extends DurableObject<Env> {
         return;
       }
       const tokenHash = await hashToken(message.token);
-      const now = Date.now();
-      if (now > attachment.authDeadline) {
+      const authNow = Date.now();
+      if (authNow > attachment.authDeadline) {
         closeSocket(ws, CLOSE.AUTH_TIMEOUT, "auth_timeout");
         return;
       }
@@ -440,21 +444,19 @@ export class RoomDO extends DurableObject<Env> {
         },
         PROTOCOL_VERSION,
         this.online(),
-        now,
+        authNow,
       );
       if (outcome.accepted) {
         await this.saveTransition(outcome.state, {
           accepted: ws,
-          acceptedHeartbeatAt: now + this.config.heartbeatTimeoutMs,
+          acceptedHeartbeatAt: authNow + this.config.heartbeatTimeoutMs,
         });
-        acceptMember(this.ctx, ws, outcome.memberId, now);
+        acceptMember(this.ctx, ws, outcome.memberId, authNow);
       }
       this.apply(outcome.effects, ws);
       return;
     }
 
-    const now = Date.now();
-    touchSocket(ws, attachment, now);
     if (message.type === "auth") {
       this.sendTo(ws, {
         type: "error",
@@ -534,16 +536,18 @@ export class RoomDO extends DurableObject<Env> {
 
   private async evictStaleHeartbeats() {
     if (!this.room) return;
+    const now = Date.now();
     const { expired } = heartbeatTimeouts(this.ctx, {
-      now: Date.now(),
+      now,
       timeoutMs: this.config.heartbeatTimeoutMs,
     });
-    for (const { ws, lastActivityAt } of expired) {
+    for (const { ws } of expired) {
+      // 自判定逾時當下起算離線，讓背景分頁重連與房主寬限維持完整 100 秒。
       await this.handleSocketGone(
         ws,
         CLOSE.HEARTBEAT_TIMEOUT,
         "heartbeat_timeout",
-        lastActivityAt,
+        now,
       );
     }
   }
@@ -744,7 +748,10 @@ export class RoomDO extends DurableObject<Env> {
   }
 
   private online(exclude?: WebSocket) {
-    return onlineMembers(this.ctx, exclude);
+    const valid = this.room
+      ? new Set(this.room.members.map((member) => member.memberId))
+      : undefined;
+    return onlineMembers(this.ctx, exclude, valid);
   }
 
   private sendTo(ws: WebSocket, message: unknown) {

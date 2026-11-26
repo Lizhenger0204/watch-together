@@ -16,12 +16,24 @@ export function socketsOf(ctx: DurableObjectState, memberId: string) {
     .filter((ws) => attachmentOf(ws)?.memberId === memberId);
 }
 
-export function onlineMembers(ctx: DurableObjectState, exclude?: WebSocket) {
+const WS_OPEN = 1;
+
+function isOpenSocket(ws: WebSocket) {
+  return ws.readyState === undefined || ws.readyState === WS_OPEN;
+}
+
+export function onlineMembers(
+  ctx: DurableObjectState,
+  exclude?: WebSocket,
+  validMemberIds?: ReadonlySet<string>,
+) {
   const ids = new Set<string>();
   for (const ws of ctx.getWebSockets()) {
-    if (ws === exclude) continue;
+    if (ws === exclude || !isOpenSocket(ws)) continue;
     const memberId = attachmentOf(ws)?.memberId;
-    if (memberId) ids.add(memberId);
+    if (memberId && (!validMemberIds || validMemberIds.has(memberId))) {
+      ids.add(memberId);
+    }
   }
   return ids;
 }
@@ -77,7 +89,7 @@ export function heartbeatTimeouts(
   let earliest = acceptedHeartbeatAt;
   const expired: Array<{ ws: WebSocket; lastActivityAt: number }> = [];
   for (const ws of ctx.getWebSockets()) {
-    if (ws === exclude) continue;
+    if (ws === exclude || !isOpenSocket(ws)) continue;
     const attachment = attachmentOf(ws);
     if (!attachment || attachment.memberId === null) continue;
     let lastActivityAt = attachment.lastActivityAt;
@@ -123,11 +135,14 @@ export function authTimeouts(
   return { alarm: earliest + 100, expired };
 }
 
-/** 關閉連線。未驗證的連線一併清掉 auth 期限，之後不再為它排 alarm。 */
+/** 關閉連線。先清掉成員與 auth 期限附件，避免 CLOSING 連線被當成在線或重複排 alarm。 */
 export function closeSocket(ws: WebSocket, code: number, reason: string) {
   try {
     const attachment = attachmentOf(ws);
-    if (attachment?.memberId === null && attachment.authDeadline > 0) {
+    if (
+      attachment &&
+      (attachment.memberId !== null || attachment.authDeadline > 0)
+    ) {
       ws.serializeAttachment({
         memberId: null,
         authDeadline: 0,

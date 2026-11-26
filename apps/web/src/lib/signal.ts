@@ -110,6 +110,7 @@ export class SignalClient {
   private stopped = false;
   private reconnectTimer: unknown = null;
   private pingTimer: unknown = null;
+  private stopVisibility: (() => void) | null = null;
   private nextReqId = 1;
   /** 每次收到 room:snapshot 或主動 start()／resync() 加一；確認身份的結果回來時用來判斷是否已經過時。 */
   private session = 0;
@@ -162,11 +163,14 @@ export class SignalClient {
     socket?.close(1000, "restart");
     this.attempt = 0;
     this.session += 1;
+    this.watchVisibility();
     this.open();
   }
 
   stop() {
     this.stopped = true;
+    this.stopVisibility?.();
+    this.stopVisibility = null;
     this.timers.clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
     const socket = this.socket;
@@ -327,6 +331,19 @@ export class SignalClient {
       () => this.send({ type: "ping" }),
       WS_PING_INTERVAL_MS,
     );
+  }
+
+  /** 背景分頁切回前景時立即補送一次 ping，縮短計時器節流後的心跳間隔。 */
+  private watchVisibility() {
+    if (this.stopVisibility || typeof document === "undefined") return;
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        this.send({ type: "ping" });
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    this.stopVisibility = () =>
+      document.removeEventListener("visibilitychange", onVisible);
   }
 
   private teardown() {

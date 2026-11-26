@@ -182,9 +182,22 @@ describe("closeAt", () => {
 });
 
 describe("房主離線計時與移除", () => {
-  test("hostOf 無房主時回 undefined", () => {
+  test("hostOf 無房主時回 undefined，且房主移除後拒絕新成員加入", () => {
     expect(hostOf(room())?.memberId).toBe("host");
-    expect(hostOf(removeMember(room(), "host"))).toBeUndefined();
+    const hostless = removeMember(room(), "host");
+    expect(hostOf(hostless)).toBeUndefined();
+    expect(
+      addMember(
+        hostless,
+        {
+          inviteCode: hostless.inviteCode,
+          member: { memberId: "b", nickname: "新人", tokenHash: "h-b" },
+        },
+        new Set(),
+        T0 + 1_000,
+        config,
+      ),
+    ).toEqual({ ok: false, code: "ROOM_NOT_FOUND" });
   });
 
   test("removeMember 移除房主時清除 hostDisconnectedAt 與該成員的 joinKeys", () => {

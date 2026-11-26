@@ -55,7 +55,7 @@ WHIP 只需房間已切到 relay 即可發布。P2P 模式下，WHIP 的 409 訊
 - 每則訊息為 JSON：`{ type: string, ...payload }`，用 `packages/shared` 的 discriminated union schema 解析。已驗證的連線解析失敗：回 `error` 並忽略該訊息；**未驗證的連線解析失敗：直接以 `4400` 關閉**。
 - 第一則訊息必須是 `auth`，否則以 `4400` 斷線（見 room-and-invite.md）。5 秒期限以伺服器算完 token 雜湊的時間判斷。
 - 需要回應的請求帶 `reqId`，伺服器回 `ack { reqId, ok: true } | { reqId, ok: false, code }`。
-- 心跳：客戶端每 20 秒送 `ping`，伺服器回 `pong`。已驗證連線超過 `WS_HEARTBEAT_TIMEOUT_MS`（60 秒）未收到任何客戶端訊息時，伺服器以關閉碼 `4410`（reason `heartbeat_timeout`）關閉該連線並觸發離線處理（離線起算時間為該連線最後活動時間）。
+- 心跳：客戶端每 20 秒送 `ping`，伺服器回 `pong`（分頁切回前景時前端也會立即補送一次 `ping`）。已驗證連線超過 `WS_HEARTBEAT_TIMEOUT_MS`（130 秒，大於瀏覽器背景分頁 60 秒計時器節流週期的兩倍）未收到任何客戶端訊息時，伺服器以關閉碼 `4410`（reason `heartbeat_timeout`）關閉該連線並觸發離線處理（離線起算時間為判定逾時當下，讓房主重連保有完整的 100 秒寬限）。
 - 同一成員只保留一條連線：新連線驗證成功後，舊連線以 `4000` 關閉。
 
 ### 房主重新連線（重新整理、另一分頁取代 `4000`、斷線重連）
@@ -168,4 +168,4 @@ type ChatMessage = {
 
 | `PROTOCOL_VERSION` | 內容 |
 | --- | --- |
-| 1 | 第一版（尚未正式發布）。發布前的修改不升版：ICE 路徑由 `/api/ice` 改為 `/api/rooms/:roomId/ice`（才能驗證是哪個房間的成員）、加入關閉碼表、房主重新連線的流程、連到不存在或已關閉的房間改為接受後以 `4001` 關閉（原本回 HTTP 404）、P2P 信令必填 `data.negotiationId`、條件式加入支援 `existingRoomId` 沿用及 `excludeRoomIds` 防止重複配位、加入可帶 `joinKey` 重試時沿用已配置的席位、換碼 REST 與房主 `RoomInfo` 帶單調遞增的 `inviteCodeVersion`、`Quality` 由三個預設名稱改為解析度／位元率／FPS 三個檔位的物件（T-126；伺服器讀到舊房間存的預設名稱時回到預設畫質）、新增聊天訊息 `chat:send` 與 `chat:message`（T-127；不保留歷史紀錄，每成員每 10 秒限 5 則，長度上限 200 字）、伺服器端心跳逾時 60 秒以 `4410` 關閉並觸發離線處理，房主離線滿 100 秒自動移除席位（有收看者則保留房間並提示房主已離開，無成員或無人滿 100 秒釋放房間）。 |
+| 1 | 第一版（尚未正式發布）。發布前的修改不升版：ICE 路徑由 `/api/ice` 改為 `/api/rooms/:roomId/ice`（才能驗證是哪個房間的成員）、加入關閉碼表、房主重新連線的流程、連到不存在或已關閉的房間改為接受後以 `4001` 關閉（原本回 HTTP 404）、P2P 信令必填 `data.negotiationId`、條件式加入支援 `existingRoomId` 沿用及 `excludeRoomIds` 防止重複配位、加入可帶 `joinKey` 重試時沿用已配置的席位、換碼 REST 與房主 `RoomInfo` 帶單調遞增的 `inviteCodeVersion`、`Quality` 由三個預設名稱改為解析度／位元率／FPS 三個檔位的物件（T-126；伺服器讀到舊房間存的預設名稱時回到預設畫質）、新增聊天訊息 `chat:send` 與 `chat:message`（T-127；不保留歷史紀錄，每成員每 10 秒限 5 則，長度上限 200 字）、伺服器端心跳逾時 130 秒以 `4410` 關閉並自判定逾時當下起算離線，房主離線滿 100 秒自動移除席位（有收看者則保留房間並提示房主已離開、不再接受新加入，無成員或無人滿 100 秒釋放房間）。 |

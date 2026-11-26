@@ -122,14 +122,6 @@ export function hostRemoveAt(
   return since === null ? null : since + config.hostOfflineTtlMs;
 }
 
-/** 房間所有成員之中最近一次活動的時間。 */
-export function roomLastActivityAt(state: RoomState): number {
-  return state.members.reduce(
-    (latest, member) => Math.max(latest, member.lastSeenAt),
-    state.createdAt,
-  );
-}
-
 /** 移除離線太久的收看者，騰出名額。房主永遠保留。 */
 export function pruneStaleMembers(
   state: RoomState,
@@ -163,8 +155,8 @@ export function addMember(
   now: number,
   config: Pick<RoomConfig, "maxMembers" | "staleMemberMs">,
 ): JoinOutcome {
-  // 邀請碼不符（已重新產生）與鎖房一律回 ROOM_NOT_FOUND，不洩漏房間存在。
-  if (input.inviteCode !== state.inviteCode || state.locked) {
+  // 邀請碼不符（已重新產生）、鎖房或房主已離開一律回 ROOM_NOT_FOUND，不洩漏房間存在。
+  if (input.inviteCode !== state.inviteCode || state.locked || !hostOf(state)) {
     return { ok: false, code: "ROOM_NOT_FOUND" };
   }
   const pruned = pruneStaleMembers(state, online, now, config);

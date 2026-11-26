@@ -567,4 +567,32 @@ describe("SignalClient", () => {
     await flushMicrotasks();
     expect(states.at(-1)).toBe("closed:bad_request");
   });
+
+  test("背景分頁切回前景時立即補送一次 ping，stop 後解除監聽", () => {
+    const doc = new EventTarget() as EventTarget & {
+      visibilityState: DocumentVisibilityState;
+    };
+    doc.visibilityState = "hidden";
+    vi.stubGlobal("document", doc);
+    try {
+      const { client, current } = setup();
+      current().open();
+      current().receive(snapshot);
+      current().sent.length = 0;
+
+      doc.dispatchEvent(new Event("visibilitychange"));
+      expect(current().sent).toEqual([]);
+
+      doc.visibilityState = "visible";
+      doc.dispatchEvent(new Event("visibilitychange"));
+      expect(current().sent).toEqual([{ type: "ping" }]);
+
+      client.stop();
+      current().sent.length = 0;
+      doc.dispatchEvent(new Event("visibilitychange"));
+      expect(current().sent).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

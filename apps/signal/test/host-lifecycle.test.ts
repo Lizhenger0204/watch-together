@@ -1,6 +1,7 @@
 import { WS_HEARTBEAT_TIMEOUT_MS } from "@project/shared";
-import { env, runInDurableObject } from "cloudflare:test";
+import { SELF, env, runInDurableObject } from "cloudflare:test";
 import { afterEach, expect, test, vi } from "vitest";
+import type { RoomConfig } from "../src/config";
 import type { RoomState } from "../src/room/room";
 import type { Env } from "../src/runtime/workers/env";
 import type { RoomDO } from "../src/runtime/workers/room-do";
@@ -143,6 +144,22 @@ test("房主斷線且房內仍有在線收看者：100 秒後僅移除房主並�
     memberId: member.memberId,
     text: "房主走了我們繼續聊",
   });
+  // 對已移除房主送 signal 回 FORBIDDEN；新成員不能再用原邀請碼加入
+  viewer.send({
+    type: "signal",
+    to: room.memberId,
+    data: { type: "ice", candidate: null, negotiationId: "n1" },
+  });
+  expect(await viewer.next("error")).toMatchObject({ code: "FORBIDDEN" });
+  const joinAfterHostGone = await SELF.fetch(
+    "https://signal.test/api/rooms/join",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ inviteCode: room.inviteCode, nickname: "新人" }),
+    },
+  );
+  expect(joinAfterHostGone.status).toBe(404);
 
   // 最後一位收看者離線後，再滿 100 秒才釋放房間、邀請碼與完整 storage
   const viewerGoneAt = goneAt + HOST_OFFLINE_TTL_MS + 1_000;
@@ -270,7 +287,7 @@ test("跨分頁以 4000 取代後，舊連線晚到的 close 不會啟動房主�
   replacement.close();
 });
 
-test("房主 WebSocket 沒有 close frame：60 秒心跳逾時以 4410 斷線並顯示離線，100 秒後移除房主", async () => {
+test("房主背景分頁 60 秒節流 ping 不會誤踢；真逾時 130 秒後自當下起算 100 秒寬限", async () => {
   const t0 = Date.now() + 1_000;
   const room = await at(t0, () => createRoom());
   const viewer = await at(t0, () => joinRoom(room.inviteCode));
@@ -285,21 +302,21 @@ test("房主 WebSocket 沒有 close frame：60 秒心跳逾時以 4410 斷線並
   await viewerSocket.next("room:members");
   const stub = env.ROOM.getByName(room.roomId);
 
-  // 第 30 秒房主送 ping、第 40 秒收看者送 ping：第 60 秒兩者都不會被踢
-  await pingMember(stub, room.memberId, t0 + 30_000);
-  expect(await host.next("pong")).toEqual({ type: "pong" });
-  await pingMember(stub, viewer.memberId, t0 + 40_000);
-  expect(await viewerSocket.next("pong")).toEqual({ type: "pong" });
+  // 模擬背景分頁每 60 秒才喚醒送一次 ping：不應觸發 4410 也不會移除房主
+  for (const offset of [60_000, 120_000]) {
+    await pingMember(stub, room.memberId, t0 + offset);
+    expect(await host.next("pong")).toEqual({ type: "pong" });
+    await pingMember(stub, viewer.memberId, t0 + offset);
+    expect(await viewerSocket.next("pong")).toEqual({ type: "pong" });
+    await runAlarmAt(stub, t0 + offset + 1_000);
+    expect(await stub.authenticate(room.hostToken)).toMatchObject({ ok: true });
+  }
 
-  await runAlarmAt(stub, t0 + WS_HEARTBEAT_TIMEOUT_MS);
-  expect(await stub.authenticate(room.hostToken)).toMatchObject({ ok: true });
-
-  // 維持收看者活動
-  await pingMember(stub, viewer.memberId, t0 + 80_000);
+  // 最後活動 t0+120s 後完全失聯，滿 130 秒（t0+250s）心跳逾時以 4410 關閉，離線自 timeoutAt 起算
+  const timeoutAt = t0 + 120_000 + WS_HEARTBEAT_TIMEOUT_MS;
+  await pingMember(stub, viewer.memberId, timeoutAt - 10_000);
   await viewerSocket.next("pong");
-
-  // 最後活動 t0+30s 起算滿 60 秒（t0+90s）：心跳逾時以 4410 關閉，房主離線起算 t0+30s
-  await runAlarmAt(stub, t0 + 30_000 + WS_HEARTBEAT_TIMEOUT_MS);
+  await runAlarmAt(stub, timeoutAt);
   expect(await host.closedWith()).toBe(4410);
   expect(await stub.authenticate(room.hostToken)).toMatchObject({ ok: true });
   expect(await viewerSocket.next("room:members")).toMatchObject({
@@ -310,12 +327,25 @@ test("房主 WebSocket 沒有 close frame：60 秒心跳逾時以 4410 斷線並
   const saved = await runInDurableObject(stub, (_instance, state) =>
     state.storage.get<{ hostDisconnectedAt: number | null }>("state"),
   );
-  expect(saved?.hostDisconnectedAt).toBe(t0 + 30_000);
+  expect(saved?.hostDisconnectedAt).toBe(timeoutAt);
 
-  // 維持收看者活動，直到從 t0+30s 起算滿 100 秒（t0+130s）房主被移除
-  await pingMember(stub, viewer.memberId, t0 + 120_000);
+  // 模擬背景分頁收到 4410 後重連延遲 60 秒：仍在完整 100 秒寬限內，房主可恢復連線
+  const reconnected = await at(timeoutAt + 60_000, () => hostSocket(room));
+  await viewerSocket.next("room:members");
+  await runAlarmAt(stub, timeoutAt + HOST_OFFLINE_TTL_MS);
+  expect(await stub.authenticate(room.hostToken)).toMatchObject({ ok: true });
+
+  // 再次失聯逾時後不再重連：自新 timeoutAt 起算滿 100 秒才移除房主
+  const timeout2 = timeoutAt + 60_000 + WS_HEARTBEAT_TIMEOUT_MS;
+  await pingMember(stub, viewer.memberId, timeout2 - 10_000);
   await viewerSocket.next("pong");
-  await runAlarmAt(stub, t0 + 30_000 + HOST_OFFLINE_TTL_MS);
+  await runAlarmAt(stub, timeout2);
+  expect(await reconnected.closedWith()).toBe(4410);
+  await viewerSocket.next("room:members");
+
+  await pingMember(stub, viewer.memberId, timeout2 + 90_000);
+  await viewerSocket.next("pong");
+  await runAlarmAt(stub, timeout2 + HOST_OFFLINE_TTL_MS);
   expect(await stub.authenticate(room.hostToken)).toMatchObject({ ok: false });
   expect(await viewerSocket.next("room:members")).toEqual({
     type: "room:members",
@@ -331,7 +361,7 @@ test("房主 WebSocket 沒有 close frame：60 秒心跳逾時以 4410 斷線並
   viewerSocket.close();
 });
 
-test("轉發模式下房主離線滿 100 秒被移除（房內仍有收看者）：撤下 WHIP 發布與綁定訂閱", async () => {
+test("轉發模式下房主離線滿 100 秒被移除（房內仍有收看者）：滿 100 秒前保留發布，屆期才撤下 WHIP 與綁定訂閱", async () => {
   const t0 = Date.now();
   const room = await at(t0, () => createRoom());
   const viewer = await at(t0, () => joinRoom(room.inviteCode));
@@ -398,13 +428,93 @@ test("轉發模式下房主離線滿 100 秒被移除（房內仍有收看者）
   await disconnectHost(room, goneAt);
   await pingMember(stub, viewer.memberId, goneAt + 50_000);
   await viewerSocket.next("pong");
+  // 未滿 100 秒前 WHIP 與 WHEP 皆不關閉
+  await runAlarmAt(stub, goneAt + HOST_OFFLINE_TTL_MS - 1);
+  expect(closed).toEqual([]);
+
   await runAlarmAt(stub, goneAt + HOST_OFFLINE_TTL_MS);
 
   expect(await stub.authenticate(room.hostToken)).toMatchObject({ ok: false });
-  expect(await stub.getRelayPublication()).toBeNull();
+  const relayState = await runInDurableObject(stub, (_i, state) =>
+    state.storage.get<{
+      publicationId: string | null;
+      resources: Record<string, unknown>;
+    }>("relay"),
+  );
+  expect(relayState?.publicationId ?? null).toBeNull();
+  expect(Object.keys(relayState?.resources ?? {})).toEqual([]);
   await vi.waitFor(() =>
     expect(closed.sort()).toEqual(["session-1", "session-2"]),
   );
   host.close();
   viewerSocket.close();
+});
+
+test("ROOM_HOST_OFFLINE_TTL_MS 小於空房期限時，單人房主移除因 members 歸零立刻關房", async () => {
+  const t0 = Date.now();
+  const room = await at(t0, () => createRoom());
+  const host = await at(t0, () => hostSocket(room));
+  const stub = env.ROOM.getByName(room.roomId);
+  await runInDurableObject(stub, (instance) => {
+    const runtime = instance as unknown as { config: RoomConfig };
+    runtime.config = {
+      ...runtime.config,
+      hostOfflineTtlMs: 50_000,
+      idleTtlMs: 100_000,
+    };
+  });
+  const goneAt = t0 + 1_000;
+  await disconnectHost(room, goneAt);
+  // 50 秒（遠早於 100 秒 idleTtlMs）即移除最後一位成員並立刻關房
+  await runAlarmAt(stub, goneAt + 50_000);
+  expect(await stub.authenticate(room.hostToken)).toMatchObject({ ok: false });
+  expect(
+    await env.INVITE_DIRECTORY.getByName("global").lookup(room.inviteCode),
+  ).toBeNull();
+  host.close();
+});
+
+test("單次 alarm 可同時踢掉多條心跳逾時連線，且舊連線缺 lastActivityAt 會補值後再計時", async () => {
+  const t0 = Date.now() + 1_000;
+  const room = await at(t0, () => createRoom());
+  const host = await at(t0, () => hostSocket(room));
+  const v1 = await at(t0, () => joinRoom(room.inviteCode, "甲"));
+  const v2 = await at(t0, () => joinRoom(room.inviteCode, "乙"));
+  const s1 = await at(t0, async () => {
+    const s = await connect(room.roomId);
+    s.auth(v1.memberToken);
+    await s.next("room:snapshot");
+    return s;
+  });
+  const s2 = await at(t0, async () => {
+    const s = await connect(room.roomId);
+    s.auth(v2.memberToken);
+    await s.next("room:snapshot");
+    return s;
+  });
+  const stub = env.ROOM.getByName(room.roomId);
+  // 模擬升級前已建立的連線（缺少 lastActivityAt）
+  await runInDurableObject(stub, (_i, state) => {
+    for (const ws of state.getWebSockets()) {
+      const att = ws.deserializeAttachment() as { memberId: string | null };
+      if (att.memberId === v2.memberId) {
+        ws.serializeAttachment({ memberId: v2.memberId, authDeadline: 0 });
+      }
+    }
+  });
+  // 第 1 次 alarm 在 t0 + 130s：同時踢掉 host 與 s1，並為 s2 補上 lastActivityAt
+  const firstCheck = t0 + WS_HEARTBEAT_TIMEOUT_MS;
+  await runAlarmAt(stub, firstCheck);
+  expect(await host.closedWith()).toBe(4410);
+  expect(await s1.closedWith()).toBe(4410);
+  // s2 尚未逾時，補值後再過 130 秒才被踢
+  const s2Backfilled = await runInDurableObject(stub, (_i, state) => {
+    const ws = state
+      .getWebSockets()
+      .find((sock) => sock.deserializeAttachment()?.memberId === v2.memberId);
+    return ws?.deserializeAttachment()?.lastActivityAt;
+  });
+  expect(s2Backfilled).toBe(firstCheck);
+  await runAlarmAt(stub, firstCheck + WS_HEARTBEAT_TIMEOUT_MS);
+  expect(await s2.closedWith()).toBe(4410);
 });
