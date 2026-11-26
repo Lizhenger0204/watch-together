@@ -18,7 +18,9 @@ test("plays a local movie and replaces its captured stream after selecting anoth
   const input = page.getByLabel("選擇影片");
   const video = page.locator("video");
   const play = page.getByRole("button", { name: "播放", exact: true });
+  const stageToggle = page.getByTestId("player-stage-toggle");
 
+  await expect(stageToggle).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("source-empty.png") });
   await input.setInputFiles(fixture("h264-aac.mp4"));
   await expect(page.getByRole("status")).toHaveText("檢查通過，可以播放。");
@@ -36,6 +38,14 @@ test("plays a local movie and replaces its captured stream after selecting anoth
     .toBeGreaterThan(0);
   await page.getByRole("button", { name: "暫停", exact: true }).click();
   await expect(video).toHaveJSProperty("paused", true);
+  await stageToggle.click();
+  await expect(video).toHaveJSProperty("paused", false);
+  await expect(
+    page.getByRole("button", { name: "暫停", exact: true }),
+  ).toBeVisible();
+  await stageToggle.click();
+  await expect(video).toHaveJSProperty("paused", true);
+  await expect(play).toBeVisible();
   const seek = page.getByRole("slider", { name: "影片進度" });
   await seek.press("End");
   await expect(video).toHaveJSProperty("currentTime", 6);
@@ -57,6 +67,7 @@ test("plays a local movie and replaces its captured stream after selecting anoth
   await input.setInputFiles(fixture("h264-silent.mp4"));
   await expect(page.getByRole("status")).toContainText("影片沒有音軌");
   await expect(play).toBeDisabled();
+  await expect(stageToggle).toHaveCount(0);
   await expect(page.getByText("擷取音軌 0・擷取影像軌 0")).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({
@@ -187,4 +198,36 @@ test("diagnoses a host with native HEVC decoding disabled separately from playba
   } finally {
     await browser.close();
   }
+});
+
+test("clicking the stage closes an open popover without toggling playback", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByLabel("你的暱稱").first().fill("房主");
+  await page.getByRole("button", { name: "建立房間", exact: true }).click();
+  await page.waitForURL(/\/rooms\//);
+
+  await page.getByLabel("選擇影片").setInputFiles(fixture("h264-aac.mp4"));
+  await expect(page.getByText("檢查通過，可以播放。")).toBeVisible();
+
+  const video = page.locator("video");
+  await video.evaluate((element: HTMLVideoElement) => {
+    element.loop = true;
+  });
+
+  const stageToggle = page.getByTestId("player-stage-toggle");
+  await stageToggle.click();
+  await expect(video).toHaveJSProperty("paused", false);
+
+  await page.getByRole("button", { name: /^畫質：/ }).click();
+  const panel = page.getByRole("dialog", { name: "畫質" });
+  await expect(panel).toBeVisible();
+
+  await stageToggle.click({ position: { x: 24, y: 24 } });
+  await expect(panel).toBeHidden();
+  await expect(video).toHaveJSProperty("paused", false);
+
+  await stageToggle.click();
+  await expect(video).toHaveJSProperty("paused", true);
 });

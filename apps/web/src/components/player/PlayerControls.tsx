@@ -151,6 +151,7 @@ export function PlayerControls({
   const VolumeIcon =
     volume.audible === 0 ? VolumeX : volume.audible < 0.5 ? Volume1 : Volume2;
   const popover = useControlsPopover(quality?.disabled);
+  const suppressStageClickRef = useRef(false);
   const qualityPanelId = useId();
   const danmakuPanelId = useId();
 
@@ -172,22 +173,43 @@ export function PlayerControls({
         : null;
 
   return (
-    // 外層蓋滿播放器但不攔截點擊；彈出面板在控制列上方的剩餘空間內捲動，
-    // 高度不會超出播放器，窄視窗也不會把影片頂部全遮住。
-    <div className="pointer-events-none absolute inset-0 z-20 flex flex-col justify-end">
-      {activeDialog && (
-        <div
-          ref={popover.panelRef}
-          id={activeDialog.id}
-          role="dialog"
-          aria-label={activeDialog.label}
-          tabIndex={-1}
-          className={`pointer-events-auto mx-3 mb-1 min-h-0 max-w-[calc(100%-1.5rem)] self-end overflow-y-auto overscroll-contain rounded-sm bg-zinc-900/95 p-3 text-left text-white shadow-sm focus-visible:outline-none ${activeDialog.widthClass}`}
-        >
-          {activeDialog.content}
-        </div>
-      )}
-      <div className="pointer-events-auto bg-gradient-to-t from-black/80 via-black/45 to-transparent px-3 pt-5 pb-1.5">
+    // 外層蓋滿播放器；控制列以上區域在有啟用播放控制時可點擊切換播放／暫停，
+    // 彈出面板疊在點擊層上方且高度限制在控制列以上空間內捲動。
+    <div className="pointer-events-none absolute inset-0 z-20 flex flex-col">
+      <div className="relative flex min-h-0 flex-1 flex-col justify-end">
+        {playback && !playback.disabled && (
+          <div
+            aria-hidden
+            data-testid="player-stage-toggle"
+            className="pointer-events-auto absolute inset-0 cursor-pointer"
+            onPointerDown={() => {
+              // 畫質／彈幕面板展開時，點影片區只用來關面板（document pointerdown），不順便切換播放。
+              suppressStageClickRef.current = popover.open !== null;
+            }}
+            onClick={() => {
+              if (suppressStageClickRef.current) {
+                suppressStageClickRef.current = false;
+                return;
+              }
+              if (popover.open !== null) return;
+              playback.onToggle();
+            }}
+          />
+        )}
+        {activeDialog && (
+          <div
+            ref={popover.panelRef}
+            id={activeDialog.id}
+            role="dialog"
+            aria-label={activeDialog.label}
+            tabIndex={-1}
+            className={`pointer-events-auto relative z-10 mx-3 mb-1 min-h-0 max-w-[calc(100%-1.5rem)] self-end overflow-y-auto overscroll-contain rounded-sm bg-zinc-900/95 p-3 text-left text-white shadow-sm focus-visible:outline-none ${activeDialog.widthClass}`}
+          >
+            {activeDialog.content}
+          </div>
+        )}
+      </div>
+      <div className="pointer-events-auto shrink-0 bg-gradient-to-t from-black/80 via-black/45 to-transparent px-3 pt-5 pb-1.5">
         {progress && (
           <input
             type="range"
