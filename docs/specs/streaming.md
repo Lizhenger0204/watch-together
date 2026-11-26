@@ -148,6 +148,30 @@ Windows、多位收看者、實際送滿 8 Mbps、分頁在背景時的表現列
 - 不能用 `getStats()` 的 `encoderImplementation` 或 `mediaCapabilities.encodingInfo()` 判斷是否為硬體編碼：前者只在頁面有鏡頭／麥克風權限時才提供，後者在 M1 硬體 H.264 上仍回 `powerEfficient: false`（ADR 0004 實測 1）。
 - 音訊：Opus，`maxBitrate` 128 kbps，關閉 `echoCancellation` / `noiseSuppression` / `autoGainControl`（這些是給麥克風用的）。
 
+### 頻寬估計：音訊不參與 transport-cc（T-139）
+
+房主在**本機**套用對端 answer（P2P 每一份 answer，含 ICE restart 與重新協商；轉發的 WHIP answer）前，先以 `withoutAudioTransportCc(sdp)`（`common/answer-tuning.ts`）拿掉 audio m-section 的 `a=rtcp-fb:* transport-cc` 與 transport-wide-cc 標頭擴充。只改房主自己 `setRemoteDescription` 的字串，不送給任何人；video 段、收看端與伺服器都不變。
+
+- **原因**（ADR 0005）：影音同在一條 BUNDLE 連線、音訊也帶 transport-cc 時，Chrome 158 的頻寬估計約每 5 秒下降 15～25%（沒有遺失、沒有 NACK）。App 實測 1080P／15 Mbps 約 30 秒才到上限，之後又掉回 10～11 Mbps；4K／25 Mbps 約 45 秒才到。拿掉後估計單調爬升：15 Mbps 約 21 秒、25 Mbps 約 31 秒達標並維持。
+- 音訊仍以 Opus、上限 128 kbps 送出，只是不計入 transport-cc 的頻寬估計。
+- 未採用 `x-google-start-bitrate`：App 實際設定（有音軌）下估計本來就從約 5.5 Mbps 起跳，加了沒有差別。
+
+### Safari 模式（房主本機開關，T-139）
+
+畫質面板內的開關，名稱就叫「Safari 模式」，附一行說明「改用軟體編碼，部分畫面細節較多但較吃 CPU；4K 會明顯掉幀」。預設關閉，只有房主看得到，**只在房主本機生效**：不送 `room:update`、不進 `protocol.md`／`packages/shared`，重新整理頁面後回到關閉。
+
+- **開啟時**：房主對**所有收看者**（P2P 每一條連線、轉發的單一上傳）都改用目前 Safari 收看端那條編碼路徑——H.264 Constrained Baseline `42e0xx`。實作是 `preferredVideoCodecs(codecs, { safariMode: true })`：只把 `42e0xx`（`packetization-mode=1`）與 `4200xx`（`packetization-mode=1`）的先後對調，其餘排序不變。Constrained Baseline 排第一時 §3 的 `4200LL→42e0LL` 映射自然不會發生。
+- **關閉時**：回到 §2 的預設排序（Baseline `4200xx` 優先 → macOS Chrome 走硬體 `VideoToolbox`）。
+- **各平台的實際編碼器**：
+  - macOS Chrome：`42e01f` 由軟體 `OpenH264` 編碼，`42001f` 由硬體 `VideoToolbox` 編碼（T-139 實測，ADR 0005）。
+  - Windows Chrome／Edge：Chromium 的硬體編碼器（MediaFoundation，GPU 驅動提供 NVENC／QuickSync／AMF）同樣以 `4200xx` 宣告 H.264 Baseline，`42e0xx` 由內建 `OpenH264` 處理，預期與 macOS 相同（開啟＝軟體編碼）。**本機無法實測，列入 T-113**；若 Windows 上 `42e0xx` 也是硬體編碼，開關只換 profile，不會改變畫質與 CPU。
+- **差在哪、代價**（M1 實測，ADR 0005）：位元率由片源決定，兩條路徑在同一畫質設定下送出的位元率幾乎相同（實拍片都吃滿 8／15 Mbps；動畫兩者都只用到約 6.3／9 Mbps）。差別在同樣位元率下 OpenH264 的 QP 較低（好壓的畫面約低 2～5），細節略多；難壓的實拍片兩者相同。代價是 CPU：1080P 單人約多 10～30 個百分點，兩位收看者約 1.6～2 倍；4K 單人只剩約 10 fps（`cpu` 受限）。選 1440P 以上時沿用上方「編碼跟不上」提示（§2 第 3 點），不另做提示。
+- **切換對現有連線立即生效，不重建 `captureStream()`、不換 track、不打斷播放**：
+  - **P2P**：房主在同一條 `RTCPeerConnection`、同一組 transceiver 上重新 `setCodecPreferences` 後送新的 offer（新的 `negotiationId`，**不** ICE restart），沿用 §3 的協商代次、answer 15 秒期限與 ICE 規則；逾時一樣以 `PEER_FAILED` 結束該成員。還在等 answer 的成員，套用 answer 後若模式已變，再協商一次；切回原值則不必再協商。重新協商不計入 ICE restart 次數，房主不回報 `connecting`。收看端在**已連通**的同一條連線收到新 offer 時，也不回報 `connecting`（播放器不會蓋上「連線中…」）。
+  - **轉發**：WHIP 不能重新協商（§4）。房主以 `RTCRtpEncodingParameters.codec`（`setParameters`）在 SFU 已協商的 video codec 間切換，選法同樣是 `preferredVideoCodecs(已協商, { safariMode })` 的第一個（`selectNegotiatedVideoCodec`）。只在切換過後才指定 `codec`，預設路徑不碰它。若 SFU 的 answer 沒有協商 `42e0xx`，或瀏覽器不支援 `codec` 參數（設定後讀不回來），以 `TRACK_ERROR`「轉發連線無法立即切換 Safari 模式，下次開播時套用」回報，設定保留到下一次 WHIP 發布。WHIP 回應前切換的，套用 answer 後再選。
+  - 停播、切模式、房主重新連線而重建傳輸時，新的傳輸以建立當下的設定為準（`HostTransportOptions.safariMode`）。
+- 切換時清除「編碼跟不上」的累計時間（換了編碼器）。
+
 ### P2P 總頻寬保護
 
 - 一般 3 位收看者，上限 7 位。
@@ -156,7 +180,7 @@ Windows、多位收看者、實際送滿 8 Mbps、分頁在背景時的表現列
 
 ### 實作位置
 
-- 編碼參數、codec 偏好：`features/transport/common/encoding.ts`（`applyVideoEncoding`、`applyAudioEncoding`、`applyCodecPreferences`、`preferredVideoCodecs`／`preferredAudioCodecs`、`browserCodecCapabilities`／`browserReceiverCodecCapabilities`）與 `features/transport/common/h264-sdp.ts`（`mapH264BaselineOffer`、`restoreH264BaselineAnswer`）。縮放與降級策略的純函式在 shared 的 `videoEncodingPolicy`／`sentVideoHeight`，p2p／relay 都經由 `applyVideoEncoding` 套用。
+- 編碼參數、codec 偏好：`features/transport/common/encoding.ts`（`applyVideoEncoding`、`applyAudioEncoding`、`applyCodecPreferences`、`preferredVideoCodecs`／`preferredAudioCodecs`、`selectNegotiatedVideoCodec`、`browserCodecCapabilities`／`browserReceiverCodecCapabilities`）與 `features/transport/common/h264-sdp.ts`（`mapH264BaselineOffer`、`restoreH264BaselineAnswer`）、`features/transport/common/answer-tuning.ts`（`withoutAudioTransportCc`）。縮放與降級策略的純函式在 shared 的 `videoEncodingPolicy`／`sentVideoHeight`，p2p／relay 都經由 `applyVideoEncoding` 套用。
 - 總頻寬預估：`features/transport/common/stats.ts`（`estimateTotalUploadBitrate`、`shouldWarnTotalUpload`）。
 - 畫質檔位、預設值與解析：`packages/shared/src/quality.ts`（`DEFAULT_QUALITY`、`resolveQuality`、`estimateSourceBitrate`、`videoEncodingPolicy`、`sentVideoHeight`、`MAINTAIN_RESOLUTION_ABOVE_HEIGHT`、`HIGH_RESOLUTION_*`）；檔位常數與 schema 在 `schemas/common.ts`（`RESOLUTION_STEPS`、`BITRATE_STEPS`、`FRAMERATE_STEPS`、`qualitySchema`）。
 
@@ -322,7 +346,7 @@ Windows、多位收看者、實際送滿 8 Mbps、分頁在背景時的表現列
 ### 兩個工廠
 
 ```ts
-createHostTransport({ stream, signal, mode, quality, roomId, token }): HostTransport
+createHostTransport({ stream, signal, mode, quality, safariMode?, roomId, token }): HostTransport
 createViewerTransport({ signal, mode, roomId, token }): ViewerTransport
 ```
 
@@ -364,6 +388,7 @@ interface TransportSignal {
 | `replaceTrack(kind, track)` | `void` | 換片／track 異動（`track=null` = 暫時沒有該 kind） |
 | `setQuality(target: EncodingTarget)` | `Promise<void>` | 記住最新編碼目標，逐人套用，個別失敗回報 `TRACK_ERROR` |
 | `removePeer(memberId)` | `void` | 冪等，關閉該成員連線並作廢其協商代次（§3） |
+| `setSafariMode(on)` | `void` | §2「Safari 模式」：記住設定，P2P 對現有連線重新協商，轉發改 `encodings[].codec`；失敗走 `onError` |
 | `onState(handler)` | `HostTransportState = "idle" \| "live" \| "error"` | 整體狀態 |
 | `onPeerState(handler)` | `{ memberId, state: MemberState }` | 每位收看者的**本地**連線狀態（P2P；relay 不觸發） |
 | `onStats(handler)` | `TransportStats & { memberId? }` | P2P 每 2 秒每位收看者；relay 回報單一上傳統計 |
