@@ -55,6 +55,7 @@
 | T-135 | 房主端正式支援 MKV 容器。**結案，不實作**：查明 Windows 解碼錯誤（BUG-003）是片源標頭標成 Main 10、實際 8-bit，Mac 崩潰是 BUG-004，兩者都與容器無關。ADR 草稿留在 `claude/T-135-mkv-hevc`（`8953498`），不合併 | Claude（ADR） | — | DONE |
 | T-136 | BUG-004：HEVC Main 10 片源開播後房主分頁崩潰；送出前把 10-bit 畫面轉成 8-bit（streaming.md §1，規格已合併 `daa794a`、`c892004`）。實作在 `gemini/BUG-004-10bit-capture`（`00432ae`，已推上遠端），**GPT 審查退回 1 項阻擋**：換片後 Chrome 仍往舊擷取 stream 加入 track，舊 track 一直是 `live`（詳見 [bugs.md](bugs.md)）。**T-137 合併後須一併修**：畫布改用原片尺寸（streaming.md §1 第 2 點，ADR 0004 D7），`video-conversion.ts` 的 `Math.max(...RESOLUTION_STEPS)` 在 `RESOLUTION_STEPS` 加入 `"source"` 後會型別錯誤；rebase 到 `main` 後要重跑檢查 | Gemini（實作）、GPT（審查） | — | DOING |
 | T-137 | 畫質支援 1080P 以上：解析度 1440／2160／原片（原片不縮放）、位元率加 25／40 Mbps；實際送出 > 1080 改 `maintain-resolution`；高畫質靜態、4K 位元率、「編碼跟不上」三種提示（只提示不強制）；協定升為 v2。ADR 0004、streaming.md §2／§8／§9、protocol.md（原暫定 T-136，與 BUG-004 撞號改號；交接備註見 [archive](archive/2026-11-handoffs.md) T-137） | Claude（研究、規格、審查）、Gemini（實作） | — | DONE |
+| T-138 | 瀏覽器內自動修正「標頭標成 Main 10、實際 8-bit」的 HEVC 片源（零複製 Blob 拼接，不重新編碼；先寫 ADR） | 進行中會話 | BUG-003 根因 | DOING |
 
 可平行的組合：T-101 完成後 → T-102（Claude）∥ T-106（GPT）；T-102 完成後 → T-103、T-105（Claude，依序）∥ T-104（GPT）；T-103 完成後 → T-108、T-112（GPT）。T-115（Claude）可與 T-105／T-114 的審查同時進行；T-114 與 T-115 都合併後 → T-107（GPT）∥ T-109、T-110（Claude）。
 
