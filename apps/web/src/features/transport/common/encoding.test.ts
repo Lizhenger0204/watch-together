@@ -1,14 +1,19 @@
 import { resolveQuality } from "@project/shared";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyAudioEncoding,
   applyCodecPreferences,
   applyVideoEncoding,
+  browserReceiverCodecCapabilities,
   preferredAudioCodecs,
   preferredVideoCodecs,
   setVideoContentHint,
 } from "./encoding";
 import { FakeRtcRtpSender, FakeRtcRtpTransceiver } from "./rtc-fake";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("preferredVideoCodecs", () => {
   it("puts H.264 first, then VP8, then the rest (stable order)", () => {
@@ -24,10 +29,92 @@ describe("preferredVideoCodecs", () => {
     ]);
   });
 
+  it("orders H.264 profiles deterministically: 4200xx pm=1 → 42e0xx pm=1 → other pm=1/plain → pm=0 → VP8 → rest", () => {
+    const vp8 = { mimeType: "video/VP8", clockRate: 90000 };
+    const rtx = { mimeType: "video/rtx", clockRate: 90000 };
+    const vp9 = { mimeType: "video/VP9", clockRate: 90000 };
+    const h264Pm0Base = {
+      mimeType: "video/H264",
+      clockRate: 90000,
+      sdpFmtpLine:
+        "level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=42001f",
+    };
+    const h264Pm0Cb = {
+      mimeType: "video/H264",
+      clockRate: 90000,
+      sdpFmtpLine:
+        "level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=42e01f",
+    };
+    const h264High = {
+      mimeType: "video/H264",
+      clockRate: 90000,
+      sdpFmtpLine:
+        "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640034",
+    };
+    const h264Main = {
+      mimeType: "video/H264",
+      clockRate: 90000,
+      sdpFmtpLine:
+        "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=4d001f",
+    };
+    const h264Plain = { mimeType: "video/H264", clockRate: 90000 };
+    const h264CbPm1 = {
+      mimeType: "video/H264",
+      clockRate: 90000,
+      sdpFmtpLine:
+        "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
+    };
+    const h264BasePm1 = {
+      mimeType: "video/H264",
+      clockRate: 90000,
+      sdpFmtpLine:
+        "profile-level-id=42001F; packetization-mode=1; level-asymmetry-allowed=1",
+    };
+
+    expect(
+      preferredVideoCodecs([
+        vp9,
+        vp8,
+        rtx,
+        h264Pm0Base,
+        h264High,
+        h264CbPm1,
+        h264Pm0Cb,
+        h264Main,
+        h264Plain,
+        h264BasePm1,
+      ]),
+    ).toEqual([
+      h264BasePm1,
+      h264CbPm1,
+      h264High,
+      h264Main,
+      h264Plain,
+      h264Pm0Base,
+      h264Pm0Cb,
+      vp8,
+      vp9,
+      rtx,
+    ]);
+  });
+
   it("drops non-video codecs", () => {
     const opus = { mimeType: "audio/opus", clockRate: 48000 };
     const h264 = { mimeType: "video/H264", clockRate: 90000 };
     expect(preferredVideoCodecs([opus, h264])).toEqual([h264]);
+  });
+});
+
+describe("browserReceiverCodecCapabilities", () => {
+  it("reads codecs from RTCRtpReceiver.getCapabilities and falls back safely", () => {
+    const expected = [{ mimeType: "video/H264", clockRate: 90000 }];
+    vi.stubGlobal("RTCRtpReceiver", {
+      getCapabilities: vi.fn(() => ({ codecs: expected })),
+    });
+    expect(browserReceiverCodecCapabilities("video")).toEqual(expected);
+
+    vi.stubGlobal("RTCRtpReceiver", undefined);
+    expect(browserReceiverCodecCapabilities("video")).toEqual([]);
   });
 });
 

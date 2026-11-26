@@ -8,6 +8,8 @@ import {
   browserPeerConnectionFactory,
   isIceConnected,
   loadIceServers,
+  mapH264BaselineOffer,
+  restoreH264BaselineAnswer,
   TransportError,
   type RtcPeerConnection,
   type RtcRtpSender,
@@ -46,6 +48,9 @@ export class HostPeer {
   // Serialize SDP and sender operations on this PC. A setParameters transaction
   // must not race another setParameters or a pending description change.
   private pending = Promise.resolve();
+  // 每輪協商若有將 H.264 Baseline（4200xx）映射為 Constrained Baseline（42e0xx），
+  // 記錄該 video payload type 供對應的 answer 還原（streaming.md §3，T-139）。
+  private readonly mappedVideoPt = new WeakMap<Negotiation, string | null>();
 
   constructor(
     private readonly memberId: string,
@@ -192,10 +197,17 @@ export class HostPeer {
         restart ? { iceRestart: true } : undefined,
       );
       if (!round.active) return;
-      await round.publish(pc, description, () => {
-        this.phase = "waiting";
-        if (restart) this.armAnswerTimer(round);
-      });
+      const { sdp: wireSdp, mappedPt } = mapH264BaselineOffer(description.sdp);
+      this.mappedVideoPt.set(round, mappedPt);
+      await round.publish(
+        pc,
+        description,
+        () => {
+          this.phase = "waiting";
+          if (restart) this.armAnswerTimer(round);
+        },
+        wireSdp,
+      );
     });
   }
 
@@ -211,9 +223,13 @@ export class HostPeer {
     this.phase = "applying";
     clearTimeout(this.answerTimer);
     void this.enqueue(round, async () => {
-      await pc.setRemoteDescription({ type: "answer", sdp: data.sdp });
+      const answerSdp = restoreH264BaselineAnswer(
+        data.sdp,
+        this.mappedVideoPt.get(round) ?? null,
+      );
+      await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
       if (!round.active) return;
-      round.remoteDescriptionApplied(data.sdp);
+      round.remoteDescriptionApplied(answerSdp);
       if (!round.active) return;
       this.phase = "answered";
       this.observeIce(pc, round);

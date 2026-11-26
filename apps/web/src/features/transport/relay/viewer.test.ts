@@ -48,6 +48,14 @@ describe("WHEP 拉取", () => {
       ["video", "recvonly"],
       ["audio", "recvonly"],
     ]);
+    const [videoTransceiver, audioTransceiver] = pc.getTransceivers();
+    expect(videoTransceiver?.codecPreferences.map((c) => c.mimeType)).toEqual([
+      "video/H264",
+      "video/VP8",
+    ]);
+    expect(audioTransceiver?.codecPreferences.map((c) => c.mimeType)).toEqual([
+      "audio/opus",
+    ]);
     const post = http().lastPost();
     expect(post.url).toBe(`/api/rooms/${ROOM}/whep`);
     expect(post.headers.authorization).toBe(`Bearer ${TOKEN}`);

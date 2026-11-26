@@ -16,9 +16,21 @@ export { AUDIO_MAX_BITRATE };
 /** 依 kind 取 codec 能力的函式；測試注入假的 capabilities。 */
 export type CodecCapabilities = (kind: "audio" | "video") => RTCRtpCodec[];
 
-/** 預設：從瀏覽器取得 codec 能力。 */
+const PACKETIZATION_MODE_1 = /(?:^|[;\s])packetization-mode=1(?:;|\s|$)/i;
+const H264_BASELINE_PROFILE =
+  /(?:^|[;\s])profile-level-id=4200[0-9a-f]{2}(?:;|\s|$)/i;
+const H264_CONSTRAINED_BASELINE_PROFILE =
+  /(?:^|[;\s])profile-level-id=42e0[0-9a-f]{2}(?:;|\s|$)/i;
+
+/** 預設：從瀏覽器取得發送端（sendonly）codec 能力。 */
 export const browserCodecCapabilities: CodecCapabilities = (kind) =>
   RTCRtpSender.getCapabilities(kind)?.codecs ?? [];
+
+/** 預設：從瀏覽器取得接收端（recvonly）codec 能力（WHEP 等使用）。 */
+export const browserReceiverCodecCapabilities: CodecCapabilities = (kind) =>
+  typeof RTCRtpReceiver !== "undefined"
+    ? (RTCRtpReceiver.getCapabilities?.(kind)?.codecs ?? [])
+    : [];
 
 /** 依 §2 設定 video sender 的編碼參數（碼率、幀率、縮放、降級策略）。`target` 由 resolveQuality() 算出。 */
 export async function applyVideoEncoding(
@@ -59,15 +71,27 @@ export function setVideoContentHint(track: MediaStreamTrack): void {
   }
 }
 
-/** 依 §2：video codec 偏好 H.264 優先，其次 VP8，其餘 video codec 依原順序排在後面。 */
+/**
+ * 依 §2（T-139）：video codec 偏好 H.264 優先，其次 VP8，其餘 video codec 依原順序排在後面。
+ * H.264 內固定優先 `packetization-mode=1`：Baseline `4200xx` → Constrained Baseline `42e0xx`
+ * → 其餘 `packetization-mode=1`（或未帶 fmtp）→ 其餘 H.264（例如 `packetization-mode=0`）。
+ */
 export function preferredVideoCodecs(
   codecs: readonly RTCRtpCodec[],
 ): RTCRtpCodec[] {
   const priority = (codec: RTCRtpCodec): number => {
     const mime = codec.mimeType.toLowerCase();
-    if (mime === "video/h264") return 0;
-    if (mime === "video/vp8") return 1;
-    return 2;
+    if (mime === "video/h264") {
+      const fmtp = codec.sdpFmtpLine?.trim() ?? "";
+      if (fmtp === "") return 2;
+      const pm1 = PACKETIZATION_MODE_1.test(fmtp);
+      if (pm1 && H264_BASELINE_PROFILE.test(fmtp)) return 0;
+      if (pm1 && H264_CONSTRAINED_BASELINE_PROFILE.test(fmtp)) return 1;
+      if (pm1) return 2;
+      return 3;
+    }
+    if (mime === "video/vp8") return 4;
+    return 5;
   };
   return codecs
     .filter((codec) => codec.mimeType.toLowerCase().startsWith("video/"))
