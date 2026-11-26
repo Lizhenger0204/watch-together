@@ -46,7 +46,8 @@
 | 變數 | 預設 | 說明 |
 | --- | --- | --- |
 | `ROOM_MAX_MEMBERS` | `8` | 含房主 |
-| `ROOM_IDLE_TTL_MS` | `1800000` | 無人後 30 分鐘關房 |
+| `ROOM_IDLE_TTL_MS` | `100000` | 無人後 100 秒關房 |
+| `ROOM_HOST_OFFLINE_TTL_MS` | `100000` | 房主離線 100 秒後移除房主 |
 | `ROOM_MAX_AGE_MS` | `86400000` | 24 小時 |
 
 ### Secrets（`wrangler secret put`；本機放 `apps/signal/.dev.vars`，已被 gitignore）

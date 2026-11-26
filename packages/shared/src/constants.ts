@@ -16,6 +16,7 @@ export const SDP_MAX_LENGTH = 64 * 1024;
 /** WebSocket 連線後必須在此時間內完成驗證。 */
 export const WS_AUTH_TIMEOUT_MS = 5_000;
 export const WS_PING_INTERVAL_MS = 20_000;
+export const WS_HEARTBEAT_TIMEOUT_MS = 60_000;
 /** 收看者回報 member:status 的間隔。 */
 export const MEMBER_STATUS_INTERVAL_MS = 5_000;
 
