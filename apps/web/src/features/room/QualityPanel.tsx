@@ -2,6 +2,7 @@ import type { Mode, Quality } from "@project/shared";
 import { AlertTriangle } from "lucide-react";
 import { useState } from "react";
 import { ENCODER_LAG_MESSAGE } from "./encoder-health";
+import { SafariModeSwitch } from "./SafariModeSwitch";
 import {
   QUALITY_STEPS,
   highResolutionHints,
@@ -32,7 +33,9 @@ export function QualityPanel({
   mode,
   viewers,
   encoderLagging,
+  safariMode,
   onChange,
+  onSafariModeChange,
 }: {
   /** 房間目前的畫質（最近一次廣播）。 */
   quality: Quality;
@@ -46,7 +49,10 @@ export function QualityPanel({
   viewers: number;
   /** 房主端編碼器連續 10 秒跟不上（streaming.md §2）。 */
   encoderLagging: boolean;
+  /** Safari 模式（streaming.md §2，只在房主本機生效）。 */
+  safariMode: boolean;
   onChange: (quality: Quality) => void;
+  onSafariModeChange: (on: boolean) => void;
 }) {
   // 只在拖曳／按鍵調整到放開之前存在。
   const [drag, setDrag] = useState<Quality | null>(null);
@@ -157,6 +163,7 @@ export function QualityPanel({
           每位收看者各編碼一次，建議改用『轉發』。
         </p>
       )}
+      <SafariModeSwitch on={safariMode} onChange={onSafariModeChange} />
       {sourceHeight !== null && (
         <p className="text-xs text-white/60">
           片源 {sourceHeight}P，解析度不會超過片源。

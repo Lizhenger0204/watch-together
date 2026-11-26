@@ -293,6 +293,7 @@ describe("整合 SignalClient：切模式第 2 步逾時觸發 resync", () => {
     expect(t.session.getView()).toEqual({
       pendingQuality: null,
       encoderLagging: false,
+      safariMode: false,
       intent: true,
       phase: "starting",
       error: null,
@@ -340,6 +341,7 @@ describe("整合 SignalClient：切模式第 2 步逾時觸發 resync", () => {
     expect(t.session.getView()).toEqual({
       pendingQuality: null,
       encoderLagging: false,
+      safariMode: false,
       intent: true,
       phase: "waiting",
       error: null,
@@ -358,6 +360,7 @@ describe("整合 SignalClient：切模式第 2 步逾時觸發 resync", () => {
     expect(t.session.getView()).toEqual({
       pendingQuality: null,
       encoderLagging: false,
+      safariMode: false,
       intent: true,
       phase: "waiting",
       error: null,
@@ -371,6 +374,7 @@ describe("整合 SignalClient：切模式第 2 步逾時觸發 resync", () => {
     expect(t.session.getView()).toEqual({
       pendingQuality: null,
       encoderLagging: false,
+      safariMode: false,
       intent: true,
       phase: "starting",
       error: null,

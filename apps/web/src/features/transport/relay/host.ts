@@ -17,8 +17,11 @@ import {
   applyVideoEncoding,
   browserCodecCapabilities,
   Emitter,
+  isConstrainedBaselineH264,
   isIceConnected,
+  selectNegotiatedVideoCodec,
   setVideoContentHint,
+  withoutAudioTransportCc,
   TransportError,
   type RtcPeerConnection,
   type RtcRtpSender,
@@ -51,6 +54,11 @@ interface Run {
   posting?: boolean;
   /** 已經回報過連線中斷；同一次斷線不再重複回報。 */
   failed?: boolean;
+  /** 建立 offer 時的 Safari 模式；已套用 answer 後才可在已協商的 codec 間切換。 */
+  offeredSafariMode?: boolean;
+  answered?: boolean;
+  /** 曾以 `encodings[].codec` 指定過 codec（之後每次切換都要明確指定）。 */
+  codecSelected?: boolean;
 }
 
 export const createRelayHostTransport: CreateHostTransport = (options) => {
@@ -62,6 +70,7 @@ export const createRelayHostTransport: CreateHostTransport = (options) => {
   const queue = publishQueue(options.roomId);
   const tracks: Partial<Record<MediaKind, MediaStreamTrack | null>> = {};
   let quality: EncodingTarget = options.quality;
+  let safariMode = options.safariMode ?? false;
   let state: HostTransportState = "idle";
   let run: Run | undefined;
   let starting: Promise<void> | undefined;
@@ -108,6 +117,40 @@ export const createRelayHostTransport: CreateHostTransport = (options) => {
         );
     } catch (error) {
       if (!current.abort.signal.aborted) throw trackError(error);
+    }
+  }
+
+  /**
+   * WHIP 不能重新協商（§4）：直播中切換 Safari 模式時，在 SFU 已協商的 codec 間以
+   * `encodings[].codec` 切換。已協商的 codec 裡沒有要的 profile，或瀏覽器不支援
+   * `codec` 參數時回報 TRACK_ERROR，設定在下次開播（重新 WHIP）時生效。
+   */
+  async function applyCodecMode(current: Run) {
+    const sender = current.senders?.video;
+    if (!sender || !current.answered || current.abort.signal.aborted) return;
+    if (current.offeredSafariMode === safariMode && !current.codecSelected)
+      return;
+    let chosen: RTCRtpCodec | null;
+    try {
+      chosen = await selectNegotiatedVideoCodec(sender, { safariMode });
+    } catch (error) {
+      if (current.abort.signal.aborted) return;
+      throw trackError(error);
+    }
+    if (current.abort.signal.aborted) return;
+    current.codecSelected = true;
+    const applied = (
+      sender.getParameters().encodings[0] as { codec?: RTCRtpCodec } | undefined
+    )?.codec;
+    if (
+      !chosen ||
+      !applied ||
+      (safariMode && !isConstrainedBaselineH264(chosen))
+    ) {
+      throw new TransportError(
+        "TRACK_ERROR",
+        "轉發連線無法立即切換 Safari 模式，下次開播時套用",
+      );
     }
   }
 
@@ -188,9 +231,12 @@ export const createRelayHostTransport: CreateHostTransport = (options) => {
           const transceiver = pc.addTransceiver(tracks[kind] ?? kind, {
             direction: "sendonly",
           });
-          applyCodecPreferences(transceiver, capabilities(kind));
+          applyCodecPreferences(transceiver, capabilities(kind), {
+            safariMode,
+          });
           return transceiver.sender;
         };
+        current.offeredSafariMode = safariMode;
         current.senders = { video: add("video"), audio: add("audio") };
       } catch (error) {
         throw trackError(error);
@@ -218,9 +264,21 @@ export const createRelayHostTransport: CreateHostTransport = (options) => {
       if (signal.aborted) return abandon(current);
       ensureNotFailed(current);
 
-      await pc.setRemoteDescription({ type: "answer", sdp: answer });
+      // 頻寬調整只套在房主本機的 answer（§2「頻寬估計」）。
+      await pc.setRemoteDescription({
+        type: "answer",
+        sdp: withoutAudioTransportCc(answer),
+      });
       if (signal.aborted) return abandon(current);
       ensureNotFailed(current);
+      current.answered = true;
+      // 送出 offer 後才切換的 Safari 模式：開播不因此失敗，只回報錯誤。
+      enqueue(current, () => applyCodecMode(current)).catch(
+        (error: unknown) => {
+          if (run === current)
+            emitError(relayError(error, "無法切換 Safari 模式"));
+        },
+      );
       sampleStats(pc, "send", signal, (stats) => {
         if (!destroyed && isIceConnected(pc)) events.emit("stats", stats);
       });
@@ -315,6 +373,18 @@ export const createRelayHostTransport: CreateHostTransport = (options) => {
         if (run === current) emitError(failure);
         throw failure;
       }
+    },
+    setSafariMode(on) {
+      if (destroyed || safariMode === on) return;
+      safariMode = on;
+      const current = run;
+      if (!current?.senders) return;
+      enqueue(current, () => applyCodecMode(current)).catch(
+        (error: unknown) => {
+          if (run === current)
+            emitError(relayError(error, "無法切換 Safari 模式"));
+        },
+      );
     },
     removePeer() {},
     onState: (handler) => events.on("state", handler),

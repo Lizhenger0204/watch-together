@@ -94,6 +94,14 @@ export interface HostTransport {
   setQuality(quality: EncodingTarget): Promise<void>;
 
   /**
+   * 房主端 Safari 模式（streaming.md §2）：開啟時所有收看者都改用 H.264 Constrained
+   * Baseline（`42e0xx`）優先。先記住設定供之後的連線使用，再套用到現有連線：
+   * P2P 在同一條連線上重新協商（不 ICE restart、不換 track）；轉發見 §4。
+   * 不回傳 Promise，失敗走 onError（同 replaceTrack）。只在房主本機生效，不進協定。
+   */
+  setSafariMode(on: boolean): void;
+
+  /**
    * 關閉該成員的連線並作廢其協商代次，包括在途建連、ICE 佇列、重試與統計。
    * 冪等（對不存在或已關閉的 memberId 呼叫是 no-op）。房間層比對
    * `room:members`，對消失或 `online: false` 的成員呼叫它（踢人、收看者離線）。
@@ -170,6 +178,8 @@ export interface HostTransportOptions extends TransportRtcOptions {
   mode: Mode;
   /** 已解析的編碼目標（`resolveQuality()`，streaming.md §2）。 */
   quality: EncodingTarget;
+  /** 建立時的 Safari 模式（streaming.md §2）；省略為 false。 */
+  safariMode?: boolean;
   /** 取 ICE 的房間 id。 */
   roomId: string;
   /** hostToken（Bearer token），呼叫 /ice 與 WHIP 用。不可寫進 log。 */

@@ -144,7 +144,9 @@ export const createP2PViewerTransport: CreateViewerTransport = (options) => {
       answered: false,
     };
     current = reception;
-    setState("connecting");
+    // 同一條已連通的連線上重新協商（房主切換 Safari 模式）：媒體不中斷，不回報 connecting。
+    if (!(reuse && reception.pc && isIceConnected(reception.pc)))
+      setState("connecting");
     if (round.active) void answer(reception, data.sdp);
   }
 

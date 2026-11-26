@@ -17,7 +17,11 @@ export const createP2PHostTransport: CreateHostTransport = (options) => {
     error: [TransportError];
   }>();
   const peers = new Map<string, HostPeer>();
-  const source: HostSource = { tracks: {}, quality: options.quality };
+  const source: HostSource = {
+    tracks: {},
+    quality: options.quality,
+    safariMode: options.safariMode ?? false,
+  };
   let run: AbortController | undefined;
   let destroyed = false;
   let startError: TransportError | undefined;
@@ -120,6 +124,12 @@ export const createP2PHostTransport: CreateHostTransport = (options) => {
         }
       }
       if (firstError) throw firstError;
+    },
+    setSafariMode(on) {
+      if (destroyed || source.safariMode === on) return;
+      source.safariMode = on;
+      // 已連線的成員在同一條連線上重新協商；還在建連的成員由下一份 offer 或套用 answer 後補上。
+      for (const peer of peers.values()) peer.renegotiateIfStale();
     },
     onState: (handler) => events.on("state", handler),
     onPeerState: (handler) => events.on("peerState", handler),

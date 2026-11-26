@@ -46,7 +46,16 @@ export type HostSessionView = {
   pendingQuality: Quality | null;
   /** 直播中房主編碼器連續 10 秒跟不上（streaming.md §2「高畫質提示」）。 */
   encoderLagging: boolean;
+  /** Safari 模式（streaming.md §2）：只在房主本機生效，預設關閉。 */
+  safariMode: boolean;
 };
+
+/** 兩份畫面狀態的每個欄位都相同（欄位都是基本值或同一個物件參照）。 */
+export function sameHostView(a: HostSessionView, b: HostSessionView): boolean {
+  return (Object.keys(a) as (keyof HostSessionView)[]).every(
+    (key) => a[key] === b[key],
+  );
+}
 
 export type HostRequest =
   | Omit<ClientMessageOf<"stream:status">, "reqId">

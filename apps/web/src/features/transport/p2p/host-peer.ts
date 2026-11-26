@@ -10,9 +10,11 @@ import {
   loadIceServers,
   mapH264BaselineOffer,
   restoreH264BaselineAnswer,
+  withoutAudioTransportCc,
   TransportError,
   type RtcPeerConnection,
   type RtcRtpSender,
+  type RtcRtpTransceiver,
   type TransportStats,
 } from "../common";
 import { Negotiation, peerError } from "./negotiation";
@@ -21,7 +23,12 @@ export type MediaKind = "video" | "audio";
 export interface HostSource {
   tracks: Partial<Record<MediaKind, MediaStreamTrack | null>>;
   quality: EncodingTarget;
+  /** Safari 模式（streaming.md §2）：H.264 Constrained Baseline 優先。 */
+  safariMode: boolean;
 }
+
+/** initial：首次 offer（計時從 peer:request 起算）；restart：ICE restart；renegotiate：Safari 模式切換。 */
+type OfferKind = "initial" | "restart" | "renegotiate";
 
 interface PeerEvents {
   state: (state: MemberState) => void;
@@ -38,6 +45,7 @@ export class HostPeer {
   private round: Negotiation;
   private pc?: RtcPeerConnection;
   private senders?: Record<MediaKind, RtcRtpSender>;
+  private videoTransceiver?: RtcRtpTransceiver;
   private phase: "preparing" | "waiting" | "applying" | "answered" =
     "preparing";
   private restarts = 0;
@@ -51,6 +59,8 @@ export class HostPeer {
   // 每輪協商若有將 H.264 Baseline（4200xx）映射為 Constrained Baseline（42e0xx），
   // 記錄該 video payload type 供對應的 answer 還原（streaming.md §3，T-139）。
   private readonly mappedVideoPt = new WeakMap<Negotiation, string | null>();
+  // 每輪 offer 依當時的 Safari 模式排 codec；套用 answer 後若模式已變，再協商一次。
+  private readonly offeredSafariMode = new WeakMap<Negotiation, boolean>();
 
   constructor(
     private readonly memberId: string,
@@ -92,19 +102,26 @@ export class HostPeer {
             this.source.tracks[kind] ?? kind,
             { direction: "sendonly" },
           );
-          const capabilities =
-            this.options.getCodecCapabilities ?? browserCodecCapabilities;
-          applyCodecPreferences(transceiver, capabilities(kind));
+          this.applyCodecs(transceiver);
+          if (kind === "video") this.videoTransceiver = transceiver;
           return transceiver.sender;
         };
         this.senders = { video: add("video"), audio: add("audio") };
       } catch {
         throw this.trackError();
       }
-      await this.offer(pc, round, false);
+      await this.offer(pc, round, "initial");
     } catch (error) {
       if (round.active) this.fail(error);
     }
+  }
+
+  private applyCodecs(transceiver: RtcRtpTransceiver) {
+    const capabilities =
+      this.options.getCodecCapabilities ?? browserCodecCapabilities;
+    applyCodecPreferences(transceiver, capabilities(transceiver.kind), {
+      safariMode: this.source.safariMode,
+    });
   }
 
   private bind(pc: RtcPeerConnection, round: Negotiation) {
@@ -187,14 +204,23 @@ export class HostPeer {
     }
   }
 
-  private offer(pc: RtcPeerConnection, round: Negotiation, restart: boolean) {
+  private offer(pc: RtcPeerConnection, round: Negotiation, kind: OfferKind) {
     return this.enqueue(round, async () => {
       // A restart may have cancelled a queued track/quality change on these same senders.
       await this.applyMedia("video", round);
       await this.applyMedia("audio", round);
       if (!round.active) return;
+      const safariMode = this.source.safariMode;
+      if (this.videoTransceiver) {
+        try {
+          this.applyCodecs(this.videoTransceiver);
+        } catch {
+          throw this.trackError();
+        }
+      }
+      this.offeredSafariMode.set(round, safariMode);
       const description = await pc.createOffer(
-        restart ? { iceRestart: true } : undefined,
+        kind === "restart" ? { iceRestart: true } : undefined,
       );
       if (!round.active) return;
       const { sdp: wireSdp, mappedPt } = mapH264BaselineOffer(description.sdp);
@@ -204,7 +230,7 @@ export class HostPeer {
         description,
         () => {
           this.phase = "waiting";
-          if (restart) this.armAnswerTimer(round);
+          if (kind !== "initial") this.armAnswerTimer(round);
         },
         wireSdp,
       );
@@ -223,16 +249,19 @@ export class HostPeer {
     this.phase = "applying";
     clearTimeout(this.answerTimer);
     void this.enqueue(round, async () => {
-      const answerSdp = restoreH264BaselineAnswer(
+      const restored = restoreH264BaselineAnswer(
         data.sdp,
         this.mappedVideoPt.get(round) ?? null,
       );
+      // 房主本機的頻寬調整（streaming.md §2「頻寬估計」）。
+      const answerSdp = withoutAudioTransportCc(restored);
       await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
       if (!round.active) return;
       round.remoteDescriptionApplied(answerSdp);
       if (!round.active) return;
       this.phase = "answered";
       this.observeIce(pc, round);
+      if (round.active) this.renegotiateIfStale();
     }).catch((error: unknown) => {
       if (round.active) this.fail(error);
     });
@@ -267,6 +296,25 @@ export class HostPeer {
     }
   }
 
+  /**
+   * Safari 模式切換（streaming.md §2）：在同一條連線、同一組 transceiver 上重新協商，
+   * 不 ICE restart、不換 track，也不回報 connecting。還在等 answer 時，套用 answer 後再判斷。
+   */
+  renegotiateIfStale() {
+    const pc = this.pc;
+    const round = this.round;
+    if (!pc || !round.active || this.phase !== "answered") return;
+    if (this.offeredSafariMode.get(round) === this.source.safariMode) return;
+    const next = this.newRound(round.nextGatheringIsUnambiguous);
+    round.cancel();
+    this.round = next;
+    this.phase = "preparing";
+    this.bind(pc, next);
+    void this.offer(pc, next, "renegotiate").catch((error: unknown) => {
+      if (next.active) this.fail(error);
+    });
+  }
+
   private restart(pc: RtcPeerConnection) {
     // Never supersede an unanswered offer. Its own deadline still applies.
     if (this.phase !== "answered") return;
@@ -283,7 +331,7 @@ export class HostPeer {
     this.playing = false;
     this.bind(pc, next);
     this.events.state("connecting");
-    void this.offer(pc, next, true).catch((error: unknown) => {
+    void this.offer(pc, next, "restart").catch((error: unknown) => {
       if (next.active) this.fail(error);
     });
   }

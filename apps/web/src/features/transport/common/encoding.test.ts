@@ -98,6 +98,38 @@ describe("preferredVideoCodecs", () => {
     ]);
   });
 
+  it("swaps only 4200xx and 42e0xx in Safari mode", () => {
+    const vp8 = { mimeType: "video/VP8", clockRate: 90000 };
+    const base = {
+      mimeType: "video/H264",
+      clockRate: 90000,
+      sdpFmtpLine: "packetization-mode=1;profile-level-id=42001f",
+    };
+    const constrained = {
+      mimeType: "video/H264",
+      clockRate: 90000,
+      sdpFmtpLine: "packetization-mode=1;profile-level-id=42e01f",
+    };
+    const high = {
+      mimeType: "video/H264",
+      clockRate: 90000,
+      sdpFmtpLine: "packetization-mode=1;profile-level-id=64001f",
+    };
+    const codecs = [vp8, high, base, constrained];
+    expect(preferredVideoCodecs(codecs, { safariMode: true })).toEqual([
+      constrained,
+      base,
+      high,
+      vp8,
+    ]);
+    expect(preferredVideoCodecs(codecs, { safariMode: false })).toEqual([
+      base,
+      constrained,
+      high,
+      vp8,
+    ]);
+  });
+
   it("drops non-video codecs", () => {
     const opus = { mimeType: "audio/opus", clockRate: 48000 };
     const h264 = { mimeType: "video/H264", clockRate: 90000 };

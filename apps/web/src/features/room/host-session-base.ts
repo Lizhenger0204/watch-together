@@ -56,13 +56,29 @@ export abstract class HostSessionBase {
   protected abstract peerHandler:
     Parameters<TransportSignal["onPeerRequest"]>[0] | null;
   protected abstract createTransport: CreateHostTransport;
+  protected abstract transport: HostTransport | null;
+  /** Safari 模式（streaming.md §2）：只在房主本機，建立傳輸時帶入，切換時套用到現有傳輸。 */
+  protected safariMode = false;
 
   protected abstract publish(): void;
+  protected abstract resetEncoderHealth(): void;
   protected abstract showError(error: unknown): void;
   protected abstract failLive(duringStart?: boolean): void;
   protected abstract handleStats(
     stats: TransportStats & { memberId?: string },
   ): void;
+
+  /**
+   * 切換 Safari 模式（streaming.md §2）：不送 room:update，不重建傳輸；現有傳輸自行重新協商。
+   * 編碼器換了，「編碼跟不上」的累計時間也重新計算。
+   */
+  setSafariMode(on: boolean): void {
+    if (this.destroyed || this.safariMode === on) return;
+    this.safariMode = on;
+    this.resetEncoderHealth();
+    this.transport?.setSafariMode(on);
+    this.publish();
+  }
 
   /** 目前畫質檔位依片源解析出的編碼目標（streaming.md §2）。 */
   protected encodingTarget(): EncodingTarget {
@@ -150,6 +166,7 @@ export abstract class HostSessionBase {
       signal,
       mode: this.mode,
       quality: (this.appliedTarget = this.encodingTarget()),
+      safariMode: this.safariMode,
       roomId: this.options.roomId,
       token: this.options.token,
     });
