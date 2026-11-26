@@ -112,33 +112,50 @@ Windows、多位收看者、實際送滿 8 Mbps、分頁在背景時的表現列
 
 | 滑桿 | 檔位 | 說明 |
 | --- | --- | --- |
-| 解析度 | `720P`／`900P`／`1080P` | 目標高度。**不超過片源**：高於片源高度的檔位停用；房間設定比片源高時以片源高度送出（不放大） |
-| 位元率 | `8 Mbps`／`10 Mbps`／`15 Mbps`／`原片` | 每位收看者的 `maxBitrate` |
+| 解析度 | `720P`／`900P`／`1080P`／`1440P`／`2160P`／`原片` | 目標高度。**不超過片源**：高於片源高度的數字檔位停用；房間設定比片源高時以片源高度送出（不放大）。`原片` **永遠可選**，不縮放 |
+| 位元率 | `8 Mbps`／`10 Mbps`／`15 Mbps`／`25 Mbps`／`40 Mbps`／`原片` | 每位收看者的 `maxBitrate` |
 | FPS | `24`／`30`／`60`／`原片` | `maxFramerate`；`原片` 不設上限，沿用片源幀率 |
 
-- 預設 `1080P`、`8 Mbps`、`30`（`DEFAULT_QUALITY`）。
-- 房間只記住**檔位**（protocol.md 的 `Quality`）。實際編碼參數由房主端 `resolveQuality(quality, sourceBitrate)` 算出 `EncodingTarget { targetHeight, maxBitrate, maxFramerate | null }` 再交給傳輸層。
+- 預設 `1080P`、`8 Mbps`、`30`（`DEFAULT_QUALITY`），不因 T-136 改變。高畫質由房主自己選（ADR 0003）。
+- 房間只記住**檔位**（protocol.md 的 `Quality`）。實際編碼參數由房主端 `resolveQuality(quality, sourceBitrate)` 算出 `EncodingTarget { targetHeight | null, maxBitrate, maxFramerate | null }` 再交給傳輸層。`targetHeight: null` 代表「原片」解析度（不縮放）；**不可**在房間層先換成片源高度，否則換片時傳輸層會拿新 track 的高度配舊的目標高度（§9）。
 - **原片位元率**：選檔後以 `檔案大小 × 8 ÷ 片長` 估計（含音軌，`estimateSourceBitrate`）。量不到時用 15 Mbps（`SOURCE_BITRATE_FALLBACK`），最高 50 Mbps（`SOURCE_BITRATE_MAX`）。檔位是「原片」時換片會依新片重新估計並套用。
 - 調整時房主送 `room:update { quality }`，收到 `room:updated` 後對現有傳輸 `setQuality(encodingTarget)`（`setParameters`，不重建連線）。開播、停播、切換傳送方式或斷線同步中暫時停用畫質面板。
 - **連續調整以「最後的選擇」為準**（`host-session-quality.ts`）：每次放開滑桿都與「最後的選擇」比較（不是與廣播來的舊值比較）後送出；面板保留最後的選擇，直到依序收到相符的畫質廣播，且最後一筆請求已獲伺服器接受。鎖房或換邀請碼等無關廣播不影響尚未確認的選擇。最後一筆請求被拒絕或逾時時，面板顯示房間目前的畫質，並回報錯誤。重新驗證、斷線或等待畫質廣播逾 10 秒也會清除尚未確認的選擇。
 - **滑桿位置就是房間設定的檔位，不因片源而被夾住。** 房間設定不因片源而被改寫：片源 1000P、設定 1080P 時，解析度滑桿停在 1080P、右上角顯示實際送出的「1000P（片源）」，可選檔位只有 720P／900P，往左拉到 900P 就是一次可提交的變更；高於片源的檔位淡化且拉過去會被夾回。片源只有 720P 以上、900P 以下時只有 720P 可選，一樣能從 1080P 設定直接選到 720P。
+- 解析度 `原片`：滑桿右上角與控制列按鈕顯示實際送出的片源高度，格式 `原片（1608P）`；片源未知時只顯示 `原片`。寬銀幕 4K 片（3840×1608）的 `2160P` 是停用的，要送全解析度就選 `原片`。
 - 位元率滑桿的「原片」顯示的估計值與實際送出的上限一致（最高 50 Mbps）。
 - 收看者不顯示畫質控制。
-- **4K 片源要縮放**：`scaleResolutionDownBy = max(1, videoHeight / 目標高度)`，否則會以 4K 編碼。
-- `videoTrack.contentHint = 'motion'`；`degradationPreference = 'maintain-framerate'`。
-- Codec 偏好：**H.264 優先**（收看端 Android 硬體解碼最普遍），其次 VP8。用 `RTCRtpTransceiver.setCodecPreferences` 設定。
+- **縮放與降級策略**（`videoEncodingPolicy(sourceHeight, targetHeight)`，ADR 0003 D3）：
+  - `scaleResolutionDownBy = max(1, 片源高度 / 目標高度)`；`targetHeight` 為 null（原片）或片源高度未知時為 1。4K 片源選 1080P 以下時一定要縮放，否則會以 4K 編碼。
+  - **實際送出高度**（`sentVideoHeight`）= `min(片源高度, 目標高度)`，原片時為片源高度。**> 1080 時 `degradationPreference = 'maintain-resolution'`**（頻寬或 CPU 不夠時掉幀，不降解析度，收看端從第一格起就是所選解析度），≤ 1080 維持 `'maintain-framerate'`。換片、補回 video track 或 `setQuality` 時都依當下的片源高度重算。
+  - 實測：`maintain-framerate` 下選 4K，Chrome 的頻寬估計約 30 秒才爬到 30 Mbps，這段期間只送 1440P；頻寬不足時會一直停在 1440P，和面板顯示不一致（ADR 0003 實測 2）。
+- `videoTrack.contentHint = 'motion'`。
+- Codec 偏好：**H.264 優先**（收看端 Android 硬體解碼最普遍），其次 VP8。用 `RTCRtpTransceiver.setCodecPreferences` 設定。高畫質也不改用 VP9／AV1（Chrome 為軟體編碼，CPU 是硬體 H.264 的 3～5 倍）或 H.265（收看端不一定能解）。
+
+### 高畫質提示（實際送出高度 > 1080，房主端）
+
+只提示，不強制、不自動改檔位（ADR 0003 D5）。
+
+1. **靜態提示**（畫質面板，實際送出高度 > 1080 時顯示）：「高畫質需要房主電腦有硬體編碼。P2P 每位收看者各編碼一次，建議改用『轉發』。」P2P 模式且在線收看者 ≥ 2 人時以警告樣式顯示。
+2. **位元率提示**：實際送出高度 > 1440（`HIGH_RESOLUTION_HINT_ABOVE_HEIGHT`）且實際位元率（`EncodingTarget.maxBitrate`）< 25 Mbps（`HIGH_RESOLUTION_BITRATE_HINT`）時，面板提示「4K 建議 25 Mbps 以上」。
+3. **編碼跟不上**（直播中、依 §8 房主統計）：任一 video sender **連續 10 秒**符合下列任一條件，就在畫質按鈕旁與面板內提示「房主電腦編碼跟不上，建議調低解析度或改用轉發」：
+   - `qualityLimitationReason === 'cpu'`；
+   - 送出 FPS 低於目標的 70%。目標是 `maxFramerate`，原片 FPS 時用片源 FPS（`track.getSettings().frameRate`），兩者都量不到就不判斷這條。
+   條件連續 10 秒不成立、停播或換畫質時清除提示。只看 video；P2P 有多位收看者時任一人符合即算。
+- 不能用 `getStats()` 的 `encoderImplementation` 或 `mediaCapabilities.encodingInfo()` 判斷是否為硬體編碼：前者只在頁面有鏡頭／麥克風權限時才提供，後者在 M1 硬體 H.264 上仍回 `powerEfficient: false`（ADR 0003 實測 1）。
 - 音訊：Opus，`maxBitrate` 128 kbps，關閉 `echoCancellation` / `noiseSuppression` / `autoGainControl`（這些是給麥克風用的）。
 
 ### P2P 總頻寬保護
 
 - 一般 3 位收看者，上限 7 位。
 - 預估總上傳量 = 實際位元率（`EncodingTarget.maxBitrate`）× 收看人數；超過 60 Mbps 時提示房主調低位元率或改用「轉發」模式，但不強制。
+- 轉發模式只上傳一路、只編碼一次，與人數無關。Cloudflare Realtime 文件沒有寫單一 track 的位元率或解析度上限；計費只算 Cloudflare 送出的流量（4K 25 Mbps 約每位收看者每小時 11 GB）。見 ADR 0003 實測 4。
 
 ### 實作位置
 
-- 編碼參數、codec 偏好：`features/transport/common/encoding.ts`（`applyVideoEncoding`、`applyAudioEncoding`、`applyCodecPreferences`、`preferredVideoCodecs`／`preferredAudioCodecs`）。
+- 編碼參數、codec 偏好：`features/transport/common/encoding.ts`（`applyVideoEncoding`、`applyAudioEncoding`、`applyCodecPreferences`、`preferredVideoCodecs`／`preferredAudioCodecs`）。縮放與降級策略的純函式在 shared 的 `videoEncodingPolicy`／`sentVideoHeight`，p2p／relay 都經由 `applyVideoEncoding` 套用。
 - 總頻寬預估：`features/transport/common/stats.ts`（`estimateTotalUploadBitrate`、`shouldWarnTotalUpload`）。
-- 畫質檔位、預設值與解析：`packages/shared/src/quality.ts`（`DEFAULT_QUALITY`、`resolveQuality`、`estimateSourceBitrate`）；檔位常數與 schema 在 `schemas/common.ts`（`RESOLUTION_STEPS`、`BITRATE_STEPS`、`FRAMERATE_STEPS`、`qualitySchema`）。
+- 畫質檔位、預設值與解析：`packages/shared/src/quality.ts`（`DEFAULT_QUALITY`、`resolveQuality`、`estimateSourceBitrate`、`videoEncodingPolicy`、`sentVideoHeight`、`MAINTAIN_RESOLUTION_ABOVE_HEIGHT`、`HIGH_RESOLUTION_*`）；檔位常數與 schema 在 `schemas/common.ts`（`RESOLUTION_STEPS`、`BITRATE_STEPS`、`FRAMERATE_STEPS`、`qualitySchema`）。
 
 ## 3. P2P 模式（`features/transport/p2p/`）
 
@@ -194,7 +211,7 @@ Windows、多位收看者、實際送滿 8 Mbps、分頁在背景時的表現列
 以下都是踩過的坑（見 AGENTS.md「影片與 WebRTC」），GPT 實作 p2p/ 時照做，不要猜：
 
 1. **codec 優先 H.264**：`addTransceiver` 之後用 `common/encoding.ts` 的 `applyCodecPreferences(transceiver, options.getCodecCapabilities(transceiver.kind))`（H.264 → VP8），音訊只送 Opus。capabilities 由注入的 `getCodecCapabilities` 提供（預設 `browserCodecCapabilities`），測試可注入假的。收看端（尤其 Android）不一定能解 HEVC；房主端解碼後已重新編碼，送出要選 H.264。
-2. **4K 要縮放**：`applyVideoEncoding()` 會設 `scaleResolutionDownBy = max(1, sourceHeight / targetHeight)`。4K 片源不設會以 4K 編碼，頻寬和 CPU 爆掉。
+2. **4K 要縮放**：`applyVideoEncoding()` 依 §2 的 `videoEncodingPolicy` 設 `scaleResolutionDownBy` 與 `degradationPreference`（`targetHeight` 為 null 時不縮放）。4K 片源選 1080P 以下卻不縮放，會以 4K 編碼，頻寬和 CPU 爆掉。
 3. **片源**：T-106 負責擷取與停止 capture track。換片與重播更新各 kind 的 sender，晚加入的成員也要取得最新 tracks、畫質與縮放（§1、§9）。
 4. **音訊不要開 `echoCancellation`／`noiseSuppression`／`autoGainControl`**：那是給麥克風用的，會修壞電影音效。captureStream 的軌道預設就是關的；`applyAudioEncoding()` 只設 maxBitrate，不要再動這三個。
 5. **每次建連線前取 ICE**：`common/ice.ts` 的 `fetchIceServers(roomId, token)`（或注入的 `options.fetchIceServers`）。TURN 憑證短效，不要快取。
@@ -290,6 +307,7 @@ Windows、多位收看者、實際送滿 8 Mbps、分頁在背景時的表現列
 - 每 2 秒用 `common/stats.ts` 的 `StatsSampler(getStats, direction)` 取樣。房主方向 `"send"` 讀 `outbound-rtp.bytesSent`，收看者方向 `"receive"` 讀 `inbound-rtp.bytesReceived`。碼率依同一 RTP id 算相鄰兩次的位元組差，再加總影音。
 - `rttMs` 取 `transport.selectedCandidatePairId` 指向的 candidate-pair 的 `currentRoundTripTime`，由秒換算成毫秒。缺少 ID、找不到對應的 pair 或沒有 RTT，就**省略欄位**。其他 succeeded pair 的 RTT 不代表這條連線。
 - 房主的 `packetLoss` 取自對端回報的 `remote-inbound-rtp`（`fractionLost` 或足以計算遺失率的封包統計）。收看者以本地 `inbound-rtp` 的 `packetsLost` 與 `packetsReceived` 計算。負的 `packetsLost` 夾到 0，遺失率夾在 0～1。缺少該方向的資料或無法計算就省略欄位。有資料且算出 0 時保留 0。
+- **房主方向另外回報 video 編碼狀態**（§2「編碼跟不上」用，只在房主本機使用，**不送進 `member:status`**）：取 video `outbound-rtp` 的 `frameHeight`、`framesPerSecond`、`qualityLimitationReason`（`'none' | 'cpu' | 'bandwidth' | 'other'`）。同一 sender 有多個 video `outbound-rtp` 時取 `frameHeight` 最大者。欄位缺值就省略。收看者方向不提供這三個欄位。
 - **收看者的房間層**每 5 秒以 `member:status` 送自己的 `state` 與有值的統計欄位。伺服器只轉給房主，供成員列表顯示。
 
 ## 9. 傳輸層契約（`features/transport/`）
@@ -362,7 +380,15 @@ interface TransportSignal {
 ### 共用型別
 
 ```ts
-type TransportStats = { bitrateKbps: number; rttMs?: number; packetLoss?: number }; // packetLoss 0–1
+type TransportStats = {
+  bitrateKbps: number;
+  rttMs?: number;
+  packetLoss?: number; // 0–1
+  // 以下只在房主方向（"send"）提供，來源見 §8；收看者不送進 member:status（T-136）。
+  frameHeight?: number;
+  framesPerSecond?: number;
+  qualityLimitationReason?: "none" | "cpu" | "bandwidth" | "other";
+};
 type TransportErrorCode =
   | "ICE_UNAVAILABLE" | "SIGNAL_ERROR" | "PEER_FAILED" | "TRACK_ERROR"
   | "RELAY_FAILED" | "STREAM_NOT_LIVE" | "RELAY_UNAVAILABLE";

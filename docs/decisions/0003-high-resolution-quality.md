@@ -1,6 +1,6 @@
 # ADR 0003：畫質支援 1080P 以上（1440P／2160P／原片解析度）
 
-- 狀態：**草稿，等待使用者同意**（T-136）
+- 狀態：已採用（T-136；使用者 2026-11-26 同意 D1～D6，D6-4 選擇升版）
 - 日期：2026-11-26
 - 相關：streaming.md §2、protocol.md `Quality`、ADR 0002
 
@@ -79,7 +79,7 @@ P2P 是 mesh，每個 sender 各有一個編碼器。同一條 4K track 送給 N
 - 送出的是 H.264 4K（level 5.1 等級的資料量），但 Chrome 在 SDP 宣告的 `profile-level-id` 通常是 level 3.1。Mac 收看端實測可以正常硬體解碼。
 - Windows（D3D11）與 Android（MediaCodec）能否解 4K H.264，依 GPU 或 SoC 而定，**本機無法驗證**，列入 T-113 人工驗收。沒有 simulcast，收看端無法自行降畫質。這也是「預設維持 1080P、高畫質由房主自己選」的理由。
 
-## 決定（草案，括號內為建議）
+## 決定
 
 ### D1. 解析度檔位
 
@@ -96,7 +96,7 @@ P2P 是 mesh，每個 sender 各有一個編碼器。同一條 4K track 送給 N
 - 實測 H.264 4K30 在 30 Mbps 已經沒有頻寬或 CPU 限制。50 Mbps 足以涵蓋 4K60，再往上只會讓上傳先塞爆。
 - 不自動連動：選 2160P 時位元率不會自己改。面板提示「4K 建議 25 Mbps 以上」。
 
-### D3. 降級策略（**需要使用者選擇**）
+### D3. 降級策略（使用者選 A）
 
 依**實際送出高度**決定。實際送出高度 = `min(片源高度, 目標高度)`；`'source'` 時為片源高度。
 
@@ -110,7 +110,7 @@ P2P 是 mesh，每個 sender 各有一個編碼器。同一條 4K track 送給 N
 
 維持 **H.264 優先 → VP8**，高畫質不改用 VP9／AV1／H.265（理由見實測 1、5）。
 
-### D5. 房主負擔與 P2P（**需要使用者選擇**）
+### D5. 房主負擔與 P2P（使用者選「只提示，不強制」，含即時提示）
 
 - **建議**：**不強制**。延續現行「P2P 總頻寬超過提醒線時提示、不強制」的原則，另外加兩種提示：
   1. **靜態提示**（畫質面板）：實際送出高度 > 1080 時顯示「高畫質需要房主電腦有硬體編碼。P2P 每位收看者各編碼一次，建議改用『轉發』」。在 P2P 模式且有 2 位以上收看者時要更醒目。
@@ -133,12 +133,12 @@ P2P 是 mesh，每個 sender 各有一個編碼器。同一條 4K track 送給 N
    - 不在房間層先把「原片」換成片源高度，原因是：換片時傳輸層會用新 track 的高度、配上舊的目標高度重算縮放（streaming.md §9）。例如從 1080P 片換到 4K 片，若目標高度已被換成 1080，在房間層重新解析之前會先被縮到 1080。
    - `applyVideoEncoding` 依 D3 從 `(sourceHeight, targetHeight)` 算出 `scaleResolutionDownBy` 與 `degradationPreference`。純函式放 `packages/shared`（或 `source-check.ts` 的 `computeScaleDownBy` 旁），p2p／relay 共用。**`p2p/` 不需要改程式**。
 3. **房主端 `TransportStats` 加選填欄位**（D5 即時提示用，只在房主本機使用，不進協定）：`frameHeight?`、`framesPerSecond?`、`qualityLimitationReason?: 'none' | 'cpu' | 'bandwidth' | 'other'`。取自 video `outbound-rtp`，缺值就省略。依 ownership.md，傳輸層介面變動需要雙方確認；`p2p/` 若已經用 `common/stats.ts` 取樣，就只需要改 common。
-4. **舊版客戶端相容（需要使用者選擇）**：`qualitySchema` 是 `strictObject` 加 literal。舊分頁收到 `height: 2160` 的 `room:snapshot`／`room:updated` 會解析失敗，`lib/signal.ts` 只 `console.warn` 就丟掉。結果是：
+4. **舊版客戶端相容（使用者選升版：`PROTOCOL_VERSION = 2`）**：`qualitySchema` 是 `strictObject` 加 literal。舊分頁收到 `height: 2160` 的 `room:snapshot`／`room:updated` 會解析失敗，`lib/signal.ts` 只 `console.warn` 就丟掉。結果是：
    - 舊版收看者在 4K 房間進房時拿不到 snapshot，停在連線中。
    - 已在房內的舊分頁收不到畫質更新。
    - 伺服器端讀取時一律經過 `parseStoredQuality`，退版時新檔位回到預設畫質，不會壞。
-   - **建議**：協定仍是「第一版（尚未正式發布）」，依 protocol.md 規則**不升版**，在版本紀錄補一句；部署後請大家重新整理。
-   - 替代方案：把 `PROTOCOL_VERSION` 升到 2。舊分頁驗證時會收到 `4400`，提示「重新整理頁面」，不會卡住。代價是違反「發布前不升版」的規則。
+   - **決定**：把 `PROTOCOL_VERSION` 升到 2。舊分頁重新驗證時收到 `4400`，提示「重新整理頁面」，不會卡住。這是「發布前不升版」規則的例外，理由是舊分頁會靜默卡住。
+   - 未採用：維持第一版，只在版本紀錄補一句，部署後請大家重新整理。
 
 ## 待驗證（第三階段與 T-113）
 

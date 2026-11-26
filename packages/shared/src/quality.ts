@@ -12,8 +12,11 @@ export const DEFAULT_QUALITY: Quality = {
 
 /** 送給 sender 的編碼目標（streaming.md §2「解析成編碼參數」）。 */
 export type EncodingTarget = {
-  /** 目標高度；片源比較矮時不放大（scaleResolutionDownBy 最小為 1）。 */
-  targetHeight: number;
+  /**
+   * 目標高度；片源比較矮時不放大（scaleResolutionDownBy 最小為 1）。
+   * null：「原片」解析度，不縮放。傳輸層換片時依新 track 的高度重算（streaming.md §9）。
+   */
+  targetHeight: number | null;
   /** bps。 */
   maxBitrate: number;
   /** null：不限制，沿用片源幀率。 */
@@ -50,12 +53,61 @@ export function resolveQuality(
   sourceBitrate: number | null,
 ): EncodingTarget {
   return {
-    targetHeight: quality.height,
+    targetHeight: quality.height === "source" ? null : quality.height,
     maxBitrate:
       quality.bitrate === "source"
         ? sourceBitrateOrFallback(sourceBitrate)
         : quality.bitrate,
     maxFramerate: quality.fps === "source" ? null : quality.fps,
+  };
+}
+
+/**
+ * 實際送出的高度超過此值時，編碼改用 `maintain-resolution`（ADR 0003 D3）：
+ * 房主選了高畫質，頻寬或 CPU 不夠時改掉幀，不降解析度。
+ */
+export const MAINTAIN_RESOLUTION_ABOVE_HEIGHT = 1080;
+
+/** 實際送出的高度超過此值、位元率低於 HIGH_RESOLUTION_BITRATE_HINT 時，畫質面板提示調高位元率。 */
+export const HIGH_RESOLUTION_HINT_ABOVE_HEIGHT = 1440;
+export const HIGH_RESOLUTION_BITRATE_HINT = 25_000_000;
+
+/**
+ * 實際送出的高度：不超過片源（不放大）；`targetHeight` 為 null（原片）時就是片源高度。
+ * 片源高度未知（0 或負值）時回 `targetHeight ?? 0`。
+ */
+export function sentVideoHeight(
+  sourceHeight: number,
+  targetHeight: number | null,
+): number {
+  if (!(sourceHeight > 0)) return targetHeight ?? 0;
+  return targetHeight === null
+    ? sourceHeight
+    : Math.min(sourceHeight, targetHeight);
+}
+
+export type VideoEncodingPolicy = {
+  /** ≥ 1；原片或片源較矮時為 1。 */
+  scaleResolutionDownBy: number;
+  degradationPreference: "maintain-framerate" | "maintain-resolution";
+};
+
+/** 依片源高度與目標高度算出縮放與降級策略（streaming.md §2，ADR 0003 D3）。p2p／relay 共用。 */
+export function videoEncodingPolicy(
+  sourceHeight: number,
+  targetHeight: number | null,
+): VideoEncodingPolicy {
+  const scaleResolutionDownBy =
+    targetHeight === null || !(sourceHeight > 0)
+      ? 1
+      : Math.max(1, sourceHeight / targetHeight);
+  return {
+    scaleResolutionDownBy,
+    degradationPreference:
+      sentVideoHeight(sourceHeight, targetHeight) >
+      MAINTAIN_RESOLUTION_ABOVE_HEIGHT
+        ? "maintain-resolution"
+        : "maintain-framerate",
   };
 }
 

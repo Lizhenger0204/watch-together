@@ -63,7 +63,7 @@ describe("parseClientMessage：不合法訊息", () => {
       "解析度不在檔位內",
       JSON.stringify({
         type: "room:update",
-        quality: { height: 2160, bitrate: 8_000_000, fps: 30 },
+        quality: { height: 1200, bitrate: 8_000_000, fps: 30 },
       }),
     ],
     [

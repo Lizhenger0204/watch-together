@@ -26,12 +26,14 @@ export type ErrorCode = z.infer<typeof errorCodeSchema>;
 export const modeSchema = z.enum(["p2p", "relay"]);
 export type Mode = z.infer<typeof modeSchema>;
 
-/** 畫質三條滑桿的檔位（streaming.md §2）。`"source"` 代表沿用原片。 */
-export const RESOLUTION_STEPS = [720, 900, 1080] as const;
+/** 畫質三條滑桿的檔位（streaming.md §2）。`"source"` 代表沿用原片（解析度：不縮放）。 */
+export const RESOLUTION_STEPS = [720, 900, 1080, 1440, 2160, "source"] as const;
 export const BITRATE_STEPS = [
   8_000_000,
   10_000_000,
   15_000_000,
+  25_000_000,
+  40_000_000,
   "source",
 ] as const;
 export const FRAMERATE_STEPS = [24, 30, 60, "source"] as const;
