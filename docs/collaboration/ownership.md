@@ -24,7 +24,7 @@
 | 前端頁面與 UI | `apps/web/src/pages/`、`features/room/`、`features/player/`、`lib/`、共用 UI 元件 | Claude | 唯讀；`features/source/` 的 UI 元件由 GPT 做，Claude 負責擺進頁面 |
 | E2E | `e2e/` | GPT | Claude 可新增傳輸相關案例，需 review |
 | Scaffold、工具鏈、CI、部署 | 根目錄設定檔、`.github/`、`wrangler.toml`、部署文件 | GPT | 唯讀 |
-| 協作文件 | `docs/collaboration/` | 協調者（GPT 監工），只在 `main` 上改 | agent 在分支中不改；需求寫在 commit 訊息或回報 |
+| 協作文件 | `docs/collaboration/` | 協調者（主對話），只在 `main` 上改 | agent 在分支中不改；需求寫在 commit 訊息或回報 |
 
 ### 模組之間的介面（由 Claude 提出，變動需雙方確認）
 
@@ -36,13 +36,14 @@
 
 | 對話 | 角色 | 工作位置 |
 | --- | --- | --- |
-| **GPT 監工**（Claude，獨立對話） | **唯一的協調者**：派 GPT 子對話、審查 GPT 分支、派 GPT 審查 Claude 分支、合併到 `main`、更新 `tasks.md` | 主目錄 `main` |
-| **Claude 實作**（Claude，主對話） | 做看板上負責人為 Claude 的任務；維護規範文件（隨自己的分支提交） | `../project-claude` worktree，分支 `claude/*` |
-| **GPT 子對話**（Codex，由監工開） | 做負責人為 GPT 的任務，或審查 Claude 的分支 | 各自的 worktree，分支 `gpt/*` |
+| **主對話**（Claude，使用者直接對話的那一個） | **協調者**：派子對話、送審、依審查結果或使用者指示合併到 `main`、更新 `docs/collaboration/`；也做負責人為 Claude 的任務、維護規範文件 | 主目錄 `main`；自己的實作另開 worktree，分支 `claude/*` |
+| **實作子對話**（Claude 或 Gemini，由主對話或使用者開） | 做看板上指派給它的任務 | 各自的 worktree，分支 `claude/*`、`gemini/*` |
+| **GPT 子對話**（Codex，由主對話或使用者開） | 做負責人為 GPT 的任務、code review、測試 | 各自的 worktree，分支 `gpt/*` |
 
-- 只有監工可以 commit 到 `main`。Claude 實作對話與 GPT 子對話都不直接改 `main`。
-- 兩個 Claude 對話不會自動互通：Claude 實作做完分支後由使用者告知監工；監工合併後，Claude 實作開新任務前先 `git rebase main`。
-- 監工派工時把任務改為 `DOING`；Claude 實作要開始自己的任務前，先確認看板上已是 `DOING`（或請使用者轉告監工）。
+- 沒有專門的監工對話。協調者就是主對話；使用者也可以明確指定其他對話做某次合併或更新看板。
+- 只有協調者可以 commit 到 `main`。子對話只在自己的分支 commit，不直接改 `main`、不自行合併。
+- 對話之間不會自動互通：子對話做完分支後，由使用者告知主對話（或由主對話派出的子任務直接回報）；合併後，其他分支開新任務前先 `git rebase main`。
+- 協調者派工時把任務改為 `DOING`；子對話開始前先確認看板上已是 `DOING`（或請使用者轉告主對話）。
 
 ## 交叉 Review
 

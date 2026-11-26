@@ -3,7 +3,7 @@
 ## 規則
 
 - 狀態：`TODO` → `DOING` → `REVIEW` → `DONE`（或 `BLOCKED`）。
-- **本檔只在 `main` 上由協調者（「GPT 監工」Claude 對話，見 ownership.md）修改**。agent 在自己的分支／worktree 裡不要改本檔，避免合併衝突。
+- **本檔只在 `main` 上由協調者（主對話，見 ownership.md「對話角色」）修改**。agent 在自己的分支／worktree 裡不要改本檔，避免合併衝突。
 - 派工：協調者把任務改為 `DOING` 並 commit 到 `main`，再開 worktree 交給 agent。
 - 完成：agent 把交接備註（下面四項）寫在分支最後一個 commit 的訊息內文。協調者合併時把它貼到本檔「交接備註」，狀態改 `REVIEW`；review 通過後改 `DONE`。
   1. 做了什麼（含主要檔案）
@@ -67,7 +67,6 @@
 4. 驗證方式：
 -->
 
-> 2026-11-25 注意：監工合併 T-122 時發現，有人直接在 main 工作目錄留下未提交的修改（09:03）：`apps/signal/src/config.ts` 改用 `WS_AUTH_TIMEOUT_MS`、ADR 0002 加註「ADR 0001 已刪除」、`transport/index.ts` 改了 `relayNotReady()` 的註解。監工已用 `git stash` 暫存（stash@{0}），合併後放回。`transport/index.ts` 的那一處因為 T-122 已刪掉該函式，改用 T-122 的版本；另外兩處留在工作目錄、**未提交**，等修改者走分支流程送審。**只有監工能改 main，請改在自己的分支 commit。**
 
 > 2026-11-25 使用者決定（由 Gemini 對話「登記播放器與聊天室功能需求」轉達）：
 > - 因 Claude 額度暫時不足，**T-124、T-125、T-126、T-127** 暫時改由 **Gemini** 負責執行（屬 `ownership.md` 的暫時分工調整）。

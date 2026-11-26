@@ -36,9 +36,9 @@
 ## 避坑指南
 
 ### 協作
-- **兩個 agent 不要在同一個工作目錄同時動工**。各自用自己的 git worktree／分支（`claude/*`、`gpt/*`），見 git-workflow.md。
+- **兩個 agent 不要在同一個工作目錄同時動工**。各自用自己的 git worktree／分支（`claude/*`、`gemini/*`、`gpt/*`），見 git-workflow.md。
 - **開 worktree 前先 commit**。worktree 從 commit 建立，未 commit 的規範文件不會出現在裡面。
-- **只有「GPT 監工」對話能改 `main`**（合併、更新 `tasks.md`）。其他 agent 不要在分支裡改 `tasks.md`，也不要自行合併。交接備註寫在 commit 訊息。→ ownership.md「對話角色」
+- **只有協調者（主對話）能改 `main`**（合併、更新 `docs/collaboration/`）。子對話不要在分支裡改 `tasks.md`，也不要自行合併。交接備註寫在 commit 訊息。→ ownership.md「對話角色」
 - **同時跑兩個 `pnpm dev` 會搶 port**，用 `WEB_PORT`／`SIGNAL_PORT` 錯開。
 - **不要各自定義一份 type**。前後端共用的型別、訊息、zod schema 只能放 `packages/shared`。
 - **寫新函式、新規則前，先搜專案裡有沒有現成的**（`packages/shared`、`features/transport/common/` 等）。
