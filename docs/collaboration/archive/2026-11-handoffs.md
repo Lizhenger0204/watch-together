@@ -662,3 +662,29 @@ T-118 第二輪審查（GPT ultra fast，66a7155）：第一輪 8 項中 6 項�
    - 複驗 `68cd868` 重現先鎖房、改 10 Mbps、延後畫質廣播後再改 FPS，導致位元率被覆寫回 8 Mbps。`4876045` 依序比對相符畫質的廣播，修正這個案例。`ef28baa` 同步串流規格說明。
    - `pnpm typecheck && pnpm lint && pnpm test` 通過（啟動器 2、Vitest 563、Signal 136），`pnpm e2e` 16/16 通過。另用 Chrome 和 Workers 複驗鎖房後快速調整位元率／FPS，以及 1000P 真實片源切 900P，兩條直播連線即時套用縮放。
    - 以 fast-forward 合併進 `main`（`eace58a..ef28baa`）。
+
+## 封存分工與派工決定（2026-11-24～2026-11-25，T-108～T-122 已全部 DONE）
+
+> 2026-11-24 使用者決定：T-116、T-119 改由 GPT 負責，分兩個子對話。Claude 同時進行 T-118。這是 ownership.md 中 Claude 目錄的**單次例外**，只限這兩個任務。檔案邊界如下：
+> - **T-116（`gpt/T-116-followups`）可改**：
+>   - `apps/signal/src/` 的 `room/`、`signaling/`、`runtime/`、`relay/`、`app.ts`。
+>   - `packages/shared`（若需改契約，先改 protocol.md）。
+>   - `docs/specs/protocol.md`、`room-and-invite.md` 的相關段落。
+>   - `apps/web/src/features/room/identity.ts` 及其測試。
+>   - `features/transport/common/encoding.ts` 的註解。
+>   - transport 的 rtc-fake。
+> - **T-116 不可改**：
+>   - `features/room/use-room.ts`、`room-state.ts`、`live-intent.ts`、`features/room/index.ts`、`pages/`。這些屬於 T-118。
+>   - T-119 的檔案。
+> - **T-119（`gpt/T-119-viewer-followups`）可改**：`features/room/viewer-session.ts` 及其測試、`features/player/`。
+> - **T-119 不可改**：`use-room.ts` 等 T-118 範圍。
+
+> 2026-11-24 T-109（`origin/claude/T-109-relay`，61ae89a）與 T-118（本機分支 `claude/T-118-host-transport`，6d1a837）都已完成，T-109 已和 tidy 一起合併；T-108 留下的三個問題，T-109 的回答如下：
+> - (a) 客戶端不需要，但建議伺服器在 p2p 模式回 409。
+> - (b) 真實 SFU 能否運作，列入 T-113 驗收。
+> - (c) 客戶端會先清理舊發布再送新的 POST；分頁當掉等情況留下的發布，由伺服器在新的 WHIP 登記時關閉舊發布。
+
+> 2026-11-25 使用者決定（由主對話 Claude 轉達）：
+> - P2P 基本流程已在本機實測正常。新功能不等 T-113；T-113 等部署到 Cloudflare 之後再做。
+> - 新增 T-124～T-127。T-125 會改到 `features/source`（原本是 GPT 的 UI），由 Claude 主導（後於同日暫由 Gemini 接手 T-124～T-127）。
+> - T-121、T-122 由監工派給 Claude 子對話，各自用自己的 worktree。`claude/test-session-docs`（測試對話規範）刻意先不送審，等功能全部完成後再處理。

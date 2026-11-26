@@ -49,9 +49,9 @@
 | T-129 | **RoomDO 產品競態**（從不穩定測試查出）：加入與踢人都從記憶體的 `this.room` 算出新成員清單後才交給 `saveTransition()`，提交後才更新 `this.room`。兩個操作讀到同一份舊清單時，後寫的會蓋掉先前已成功加入的席位（新成員拿到 200，卻立刻驗證失敗）。`relay-lifecycle.test.ts:440` 50 輪中失敗 2 輪。要把會改寫房間狀態的操作序列化，範圍從讀取最新狀態、計算變更，一直到提交交易、更新記憶體，並補上能穩定重現的回歸測試 | GPT | T-120 | DONE |
 | T-130 | T-121 審查遺留（前端）：重產邀請碼期間收到「同碼」的鎖房／畫質廣播後 WS 中斷，成功的 REST 新碼被捨棄（改以單調遞增 `inviteCodeVersion` 與跨分頁共用儲存排序，畫面採用有效碼後才提示成功）；`tab-lock.test.ts` 改用假時鐘，不依賴真實的 `setTimeout`；`identity.ts` 的 `comparedRooms` 在身份清除時淘汰對應項，並限制保留數量；**伺服器已配位、分頁尚未保存身份就關頁會多一席**——加入請求帶冪等鍵 `joinKey`，已更新 protocol.md、room-and-invite.md 與 shared | Claude | T-121, T-129 | DONE |
 | T-131 | T-122 審查遺留（轉發）：收看端 relay `start()` 在套用 answer 前後已失敗時要拒絕並清理（比照房主端的 `ensureNotFailed`）；`ANSWER_TIMEOUT_MS` 補上獨立斷言（改成 20 秒時測試要失敗）；E2E 若可行，加上 SFU 替身的影音流程 | Gemini | T-122 | DONE |
-| T-132 | BUG-001：房主關閉瀏覽器後自動退房；先確認斷線／重整語意並更新契約，再補心跳、生命週期與回歸測試（詳見 [bugs.md](bugs.md)） | GPT 子線程 1（使用者指定） | — | DOING |
+| T-132 | BUG-001：房主關閉瀏覽器後自動退房；先確認斷線／重整語意並更新契約，再補心跳、生命週期與回歸測試（詳見 [bugs.md](bugs.md)） | Gemini（使用者指定接手） | — | REVIEW |
 | T-133 | BUG 清單修復（詳見 [bugs.md](bugs.md)）：BUG-003 無法播放 HEVC（H.265）影片（GPT 的 `e2e/source.spec.ts` 斷言同時接受「檢查通過」與「影像無法解碼」，故測試期間未顯現）。需先收集實測環境與片源格式並排查 `features/source/` 解碼與試播流程 | GPT 子線程 3（使用者指定） | — | DOING |
-| T-134 | BUG-002：明確退房、清除身份與釋放空房；與 T-132 對齊契約並補回歸測試（詳見 [bugs.md](bugs.md)） | GPT 子線程 2（使用者指定） | T-132 契約 | DOING |
+| T-134 | BUG-002：明確退房、清除身份與釋放空房；與 T-132 對齊契約並補回歸測試（詳見 [bugs.md](bugs.md)） | Gemini（使用者指定接手） | T-132 契約 | REVIEW |
 
 可平行的組合：T-101 完成後 → T-102（Claude）∥ T-106（GPT）；T-102 完成後 → T-103、T-105（Claude，依序）∥ T-104（GPT）；T-103 完成後 → T-108、T-112（GPT）。T-115（Claude）可與 T-105／T-114 的審查同時進行；T-114 與 T-115 都合併後 → T-107（GPT）∥ T-109、T-110（Claude）。
 
@@ -67,41 +67,6 @@
 4. 驗證方式：
 -->
 
-> 2026-11-24 使用者決定：T-116、T-119 改由 GPT 負責，分兩個子對話。Claude 同時進行 T-118。這是 ownership.md 中 Claude 目錄的**單次例外**，只限這兩個任務。檔案邊界如下：
-> - **T-116（`gpt/T-116-followups`）可改**：
->   - `apps/signal/src/` 的 `room/`、`signaling/`、`runtime/`、`relay/`、`app.ts`。
->   - `packages/shared`（若需改契約，先改 protocol.md）。
->   - `docs/specs/protocol.md`、`room-and-invite.md` 的相關段落。
->   - `apps/web/src/features/room/identity.ts` 及其測試。
->   - `features/transport/common/encoding.ts` 的註解。
->   - transport 的 rtc-fake。
-> - **T-116 不可改**：
->   - `features/room/use-room.ts`、`room-state.ts`、`live-intent.ts`、`features/room/index.ts`、`pages/`。這些屬於 T-118。
->   - T-119 的檔案。
->
->   需要動到時先回報監工，交給 Claude 併進 T-118，或之後再處理。
-> - **T-119（`gpt/T-119-viewer-followups`）可改**：`features/room/viewer-session.ts` 及其測試、`features/player/`。
-> - **T-119 不可改**：`use-room.ts` 等 T-118 範圍，需要時一樣回報。
-
-> 2026-11-24 T-109（`origin/claude/T-109-relay`，61ae89a）與 T-118（本機分支 `claude/T-118-host-transport`，6d1a837，尚未推上 origin）都已完成，兩者都送 GPT 審查。T-109 已和 tidy 一起合併；dispatcher 改由 T-122 修完審查遺留問題後再接上，這之前轉發一律回 RELAY_UNAVAILABLE。T-118 待審查。
->
-> T-109 回報的伺服器端問題開為 T-120（GPT），等 T-116 合併後再派，因為兩者都會改 `apps/signal/src/relay/`。T-108 留下的三個問題，T-109 的回答如下：
-> - (a) 客戶端不需要，但建議伺服器在 p2p 模式回 409。
-> - (b) 真實 SFU 能否運作，列入 T-113 驗收。
-> - (c) 客戶端會先清理舊發布再送新的 POST；分頁當掉等情況留下的發布，由伺服器在新的 WHIP 登記時關閉舊發布。
-
-> 2026-11-25 使用者決定（由主對話 Claude 轉達）：
-> - P2P 基本流程已在本機實測正常。新功能不等 T-113；T-113 等部署到 Cloudflare 之後再做（Cloudflare 帳號與網域由使用者另開對話處理）。
-> - 新增 T-124～T-127。建議順序：T-122、T-121、T-124 平行 → T-125 → T-126、T-127 平行；T-113 在部署之後。
-> - T-125 會改到 `features/source`（原本是 GPT 的 UI），由 Claude 主導，這是使用者核可的例外。
-> - T-121、T-122 由監工派給 Claude 子對話，各自用自己的 worktree。檔案邊界：
->   - **T-122**（`claude/T-122-relay-integration`）可改 `features/transport/relay/`、`features/transport/index.ts`、`features/room/viewer-session.ts`（只限 WHEP 409 那一項）。
->   - **T-121**（`claude/T-121-frontend-followups`）可改 `features/room/`（不含 `viewer-session.ts`）、`lib/`、`pages/`，以及 streaming.md §9 的那一句。
->   - 兩者都不改 `apps/signal/`、tasks.md、main。
-> - `claude/test-session-docs`（測試對話規範）刻意先不送審，等功能全部完成後再處理。
-
-
-
 > 2026-11-25 注意：監工合併 T-122 時發現，有人直接在 main 工作目錄留下未提交的修改（09:03）：`apps/signal/src/config.ts` 改用 `WS_AUTH_TIMEOUT_MS`、ADR 0002 加註「ADR 0001 已刪除」、`transport/index.ts` 改了 `relayNotReady()` 的註解。監工已用 `git stash` 暫存（stash@{0}），合併後放回。`transport/index.ts` 的那一處因為 T-122 已刪掉該函式，改用 T-122 的版本；另外兩處留在工作目錄、**未提交**，等修改者走分支流程送審。**只有監工能改 main，請改在自己的分支 commit。**
 
 > 2026-11-25 使用者決定（由 Gemini 對話「登記播放器與聊天室功能需求」轉達）：
@@ -114,3 +79,15 @@
 2. 介面變動：WS 新增 `chat:send`／`chat:message`（`PROTOCOL_VERSION=1`）；無新增依賴。
 3. 已知限制：限流在 `RoomDO` 記憶體；iOS Safari 原生全螢幕無自訂彈幕層；前端保留近期 200 則、離房清空。
 4. 驗證：rebase 最新 `main` 後 `pnpm typecheck && pnpm lint && pnpm test && pnpm build` 全綠（web+shared 579、signal 146）。
+
+### T-132（Gemini，2026-11-26，已合併 `64d7e2d`..`00b6d73`，第一輪 Claude Opus 5.5 審查已修正）
+1. 做了什麼：更新 `protocol.md`、`room-and-invite.md`、`development.md` 與 `packages/shared/src/constants.ts`（`WS_HEARTBEAT_TIMEOUT_MS = 130_000`）；實作伺服器端 WebSocket 心跳逾時（`4410`、自判定逾時當下起算離線）、前端 `visibilitychange` 補送 `ping`、房主離線滿 100 秒自動移除席位並撤銷 token／轉發發布（保留有收看者的聊天室、不再接受新成員加入，無成員則立即關房）、收看端「房主已離開房間」提示與 `host-lifecycle.test.ts` 回歸測試。
+2. 介面變動：WS 新增關閉碼 `4410`（`heartbeat_timeout`）；`wrangler.toml`（頂層與 `env.production`）新增 `ROOM_HOST_OFFLINE_TTL_MS=100000`、`ROOM_IDLE_TTL_MS=100000`；`PROTOCOL_VERSION=1`。
+3. 已知限制：升級前已連線之舊 socket 會在下次訊息／alarm 補齊心跳紀錄。
+4. 驗證：合併後 `pnpm typecheck && pnpm lint && pnpm test && pnpm build` 全綠。
+
+### T-134（Gemini，2026-11-26，已合併 `37d8bfd`..`fc2151d`，第一輪 GPT-6.2 Sol 審查已修正）
+1. 做了什麼：新增 `POST /api/rooms/:roomId/leave`（`204`）明確退房、無人立即釋出空房（邀請碼、轉發資源、DO storage）與 `InviteDirectoryDO` 一次性分批巡檢上版殘留空房／孤兒邀請碼（`legacy-sweep.ts`、`RoomDO.reconcileLegacyRoom()`、建房預留碼保護與 `code:`/`rotation:` 雙階段分批）；前端抽離 `use-leave-room.ts` 於 `room:join` 同源鎖內條件清除身份並抑制回應遺失時的 WS `4401` 跳轉；新增 `leave.test.ts`、`legacy-sweep.test.ts`、`use-leave-room.test.ts`、`e2e/join-room.ts`、`e2e/room-leave.spec.ts`。
+2. 介面變動：新增 REST `POST /api/rooms/:roomId/leave`（成員歸零時 WS 收到 `room:closed` 與 `4001`，尚有成員時 `4401`）；`GET /api/health` 非同步確認啟動上版空房一次性巡檢。
+3. 已知限制：部署新版本至 Cloudflare 後，呼叫一次 `GET /api/health`（或等目錄喚醒）即於約 5 秒後自動分批清理上版殘留空房。
+4. 驗證：合併後 `pnpm typecheck && pnpm lint && pnpm test && pnpm build` 與 Playwright E2E（`room-leave.spec.ts`、`p2p-recovery.spec.ts` 10/10）全綠。
