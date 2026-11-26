@@ -254,6 +254,7 @@ describe("直播中切模式", () => {
     expect(t.session.getView()).toEqual({
       pendingQuality: null,
       encoderLagging: false,
+      safariMode: false,
       intent: true,
       phase: "starting",
       error: null,
@@ -265,6 +266,7 @@ describe("直播中切模式", () => {
     expect(t.session.getView()).toEqual({
       pendingQuality: null,
       encoderLagging: false,
+      safariMode: false,
       intent: true,
       phase: "live",
       error: null,
@@ -333,6 +335,7 @@ describe("直播中切模式", () => {
     expect(t.session.getView()).toEqual({
       pendingQuality: null,
       encoderLagging: false,
+      safariMode: false,
       intent: true,
       phase: "waiting",
       error: null,
@@ -362,6 +365,7 @@ describe("直播中切模式", () => {
     expect(t.session.getView()).toEqual({
       pendingQuality: null,
       encoderLagging: false,
+      safariMode: false,
       intent: false,
       phase: "idle",
       error: null,
@@ -382,6 +386,7 @@ describe("直播中切模式", () => {
     expect(t.session.getView()).toEqual({
       pendingQuality: null,
       encoderLagging: false,
+      safariMode: false,
       intent: true,
       phase: "waiting",
       error: null,
@@ -410,6 +415,7 @@ describe("直播中切模式", () => {
     expect(t.session.getView()).toEqual({
       pendingQuality: null,
       encoderLagging: false,
+      safariMode: false,
       intent: true,
       phase: "waiting",
       error: null,

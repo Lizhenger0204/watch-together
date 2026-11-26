@@ -16,6 +16,11 @@ interface Reception {
   sessionId?: string;
   pc?: RtcPeerConnection;
   answered: boolean;
+  /**
+   * 在已連通的同一條連線上重新協商（房主切換 Safari 模式）：媒體沒有中斷，
+   * 新 answer 送出前 ICE 仍連通就維持 playing；真正斷線時照常回報 connecting。
+   */
+  continuing: boolean;
 }
 
 export const createP2PViewerTransport: CreateViewerTransport = (options) => {
@@ -71,7 +76,11 @@ export const createP2PViewerTransport: CreateViewerTransport = (options) => {
     } else if (pc.iceConnectionState === "failed") {
       // Keep the receivers alive: the host may still send a restart offer on this PC.
       setState("failed");
-    } else if (isIceConnected(pc) && reception.answered) setState("playing");
+    } else if (
+      isIceConnected(pc) &&
+      (reception.answered || reception.continuing)
+    )
+      setState("playing");
     else setState("connecting");
   }
 
@@ -137,14 +146,16 @@ export const createP2PViewerTransport: CreateViewerTransport = (options) => {
       closeReception();
       clearTracks();
     }
-    const reception = {
+    const pc = reuse ? previous.pc : undefined;
+    const reception: Reception = {
       round,
       sessionId,
-      pc: reuse ? previous.pc : undefined,
+      pc,
       answered: false,
+      continuing: Boolean(pc && isIceConnected(pc)),
     };
     current = reception;
-    setState("connecting");
+    if (!reception.continuing) setState("connecting");
     if (round.active) void answer(reception, data.sdp);
   }
 

@@ -54,6 +54,7 @@ describe("開播", () => {
     expect(t.session.getView()).toEqual({
       pendingQuality: null,
       encoderLagging: false,
+      safariMode: false,
       intent: true,
       phase: "live",
       error: null,
@@ -300,6 +301,7 @@ describe("開播", () => {
       expect(t.session.getView()).toEqual({
         pendingQuality: null,
         encoderLagging: false,
+        safariMode: false,
         intent: false,
         phase: "idle",
         error: "無法開始直播：轉發模式目前無法使用，請房主改用「P2P 直連」。",

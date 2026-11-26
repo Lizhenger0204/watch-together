@@ -170,6 +170,9 @@ export class FakeTransport implements HostTransport {
   removePeer(memberId: string) {
     this.log.push(`removePeer ${memberId}`);
   }
+  setSafariMode(on: boolean) {
+    this.log.push(`setSafariMode ${on}`);
+  }
   onState(handler: (state: HostTransportState) => void) {
     this.stateHandlers.add(handler);
     return () => void this.stateHandlers.delete(handler);

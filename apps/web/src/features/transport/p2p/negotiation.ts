@@ -133,12 +133,17 @@ export class Negotiation {
     pc: RtcPeerConnection,
     description: RtcSessionDescription,
     beforeSend: () => void,
+    wireSdp?: string,
   ) {
     this.local = new IceCredentials(description.sdp);
     await pc.setLocalDescription(description);
     if (!this.active) return;
     beforeSend();
-    this.send({ ...description, negotiationId: this.id });
+    this.send({
+      ...description,
+      sdp: wireSdp ?? description.sdp,
+      negotiationId: this.id,
+    });
     this.localSent = true;
     for (const candidate of this.outgoing.splice(0)) this.sendIce(candidate);
   }

@@ -26,6 +26,7 @@ import {
   KINDS,
   NO_TRACKS,
   browserTimers,
+  sameHostView,
   disconnected,
   onlineViewers,
   readable,
@@ -139,6 +140,7 @@ export class HostSession extends HostSessionFlows {
       error: null,
       pendingQuality: null,
       encoderLagging: false,
+      safariMode: false,
     };
   }
 
@@ -218,6 +220,10 @@ export class HostSession extends HostSessionFlows {
     this.error = null;
     this.qualityRequests.request(quality);
     this.publish();
+  }
+
+  protected resetEncoderHealth(): void {
+    this.encoderHealth.reset();
   }
 
   clearError(): void {
@@ -556,17 +562,9 @@ export class HostSession extends HostSessionFlows {
       error: this.error,
       pendingQuality: this.qualityRequests.pending,
       encoderLagging: this.encoderHealth.lagging,
+      safariMode: this.safariMode,
     };
-    const prev = this.view;
-    if (
-      prev.intent === next.intent &&
-      prev.phase === next.phase &&
-      prev.error === next.error &&
-      prev.pendingQuality === next.pendingQuality &&
-      prev.encoderLagging === next.encoderLagging
-    ) {
-      return;
-    }
+    if (sameHostView(this.view, next)) return;
     this.view = next;
     this.listeners.forEach((listener) => listener());
   }

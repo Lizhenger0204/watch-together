@@ -1,5 +1,8 @@
 import { describe, expect, test, vi } from "vitest";
-import type { FakeRtcPeerConnection } from "../common/rtc-fake";
+import {
+  createFakePeerConnectionFactory,
+  type FakeRtcPeerConnection,
+} from "../common/rtc-fake";
 import { DELETE_RETRY_DELAYS_MS } from "./http";
 import {
   answerSdp,
@@ -48,6 +51,14 @@ describe("WHEP 拉取", () => {
       ["video", "recvonly"],
       ["audio", "recvonly"],
     ]);
+    const [videoTransceiver, audioTransceiver] = pc.getTransceivers();
+    expect(videoTransceiver?.codecPreferences.map((c) => c.mimeType)).toEqual([
+      "video/H264",
+      "video/VP8",
+    ]);
+    expect(audioTransceiver?.codecPreferences.map((c) => c.mimeType)).toEqual([
+      "audio/opus",
+    ]);
     const post = http().lastPost();
     expect(post.url).toBe(`/api/rooms/${ROOM}/whep`);
     expect(post.headers.authorization).toBe(`Bearer ${TOKEN}`);
@@ -59,6 +70,31 @@ describe("WHEP 拉取", () => {
     await flush();
     expect(started).toMatchObject({ done: true, error: undefined });
     expect(pc.remoteDescription).toEqual({ type: "answer", sdp: answerSdp });
+  });
+
+  test("收看端瀏覽器拒絕 setCodecPreferences 時降級沿用預設，不中斷 WHEP 拉流", async () => {
+    const { factory, connections } = createFakePeerConnectionFactory();
+    const viewerWithThrowingPrefs = makeViewer({
+      createPeerConnection: (config) => {
+        const pc = factory(config);
+        const origAdd = pc.addTransceiver.bind(pc);
+        pc.addTransceiver = (...args) => {
+          const transceiver = origAdd(...args);
+          vi.spyOn(transceiver, "setCodecPreferences").mockImplementation(
+            () => {
+              throw new DOMException("unsupported", "InvalidModificationError");
+            },
+          );
+          return transceiver;
+        };
+        return pc;
+      },
+    });
+    const started = settle(viewerWithThrowingPrefs.viewer.start());
+    await gather(connections);
+    created(http().lastPost());
+    await flush();
+    expect(started).toMatchObject({ done: true, error: undefined });
   });
 
   test("ontrack 用 event.track 加進固定的 remoteStream；ICE 連通後 playing", async () => {

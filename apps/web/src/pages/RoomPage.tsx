@@ -199,7 +199,9 @@ function HostView({
                       mode={view.room.mode}
                       viewers={viewers}
                       encoderLagging={session.encoderLagging}
+                      safariMode={session.safariMode}
                       onChange={(quality) => host.setQuality(quality)}
+                      onSafariModeChange={(on) => host.setSafariMode(on)}
                     />
                   ),
                 }
