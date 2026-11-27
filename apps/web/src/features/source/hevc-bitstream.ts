@@ -477,12 +477,16 @@ export function inspectSampleParameterSets(
       reachedVcl = true;
       break;
     }
-    // 視窗已讀到非 VCL 標頭但宣告長度超出視窗：列為證據不足，不可當成沒有參數集。
+    // 視窗已讀到非 VCL 標頭但宣告長度超出視窗：
+    // 若本身是 VPS/SPS，或非截斷視窗下（樣本本身損毀），列為未解析 SPS；
+    // 若是截斷探測視窗切在一般非 VCL（如大型 SEI）中段，則透過 windowExhaustedBeforeVcl 擋下大型檔修補並保留診斷。
     if (dataStart + nalLen > sample.length) {
       if (nalType === HEVC_NAL_VPS || nalType === HEVC_NAL_SPS) {
         hasInBandParameterSets = true;
+        hasUnparsedSps = true;
+      } else if (!isTruncatedWindow) {
+        hasUnparsedSps = true;
       }
-      hasUnparsedSps = true;
       break;
     }
     if (nalType === HEVC_NAL_VPS) {
@@ -501,13 +505,13 @@ export function inspectSampleParameterSets(
     offset = dataStart + nalLen;
   }
 
-  // 若前置非 VCL 剛好填滿截斷讀取視窗而尚未抵達 VCL，或非 VCL 後方殘留不完整標頭，一律視為證據不足。
   const windowExhaustedBeforeVcl =
     !reachedVcl && isTruncatedWindow && sample.length > 0;
   if (
     offset > 0 &&
     !reachedVcl &&
-    (isTruncatedWindow || offset < sample.length)
+    !isTruncatedWindow &&
+    offset < sample.length
   ) {
     hasUnparsedSps = true;
   }
