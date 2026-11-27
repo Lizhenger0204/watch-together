@@ -10,6 +10,7 @@ import {
   HEVC_PROFILE_MAIN,
   HEVC_PROFILE_MAIN_10,
   parseHevcSps,
+  parseHevcVpsPtl,
   rbspToEbsp,
   readNalLength,
 } from "./hevc-bitstream";
@@ -118,6 +119,36 @@ export function patchHevcParameterSetNalu(nalu: Uint8Array): NaluPatchResult {
     return { ok: false, reason: "input-epb-invalid" };
   }
 
+  // 每份待檢查／改寫的 VPS／SPS 皆須在寫入前套用與分類相同的嚴格安全條件，防止後段新增參數集繞過。
+  if (nalType === HEVC_NAL_SPS) {
+    const origSps = parseHevcSps(nalu);
+    if (!origSps) return { ok: false, reason: "sps-unparseable" };
+    if (origSps.generalProfileSpace !== 0) {
+      return { ok: false, reason: "sps-non-zero-profile-space" };
+    }
+    if (origSps.chromaFormatIdc !== 1) {
+      return { ok: false, reason: "sps-non-420-chroma" };
+    }
+    if (
+      origSps.bitDepthLumaMinus8 !== 0 ||
+      origSps.bitDepthChromaMinus8 !== 0
+    ) {
+      return { ok: false, reason: "sps-non-8bit" };
+    }
+    if (origSps.subLayerProfileIdcs.includes(HEVC_PROFILE_MAIN_10)) {
+      return { ok: false, reason: "sub-layer-main10" };
+    }
+  } else {
+    const origVps = parseHevcVpsPtl(nalu);
+    if (!origVps) return { ok: false, reason: "vps-unparseable" };
+    if (origVps.generalProfileSpace !== 0) {
+      return { ok: false, reason: "non-zero-profile-space" };
+    }
+    if (origVps.subLayerProfileIdcs.includes(HEVC_PROFILE_MAIN_10)) {
+      return { ok: false, reason: "sub-layer-main10" };
+    }
+  }
+
   const ptlOffset = nalType === HEVC_NAL_VPS ? 4 : 1;
   const origRbsp = ebspToRbsp(origEbsp);
   if (origRbsp.length < ptlOffset + 12) {
@@ -173,10 +204,12 @@ export function patchHevcParameterSetNalu(nalu: Uint8Array): NaluPatchResult {
     const verified = parseHevcSps(patched);
     if (
       !verified ||
+      verified.generalProfileSpace !== 0 ||
       verified.generalProfileIdc !== HEVC_PROFILE_MAIN ||
       verified.bitDepthLumaMinus8 !== 0 ||
       verified.bitDepthChromaMinus8 !== 0 ||
-      verified.chromaFormatIdc !== 1
+      verified.chromaFormatIdc !== 1 ||
+      verified.subLayerProfileIdcs.includes(HEVC_PROFILE_MAIN_10)
     ) {
       return { ok: false, reason: "sps-reparse-failed" };
     }

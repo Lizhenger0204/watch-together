@@ -201,6 +201,24 @@ function parseProfileTierLevel(reader: BitReader, maxSubLayersMinus1: number) {
   };
 }
 
+/** 解析 HEVC VPS（NAL unit type 32，含 2-byte NAL header）的 profile_tier_level。 */
+export function parseHevcVpsPtl(nalu: Uint8Array) {
+  if (nalu.length < 18) return null;
+  const nalType = (nalu[0]! >> 1) & 0x3f;
+  if (nalType !== HEVC_NAL_VPS) return null;
+  const ebsp = nalu.subarray(2);
+  if (hasForbiddenStartCode(ebsp)) return null;
+  const rbsp = ebspToRbsp(ebsp);
+  const reader = new BitReader(rbsp);
+  // vps_id(4) + base_layer_internal(1) + base_layer_available(1) + max_layers_minus1(6)
+  if (!reader.skipBits(12)) return null;
+  const maxSubLayersMinus1 = reader.readBits(3);
+  if (maxSubLayersMinus1 === null || maxSubLayersMinus1 > 6) return null;
+  // vps_temporal_id_nesting_flag(1) + vps_reserved_0xffff_16bits(16)
+  if (!reader.skipBits(17)) return null;
+  return parseProfileTierLevel(reader, maxSubLayersMinus1);
+}
+
 /** 解析 HEVC SPS（NAL unit type 33，含 2-byte NAL header），先驗證原始 EBSP 合法性。 */
 export function parseHevcSps(nalu: Uint8Array): ParsedHevcSps | null {
   if (nalu.length < 18) return null;

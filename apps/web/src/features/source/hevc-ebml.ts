@@ -180,19 +180,51 @@ export function iterateEbmlChildren(
 }
 
 /**
- * 若該 Master Element 含有直接子元素 CRC-32（0xBF），套用內部等長修補後重算 4-byte LE CRC-32；
- * 遇異常結構或無法安全重算時明確回報失敗以便降級。
+ * 嚴格走訪定長容器內的全部直接子元素：拒絕任何未知長度子元素、宣告長度越界或尾端殘留位元組。
+ */
+export function iterateEbmlChildrenStrict(
+  buf: Uint8Array,
+  start: number,
+  end: number,
+): EbmlChild[] | null {
+  const out: EbmlChild[] = [];
+  let pos = start;
+  while (pos < end) {
+    const elementStart = pos;
+    const idInfo = readEbmlId(buf, pos);
+    if (!idInfo) return null;
+    pos += idInfo.length;
+    const sizeInfo = readEbmlVint(buf, pos);
+    if (!sizeInfo || sizeInfo.unknown) return null;
+    pos += sizeInfo.length;
+    const dataEnd = pos + sizeInfo.value;
+    if (dataEnd > end) return null;
+    out.push({ elementStart, id: idInfo.id, dataStart: pos, dataEnd });
+    pos = dataEnd;
+  }
+  return pos === end ? out : null;
+}
+
+/**
+ * 若該 Master Element 含有直接子元素 CRC-32（0xBF）：
+ * 1. 先以嚴格邊界檢查解析全部直接子元素；
+ * 2. 依 RFC 8794 §14.2 驗證未修補前原始資料與原 CRC-32 相符（不靜默覆寫已損毀的 CRC）；
+ * 3. 套用內部等長修補後重算 4-byte LE CRC-32。
  */
 export function computeEbmlCrc32Patch(
   elementPayload: Uint8Array,
   payloadFileOffset: number,
   innerPatches: BytePatch[],
 ): { ok: true; patch: BytePatch | null } | { ok: false; reason: string } {
-  const crcChildren = iterateEbmlChildren(
+  const children = iterateEbmlChildrenStrict(
     elementPayload,
     0,
     elementPayload.length,
-  ).filter((child) => child.id === EBML_ID_CRC32);
+  );
+  if (!children) {
+    return { ok: false, reason: "mkv-crc32-corrupt-parent" };
+  }
+  const crcChildren = children.filter((child) => child.id === EBML_ID_CRC32);
   if (crcChildren.length === 0) return { ok: true, patch: null };
   if (crcChildren.length > 1) {
     return { ok: false, reason: "mkv-crc32-multiple" };
@@ -200,6 +232,19 @@ export function computeEbmlCrc32Patch(
   const crcEl = crcChildren[0]!;
   if (crcEl.dataEnd - crcEl.dataStart !== 4) {
     return { ok: false, reason: "mkv-crc32-invalid-length" };
+  }
+
+  const storedOriginalCrc = new DataView(
+    elementPayload.buffer,
+    elementPayload.byteOffset + crcEl.dataStart,
+    4,
+  ).getUint32(0, true);
+  const computedOriginalCrc = computeEbmlCrc32([
+    elementPayload.subarray(0, crcEl.elementStart),
+    elementPayload.subarray(crcEl.dataEnd),
+  ]);
+  if (storedOriginalCrc !== computedOriginalCrc) {
+    return { ok: false, reason: "mkv-original-crc32-invalid" };
   }
 
   const updated = new Uint8Array(elementPayload);
@@ -504,15 +549,19 @@ export function walkSmallMkvClusters(
           );
           if (payload) blocks.push(payload);
         } else if (childId.id === EBML_ID_BLOCK_GROUP) {
+          const groupChildren = iterateEbmlChildrenStrict(
+            segTail,
+            cDataStart,
+            cDataEnd,
+          );
+          if (!groupChildren) {
+            return { ok: false, reason: "mkv-corrupt-block-group" };
+          }
           const groupInfo = {
             payloadOffset: baseFileOffset + cDataStart,
             payload: segTail.subarray(cDataStart, cDataEnd),
           };
-          for (const sub of iterateEbmlChildren(
-            segTail,
-            cDataStart,
-            cDataEnd,
-          )) {
+          for (const sub of groupChildren) {
             if (sub.id !== EBML_ID_BLOCK) continue;
             const payload = decodeMkvBlockPayload(
               segTail,

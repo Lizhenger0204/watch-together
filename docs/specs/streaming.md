@@ -129,8 +129,12 @@ Windows、多位收看者、實際送滿 8 Mbps、分頁在背景時的表現列
    - 當原生試播失敗（`VIDEO_UNDECODABLE` 或 `PLAYBACK_FAILED`）且偵測為 `mismatchMain10On8Bit` 時，自動嘗試零複製修補：
      - 將 `hvcC`／`CodecPrivate` 標頭與其中的 VPS／SPS 的 `general_profile_idc` 由 `2` 改為 `1`（Main）、`general_profile_compatibility_flags` 開啟 Main 相容位（`b1 | 0x40`，常見 `0x20000000 → 0x60000000`）。
      - 每個改寫後的 VPS／SPS NALU 均須經 **EBSP → RBSP → 改寫 → RBSP → EBSP** 並執行嚴格往返斷言（只改變目標 profile／相容旗標位元組、無非法 `00 00 00/01/02/03`）。
-     - 若改寫後長度不變，直接以 `new Blob([file.slice(0, start), patched, file.slice(end)])` 原地零複製拼接（MP4 有完整 `stss` 索引且全部等長且關鍵幀數在安全上限內時一併等長修補；MKV 小於等於 4 MB 時完整走訪全部 Cluster 含未知長度 Cluster 並同步更新受影響的 EBML `CRC-32`，大於 4 MB 含 in-band VPS／SPS 時因 `Cues` 不保證涵蓋全部關鍵幀而保守降級）；若 MP4 `hvcC` 改寫後長度變動，則保留各箱原始標頭長度重建 `moov`（僅替換選中 `hvcC` 並逐筆更新 `stco`／`co64` offset）再與原檔 `mdat` 零複製拼接。
-     - 若遇到無法安全原地修補的情況（如無完整索引卻含 in-band VPS／SPS、大於 4 MB 的 MKV 含 in-band VPS／SPS、MKV 改寫變長或無法安全更新 `CRC-32`、EPB 往返斷言失敗），拒絕硬改並記錄拒改原因，直接降級至下方診斷。
+     - 若改寫後長度不變，直接以 `new Blob([file.slice(0, start), patched, file.slice(end)])` 原地零複製拼接：
+       - **MP4 `hvc1`**：依 ISO/IEC 14496-15 參數集僅存於 `hvcC`，抽查無異常 in-band 時原地修補 `hvcC`；若為 **`hev1`** 或檢出 in-band 參數集，則須為非分段 MP4 且依 `stsz`/`stsc`/`stco`/`co64` 完整走訪並等長修補全部樣本（總樣本數超過安全上限或分段 MP4 則降級）。
+       - **MKV ≤ 4 MB**：無論抽查是否命中，一律完整走訪全部 Cluster（含 RFC 8794 §6.2 未知長度 Cluster 終止）與所有視訊 block，對每份參數集套用相同安全條件並驗證原 EBML `CRC-32` 後同步重算受影響的 `CRC-32`。
+       - **MKV > 4 MB**：因 Matroska 無 `hvc1`/`hev1` 區隔且多 GB 全檔掃描耗時過長（ADR 0006 §4 實測 34 GB 需 75 秒、15 部實片皆為 0 in-band），採多點關鍵幀抽查（首個 Cluster 與 25%/50%/75%/末段 Cues）：若抽查檢出 in-band VPS／SPS 或 lacing 則保守降級；若抽查全數乾淨，則執行僅修補標頭（`CodecPrivate` 與驗證後重算之 `TrackEntry`/`Tracks` `CRC-32`）的盡力零複製修補。
+     - 若 MP4 `hvcC` 改寫後長度變動：僅支援非分段且無須掃描樣本的 `hvc1` MP4，保留各箱原始 8/16-byte 標頭長度重建 `moov`（僅替換選中 `hvcC` 並逐筆更新 `stco`／`co64` offset）再與原檔 `mdat` 零複製拼接；分段 MP4（含 `mvex`/`moof`/`sidx`/`mfra`）一律拒絕變長重建並降級。
+     - 若遇到無法安全原地修補的情況（如分段 MP4 變長、無完整樣本表或樣本數過多的 `hev1` MP4、大於 4 MB 且檢出 in-band 的 MKV、MKV 改寫變長或原 `CRC-32` 已損毀／無法安全更新、任一後段 VPS／SPS 違反嚴格安全條件、EPB 往返斷言失敗），拒絕硬改並記錄拒改原因，直接降級至下方診斷。
    - 產生修補後的 `Blob` 後，先釋放原試播的 Object URL 並清理舊擷取 stream（沿用既有 `retireCapturedStream()` 與試播／10-bit 轉換流程，不另寫一份），再以修補後的 Object URL 重試一次開播前檢查。換檔或卸載時撤銷所有已建立的 Object URL。
    - 重試通過時進入 `ready`／`warning`，附加 `headerFixed: true`，於介面擷取資訊旁標註「已自動修正 HEVC 標頭（Main 10 → Main，8-bit）」，且仍由首幀 `VideoFrame.format` 決定 `converted`（8-bit 為 `false`）。
 3. **無法修補或重試仍失敗（`HEVC_PROFILE_MISMATCH`）**：

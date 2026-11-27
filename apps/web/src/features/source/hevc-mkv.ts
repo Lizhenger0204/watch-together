@@ -29,7 +29,7 @@ import {
   EBML_ID_TRACKS,
   computeEbmlCrc32Patch,
   extractVideoBlocksFromCluster,
-  iterateEbmlChildren,
+  iterateEbmlChildrenStrict,
   parseCuesForTrack,
   parseSeekHead,
   parseSingleBlockElement,
@@ -152,23 +152,28 @@ export async function inspectMkvHevc(
     hasContentEncoding: boolean;
   } | null = null;
 
-  for (const entry of iterateEbmlChildren(
+  const trackEntries = iterateEbmlChildrenStrict(
     tracksEl.payload,
     0,
     tracksEl.payload.length,
-  )) {
+  );
+  if (!trackEntries) return null;
+
+  for (const entry of trackEntries) {
     if (entry.id !== EBML_ID_TRACK_ENTRY) continue;
+    const entryFields = iterateEbmlChildrenStrict(
+      tracksEl.payload,
+      entry.dataStart,
+      entry.dataEnd,
+    );
+    if (!entryFields) return null;
     let trackNumber = -1;
     let trackType = -1;
     let codecId = "";
     let codecPrivate: { offset: number; bytes: Uint8Array } | null = null;
     let hasContentEncoding = false;
 
-    for (const field of iterateEbmlChildren(
-      tracksEl.payload,
-      entry.dataStart,
-      entry.dataEnd,
-    )) {
+    for (const field of entryFields) {
       if (field.id === EBML_ID_TRACK_NUMBER) {
         trackNumber = readUintBE(
           tracksEl.payload,
@@ -255,29 +260,52 @@ export async function inspectMkvHevc(
     );
   }
   if (cueTargets.length >= 2) {
-    const mid = cueTargets[Math.floor(cueTargets.length / 2)]!;
-    const block = await readCueTargetBlock(file, mid, foundTrack.trackNumber);
-    if (block) probeBlocks.push(block);
+    const sampleCueIndices = new Set<number>([
+      Math.floor(cueTargets.length * 0.25),
+      Math.floor(cueTargets.length * 0.5),
+      Math.floor(cueTargets.length * 0.75),
+      cueTargets.length - 1,
+    ]);
+    for (const idx of sampleCueIndices) {
+      const target = cueTargets[idx];
+      if (!target) continue;
+      const block = await readCueTargetBlock(
+        file,
+        target,
+        foundTrack.trackNumber,
+      );
+      if (block) probeBlocks.push(block);
+    }
   }
 
   const nalLenSize = hvcc.lengthSizeMinusOne + 1;
   let hasInBandParameterSets = false;
   let extraUnparsedSps = false;
+  let probedLacedBlock = false;
   const extraSps: ParsedHevcSps[] = [];
   for (const block of probeBlocks) {
-    if (block.laced) continue;
+    if (block.laced) {
+      probedLacedBlock = true;
+      continue;
+    }
     const inspected = inspectSampleParameterSets(block.bytes, nalLenSize);
     if (inspected.hasInBandParameterSets) hasInBandParameterSets = true;
     if (inspected.hasUnparsedSps) extraUnparsedSps = true;
     extraSps.push(...inspected.spsList);
   }
 
+  const containerUnsafeReason = foundTrack.hasContentEncoding
+    ? "mkv-content-encoding"
+    : probedLacedBlock
+      ? "mkv-inband-laced-block"
+      : null;
+
   const info = classifyHevcHeader(
     "mkv",
     hvcc,
     extraSps,
     hasInBandParameterSets,
-    foundTrack.hasContentEncoding ? "mkv-content-encoding" : null,
+    containerUnsafeReason,
     extraUnparsedSps,
   );
 
@@ -377,16 +405,12 @@ export async function patchMkvZeroCopy(
   if (!tracksCrc.ok) return tracksCrc;
   if (tracksCrc.patch) patches.push(tracksCrc.patch);
 
-  if (inspection.info.hasInBandParameterSets) {
-    if (inspection.firstClusterOffset === null) {
-      return { ok: false, reason: "mkv-missing-cluster" };
-    }
-    // 依 RFC 9559 §22.1，Matroska Cues 不保證列出同一 Cluster 內的全部關鍵幀；
-    // 超過 4 MB 時不做整檔掃描，改保守降級以避免漏修。
-    if (file.size > SMALL_MKV_SCAN_LIMIT) {
-      return { ok: false, reason: "mkv-inband-unverified-coverage" };
-    }
-
+  if (
+    file.size <= SMALL_MKV_SCAN_LIMIT &&
+    inspection.firstClusterOffset !== null
+  ) {
+    // 小型 MKV（≤ 4 MB）無論抽查是否命中皆完整走訪全部 Cluster（含未知長度 Cluster），
+    // 絕不漏修後段未抽查的 in-band 參數集，且對每份參數集套用相同安全條件並同步更新 CRC-32。
     const segTail = await sliceBlobBytes(
       file,
       inspection.firstClusterOffset,
@@ -444,6 +468,10 @@ export async function patchMkvZeroCopy(
         if (clusterCrc.patch) patches.push(clusterCrc.patch);
       }
     }
+  } else if (inspection.info.hasInBandParameterSets) {
+    // 依 RFC 9559 §22.1，Matroska Cues 不保證列出同一 Cluster 內的全部關鍵幀；
+    // 超過 4 MB 且抽查命中 in-band 時不做多 GB 整檔掃描，改保守降級以避免漏修。
+    return { ok: false, reason: "mkv-inband-unverified-coverage" };
   }
 
   const blob = spliceZeroCopyBlob(

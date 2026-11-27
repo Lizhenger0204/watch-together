@@ -458,7 +458,7 @@ describe("HEVC container inspection and zero-copy patching", () => {
       );
       const fillerCluster = ebmlEl(
         [0x1f, 0x43, 0xb6, 0x75],
-        new Uint8Array(32),
+        ebmlEl([0xec], new Uint8Array(30)),
       );
 
       // 先估算 SeekHead 長度，讓 SeekHead 指向放在 Cluster 後方的 Tracks
