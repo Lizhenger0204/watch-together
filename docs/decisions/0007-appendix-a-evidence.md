@@ -1,7 +1,7 @@
 # ADR 0007 附錄 A：實驗與查證（T-140）
 
 - 環境：Apple M1、macOS、Google Chrome 158（Playwright `channel: 'chrome'`、非 headless），2026-11-27。
-- 原型與量測腳本：`docs/decisions/assets/0007/`（用法見該資料夾 README）；原始結果 JSON 在其中的 `results/`。
+- 原型與量測腳本：`docs/decisions/assets/0007/`（用法見該資料夾 README）；原始結果 JSON 在其中的 `results/`。種子式散布的原型與結果在附錄 E §3。
 - 限制：房主與兩位收看者在**同一台機器、同一個 Chrome**，走 loopback；收看端解碼也佔用同一顆 GPU。真實網路（RTT、掉包、跨境）、Windows／Android／iOS 收看端都沒有在本機驗證，列入 T-113。
 
 ## §1 原片直送（第一層）
@@ -139,11 +139,7 @@ W3C 規格對 `latencyMode: 'quality'` 只說「SHOULD optimize for encoding qua
 
 ## §6 Cloudflare Realtime DataChannel（文件 2026-11-13 版，讀取 2026-11-27）
 
-- 支援：「A publisher creates a named channel. Multiple subscribers can receive its messages, and one selected subscriber can reply on that publisher channel.」發布用 `location: "local"`、訂閱用 `location: "remote"`＋發布者的 `sessionId`，瀏覽器端 `createDataChannel(name, { negotiated: true, id })`。
-- 「DataChannels use reliable, ordered delivery by default」，可設 `maxRetransmits`／`maxPacketLifeTime`。「Asymmetric reliability between a publisher and its subscribers is outside the supported contract.」
-- 沒有寫訊息大小、吞吐上限；計費頁只寫「$0.05 per GB of egress」、每月 1,000 GB 免費，沒提 DataChannel。
-- 加 DataChannel 是否要重新協商、能否和媒體軌共用同一條連線，文件沒說清楚。GPT 另讀 [DataChannels（features 版）](https://developers.cloudflare.com/realtime/sfu/features/datachannels/)：已接通的 DataChannel transport 可以再新增應用頻道；一個發布頻道只允許一位訂閱者回傳；`waitForAck` 的 readiness gate 不提供重播。
-- 來源：[DataChannels](https://developers.cloudflare.com/realtime/sfu/datachannels/)、[Connection API](https://developers.cloudflare.com/realtime/sfu/https-api/)、[Limits](https://developers.cloudflare.com/realtime/sfu/limits/)、[Pricing](https://developers.cloudflare.com/realtime/sfu/pricing/)。
+**使用者決定（2026-11-27）不再投資轉發**（流量成本），本節只保留查證摘要：文件支援「一個發布頻道、多位訂閱者」，預設可靠有序；所有訂閱者收同一串資料（不能各自從不同位置開始）、一個發布頻道只允許一位訂閱者回傳、沒寫吞吐上限；計費頁只寫「$0.05 per GB of egress」。來源：[DataChannels](https://developers.cloudflare.com/realtime/sfu/datachannels/)、[Pricing](https://developers.cloudflare.com/realtime/sfu/pricing/)。
 
 ## §7 Windows 實驗頁（使用者要做的事）
 

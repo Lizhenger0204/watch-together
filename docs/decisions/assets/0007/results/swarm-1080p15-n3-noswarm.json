@@ -1,0 +1,239 @@
+{
+ "file": "h264-1080p15-gop2-150s.mp4",
+ "source": {
+  "segs": 75,
+  "mbps": 15.23,
+  "duration": 150.016
+ },
+ "n": 3,
+ "hostQ": "swarm=0",
+ "viewerQ": "",
+ "evil": "",
+ "noUp": "",
+ "phases": {
+  "steady": {
+   "seconds": 20,
+   "hostMbps": 67.1,
+   "hostSeedMbps": 62.4,
+   "hostRepairMbps": 0,
+   "hostJoinMbps": 4.7,
+   "viewers": [
+    {
+     "id": "A",
+     "upload": true,
+     "fromHostMbps": 15.3,
+     "fromPeersMbps": 0,
+     "uploadMbps": 0,
+     "hashFail": 0,
+     "repairs": 0,
+     "waiting": 0,
+     "driftP50": 24.8,
+     "driftP95": 41.5,
+     "driftN": 197,
+     "startMs": 1139,
+     "seekRecover": [
+      1222
+     ],
+     "badPeers": [],
+     "dropped": 0
+    },
+    {
+     "id": "B",
+     "upload": true,
+     "fromHostMbps": 25.9,
+     "fromPeersMbps": 0,
+     "uploadMbps": 0,
+     "hashFail": 0,
+     "repairs": 0,
+     "waiting": 0,
+     "driftP50": 24.6,
+     "driftP95": 41.2,
+     "driftN": 197,
+     "startMs": 5121,
+     "seekRecover": [
+      5586
+     ],
+     "badPeers": [],
+     "dropped": 3
+    },
+    {
+     "id": "C",
+     "upload": true,
+     "fromHostMbps": 25.9,
+     "fromPeersMbps": 0,
+     "uploadMbps": 0,
+     "hashFail": 0,
+     "repairs": 0,
+     "waiting": 0,
+     "driftP50": 24.6,
+     "driftP95": 48.6,
+     "driftN": 197,
+     "startMs": 4938,
+     "seekRecover": [
+      812
+     ],
+     "badPeers": [],
+     "dropped": 3
+    }
+   ],
+   "events": []
+  },
+  "afterSeek": {
+   "seconds": 12,
+   "hostMbps": 76,
+   "hostSeedMbps": 76,
+   "hostRepairMbps": 0,
+   "hostJoinMbps": 0,
+   "viewers": [
+    {
+     "id": "A",
+     "upload": true,
+     "fromHostMbps": 25.3,
+     "fromPeersMbps": 0,
+     "uploadMbps": 0,
+     "hashFail": 0,
+     "repairs": 0,
+     "waiting": 3,
+     "driftP50": 32.6,
+     "driftP95": 126.3,
+     "driftN": 81,
+     "startMs": 1139,
+     "seekRecover": [
+      1222,
+      910
+     ],
+     "badPeers": [],
+     "dropped": 2
+    },
+    {
+     "id": "B",
+     "upload": true,
+     "fromHostMbps": 25.3,
+     "fromPeersMbps": 0,
+     "uploadMbps": 0,
+     "hashFail": 0,
+     "repairs": 0,
+     "waiting": 2,
+     "driftP50": 41,
+     "driftP95": 173.6,
+     "driftN": 82,
+     "startMs": 5121,
+     "seekRecover": [
+      5586,
+      1320
+     ],
+     "badPeers": [],
+     "dropped": 5
+    },
+    {
+     "id": "C",
+     "upload": true,
+     "fromHostMbps": 25.3,
+     "fromPeersMbps": 0,
+     "uploadMbps": 0,
+     "hashFail": 0,
+     "repairs": 0,
+     "waiting": 2,
+     "driftP50": 32.7,
+     "driftP95": 141.5,
+     "driftN": 81,
+     "startMs": 4938,
+     "seekRecover": [
+      812,
+      1217
+     ],
+     "badPeers": [],
+     "dropped": 5
+    }
+   ],
+   "events": []
+  }
+ },
+ "totals": [
+  {
+   "id": "A",
+   "hashFail": 0,
+   "repairs": 0,
+   "badPeers": [],
+   "fromHostMB": 148.6,
+   "fromPeersMB": 0,
+   "uploadedMB": 0,
+   "dupMB": 3.8
+  },
+  {
+   "id": "B",
+   "hashFail": 0,
+   "repairs": 0,
+   "badPeers": [],
+   "fromHostMB": 145.1,
+   "fromPeersMB": 0,
+   "uploadedMB": 0,
+   "dupMB": 3.8
+  },
+  {
+   "id": "C",
+   "hashFail": 0,
+   "repairs": 0,
+   "badPeers": [],
+   "fromHostMB": 140.6,
+   "fromPeersMB": 0,
+   "uploadedMB": 0,
+   "dupMB": 3.8
+  }
+ ],
+ "sha256Ms4MiB": 2.29,
+ "hostPerSec": [
+  0,
+  0,
+  0,
+  64.9,
+  89.5,
+  60.8,
+  66.6,
+  59.6,
+  86.4,
+  90.7,
+  63.3,
+  89.5,
+  31.9,
+  93.3,
+  90.6,
+  91.1,
+  61.2,
+  91.7,
+  59.1,
+  61.7,
+  123,
+  60.2,
+  91.8,
+  30.4,
+  91.2,
+  60.3,
+  122.7,
+  61.3,
+  90.6,
+  29.3,
+  122.6,
+  29.6,
+  122.5,
+  91.1,
+  0,
+  0,
+  92.2,
+  91.6,
+  0,
+  30.2,
+  60.3,
+  90,
+  91.7,
+  92.2,
+  92.1,
+  90.6,
+  0,
+  92.2,
+  91.1,
+  92.1,
+  89.6
+ ],
+ "elapsedS": 50.457
+}

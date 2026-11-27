@@ -2,6 +2,8 @@
 
 **實驗用，不是正式程式碼**，不進 `apps/`、不做單元測試。每個 `.js`／`.mjs` 開頭都有 `eslint-disable`（根目錄 ESLint 設定歸 GPT，不改）。結果與結論見 [附錄 A](../../0007-appendix-a-evidence.md)，原始 JSON 在 `results/`。
 
+**種子式散布原型的簡化**（附錄 E §3）：整段收完才驗證與轉送（沒做小塊邊收邊轉）、急件直送給每個人（4K 大片段時房主頻寬不夠）、一次檢舉就停用來源、同機省略對時。
+
 **已知錯誤，正式版不可照抄**：`fmp4.js` 以「片段內 PTS 排序」推 DTS，只適用固定幀率、封閉 GOP 的片源；可變幀率＋open GOP 會讓片段間出現缺口，負時間戳會被截成 0（附錄 B §3）。追趕與背壓的正式規則以附錄 C 為準，原型只實作了其中一部分。
 
 需要 Google Chrome（Playwright `channel: 'chrome'`）。指令都在 repo 根目錄執行。拆檔套件 mediabunny 預設從 jsDelivr 載入固定版本 1.65.2；離線時以 `npm pack mediabunny@1.65.2` 取得 `dist/bundles/mediabunny.min.mjs`，放進某個資料夾，再設 `LAB_VENDOR=<資料夾>`。
@@ -17,6 +19,8 @@
 | `formats.js`、`run-formats.mjs` | 片源能否走原片直送：`node docs/decisions/assets/0007/run-formats.mjs e2e/fixtures h264-aac.mp4 hevc-aac.mkv` |
 | `dc-bench.html`、`dc-bench.js`、`run-dc-bench.mjs` | DataChannel 吞吐與配速：`node docs/decisions/assets/0007/run-dc-bench.mjs "rate=50" 2 20`（query、人數、秒數；`HEADLESS=0` 開視窗） |
 | `lab-server.mjs` | 支援 Range 的本機靜態伺服器（`/lab/`、`/media/`、`/vendor/`） |
+| `swarm.html`、`swarm-host.js`、`swarm-viewer.js`、`swarm-common.js` | 種子式散布（附錄 D、E）：房主協調指派、收看者互相轉送、SHA-256 驗證；收看端用 hls.js 1.7.4 light 的自訂 loader 從記憶體倉庫取片段 |
+| `run-swarm.mjs` | 房主＋N 位收看者：`node docs/decisions/assets/0007/run-swarm.mjs <影片> 3 [房主 query] [收看者 query]`；`EVIL=B`（B 竄改轉送資料）、`NOUP=C`（C 不上傳）、`LEAVE=1`（最後一位離開、新的一位加入）、`DUMP=1`（附收看端狀態）。房主 query：`budget`（Mbps）、`copies`（直送份數）、`swarm=0`（對照組）；收看者 query：`up`（上傳 Mbps）、`debug=1` |
 
 原片直送可調的 query：`lead`（超前秒數）、`budget`（總上傳預算 Mbps）、`pace`／`paceCatchup`（配速倍數）、`chunk`、`high`／`low`（`bufferedAmount` 水位）、`smartStart=0`（只從前一個關鍵影格開始）、`seekWait=1`（跳轉後等收看者）、`dead`（追趕死區秒數）、`debug=1`（收看端附加紀錄）。
 

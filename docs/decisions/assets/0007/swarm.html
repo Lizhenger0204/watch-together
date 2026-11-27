@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <title>T-140 種子式散布原型</title>
+    <style>
+      body { font: 14px system-ui; margin: 8px; }
+      video { width: 320px; background: #000; }
+      pre { white-space: pre-wrap; font-size: 11px; }
+    </style>
+  </head>
+  <body>
+    <video playsinline muted></video>
+    <pre id="log"></pre>
+    <script type="module">
+      const role = new URLSearchParams(location.search).get("role") ?? "host";
+      document.title += role === "host" ? "（房主）" : "（收看者）";
+      await import(role === "host" ? "./swarm-host.js" : "./swarm-viewer.js");
+    </script>
+  </body>
+</html>

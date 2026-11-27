@@ -1,0 +1,752 @@
+{
+ "file": "h264-1080p15-gop2-150s.mp4",
+ "source": {
+  "segs": 75,
+  "mbps": 15.23,
+  "duration": 150.016
+ },
+ "n": 5,
+ "hostQ": "",
+ "viewerQ": "",
+ "evil": "",
+ "noUp": "",
+ "phases": {
+  "steady": {
+   "seconds": 20,
+   "hostMbps": 24.3,
+   "hostSeedMbps": 18.2,
+   "hostRepairMbps": 6.1,
+   "hostJoinMbps": 0,
+   "viewers": [
+    {
+     "id": "A",
+     "upload": true,
+     "fromHostMbps": 4.5,
+     "fromPeersMbps": 15.2,
+     "uploadMbps": 15,
+     "hashFail": 0,
+     "repairs": 1,
+     "waiting": 0,
+     "driftP50": 25.1,
+     "driftP95": 42.8,
+     "driftN": 197,
+     "startMs": 1155,
+     "seekRecover": [
+      1010
+     ],
+     "badPeers": [],
+     "dropped": 0
+    },
+    {
+     "id": "B",
+     "upload": true,
+     "fromHostMbps": 4.6,
+     "fromPeersMbps": 15.1,
+     "uploadMbps": 15.3,
+     "hashFail": 0,
+     "repairs": 1,
+     "waiting": 0,
+     "driftP50": 25,
+     "driftP95": 42.6,
+     "driftN": 197,
+     "startMs": 1131,
+     "seekRecover": [
+      816,
+      1979
+     ],
+     "badPeers": [],
+     "dropped": 3
+    },
+    {
+     "id": "C",
+     "upload": true,
+     "fromHostMbps": 1.5,
+     "fromPeersMbps": 7.6,
+     "uploadMbps": 3,
+     "hashFail": 0,
+     "repairs": 0,
+     "waiting": 2,
+     "driftP50": 25,
+     "driftP95": 41.7,
+     "driftN": 173,
+     "startMs": 2804,
+     "seekRecover": [
+      524
+     ],
+     "badPeers": [],
+     "dropped": 3
+    },
+    {
+     "id": "D",
+     "upload": true,
+     "fromHostMbps": 6.1,
+     "fromPeersMbps": 13.7,
+     "uploadMbps": 16.7,
+     "hashFail": 0,
+     "repairs": 1,
+     "waiting": 0,
+     "driftP50": 24.5,
+     "driftP95": 42.4,
+     "driftN": 197,
+     "startMs": 1717,
+     "seekRecover": [
+      1145
+     ],
+     "badPeers": [],
+     "dropped": 0
+    },
+    {
+     "id": "E",
+     "upload": true,
+     "fromHostMbps": 6.1,
+     "fromPeersMbps": 13.7,
+     "uploadMbps": 15.3,
+     "hashFail": 0,
+     "repairs": 1,
+     "waiting": 0,
+     "driftP50": 24.4,
+     "driftP95": 41.6,
+     "driftN": 197,
+     "startMs": 1753,
+     "seekRecover": [
+      1016
+     ],
+     "badPeers": [],
+     "dropped": 0
+    }
+   ],
+   "events": []
+  },
+  "afterSeek": {
+   "seconds": 12,
+   "hostMbps": 71.3,
+   "hostSeedMbps": 28,
+   "hostRepairMbps": 43.2,
+   "hostJoinMbps": 0,
+   "viewers": [
+    {
+     "id": "A",
+     "upload": true,
+     "fromHostMbps": 17.8,
+     "fromPeersMbps": 5.1,
+     "uploadMbps": 7.7,
+     "hashFail": 0,
+     "repairs": 7,
+     "waiting": 0,
+     "driftP50": 124.3,
+     "driftP95": 133.9,
+     "driftN": 5,
+     "startMs": 1155,
+     "seekRecover": [
+      1010
+     ],
+     "badPeers": [],
+     "dropped": 0
+    },
+    {
+     "id": "B",
+     "upload": true,
+     "fromHostMbps": 17.8,
+     "fromPeersMbps": 7.6,
+     "uploadMbps": 0,
+     "hashFail": 0,
+     "repairs": 7,
+     "waiting": 0,
+     "driftP50": 114.2,
+     "driftP95": 131.8,
+     "driftN": 5,
+     "startMs": 1131,
+     "seekRecover": [
+      816,
+      1979
+     ],
+     "badPeers": [],
+     "dropped": 3
+    },
+    {
+     "id": "C",
+     "upload": true,
+     "fromHostMbps": 2.5,
+     "fromPeersMbps": 0,
+     "uploadMbps": 0,
+     "hashFail": 0,
+     "repairs": 0,
+     "waiting": 1,
+     "driftP50": 133.1,
+     "driftP95": 304.9,
+     "driftN": 14,
+     "startMs": 2804,
+     "seekRecover": [
+      524
+     ],
+     "badPeers": [],
+     "dropped": 4
+    },
+    {
+     "id": "D",
+     "upload": true,
+     "fromHostMbps": 17.8,
+     "fromPeersMbps": 5.1,
+     "uploadMbps": 7.7,
+     "hashFail": 0,
+     "repairs": 6,
+     "waiting": 6,
+     "driftP50": 158.9,
+     "driftP95": 242.9,
+     "driftN": 76,
+     "startMs": 1717,
+     "seekRecover": [
+      1145,
+      5785
+     ],
+     "badPeers": [],
+     "dropped": 9
+    },
+    {
+     "id": "E",
+     "upload": true,
+     "fromHostMbps": 17.8,
+     "fromPeersMbps": 5.1,
+     "uploadMbps": 7.5,
+     "hashFail": 0,
+     "repairs": 6,
+     "waiting": 0,
+     "driftP50": 98.1,
+     "driftP95": 104.3,
+     "driftN": 5,
+     "startMs": 1753,
+     "seekRecover": [
+      1016
+     ],
+     "badPeers": [],
+     "dropped": 0
+    }
+   ],
+   "events": []
+  }
+ },
+ "dump": [
+  {
+   "log": "viewer A upload=true\nstartPlayer\nimport hls\n",
+   "t": 55.119416,
+   "paused": false,
+   "rs": 4,
+   "buf": [
+    [
+     46,
+     71.999999
+    ]
+   ],
+   "E": 74.60386695118976,
+   "stored": 14,
+   "debug": {
+    "wanted": [],
+    "standing": [
+     [
+      39,
+      [
+       "B",
+       "E",
+       "D",
+       "C"
+      ]
+     ],
+     [
+      44,
+      [
+       "B",
+       "D",
+       "E",
+       "C"
+      ]
+     ]
+    ],
+    "peers": [
+     {
+      "id": "B",
+      "open": true,
+      "data": "open",
+      "out": true,
+      "queued": 0
+     },
+     {
+      "id": "C",
+      "open": true,
+      "data": "open",
+      "out": true,
+      "queued": 2
+     },
+     {
+      "id": "D",
+      "open": true,
+      "data": "open",
+      "out": true,
+      "queued": 0
+     },
+     {
+      "id": "E",
+      "open": true,
+      "data": "open",
+      "out": true,
+      "queued": 0
+     }
+    ],
+    "hostData": "connected",
+    "stored": [
+     23,
+     22,
+     24,
+     26,
+     28,
+     27,
+     29,
+     31,
+     25,
+     32,
+     30,
+     33,
+     34,
+     35
+    ]
+   }
+  },
+  {
+   "log": "viewer B upload=true\nstartPlayer\nimport hls\nhls mediaError bufferStalledError fatal=false\n",
+   "t": 55.132138,
+   "paused": false,
+   "rs": 4,
+   "buf": [
+    [
+     44,
+     71.999999
+    ]
+   ],
+   "E": 74.60456690236164,
+   "stored": 14,
+   "debug": {
+    "wanted": [],
+    "standing": [
+     [
+      40,
+      [
+       "A",
+       "D",
+       "E",
+       "C"
+      ]
+     ],
+     [
+      45,
+      [
+       "A",
+       "E",
+       "D",
+       "C"
+      ]
+     ]
+    ],
+    "peers": [
+     {
+      "id": "A",
+      "open": true,
+      "data": "open",
+      "out": true,
+      "queued": 0
+     },
+     {
+      "id": "C",
+      "open": true,
+      "data": "open",
+      "out": true,
+      "queued": 2
+     },
+     {
+      "id": "D",
+      "open": true,
+      "data": "open",
+      "out": true,
+      "queued": 0
+     },
+     {
+      "id": "E",
+      "open": true,
+      "data": "open",
+      "out": true,
+      "queued": 0
+     }
+    ],
+    "hostData": "connected",
+    "stored": [
+     22,
+     24,
+     23,
+     26,
+     27,
+     28,
+     29,
+     31,
+     25,
+     32,
+     30,
+     33,
+     34,
+     35
+    ]
+   }
+  },
+  {
+   "log": "viewer C upload=true\nstartPlayer\nimport hls\nhls mediaError bufferStalledError fatal=false\nhls mediaError bufferStalledError fatal=false\nhls networkError aborted fatal=false\nhls mediaError bufferStalledError fatal=false\n",
+   "t": 43.924615,
+   "paused": false,
+   "rs": 2,
+   "buf": [
+    [
+     34,
+     39.999999
+    ],
+    [
+     42,
+     43.999999
+    ]
+   ],
+   "E": 74.60566695118976,
+   "stored": 0,
+   "debug": {
+    "wanted": [
+     {
+      "i": 22,
+      "ann": {
+       "type": "seg",
+       "i": 22,
+       "size": 3844983,
+       "start": 44,
+       "from": "host",
+       "askedAt": 48215.80000001192,
+       "askedHost": true,
+       "age": 151
+      }
+     }
+    ],
+    "standing": [
+     [
+      25,
+      [
+       "D",
+       "A",
+       "E",
+       "B"
+      ]
+     ],
+     [
+      30,
+      [
+       "A",
+       "B",
+       "E",
+       "D"
+      ]
+     ],
+     [
+      36,
+      [
+       "A",
+       "B",
+       "E",
+       "D"
+      ]
+     ],
+     [
+      41,
+      [
+       "B",
+       "A",
+       "E",
+       "D"
+      ]
+     ],
+     [
+      46,
+      [
+       "B",
+       "A",
+       "D",
+       "E"
+      ]
+     ]
+    ],
+    "peers": [
+     {
+      "id": "B",
+      "open": true,
+      "data": "open",
+      "out": true,
+      "queued": 0
+     },
+     {
+      "id": "A",
+      "open": true,
+      "data": "open",
+      "out": true,
+      "queued": 0
+     },
+     {
+      "id": "D",
+      "open": true,
+      "data": "open",
+      "out": true,
+      "queued": 0
+     },
+     {
+      "id": "E",
+      "open": true,
+      "data": "open",
+      "out": true,
+      "queued": 0
+     }
+    ],
+    "hostData": "connected",
+    "stored": []
+   }
+  },
+  {
+   "log": "viewer D upload=true\nstartPlayer\nimport hls\nhls networkError aborted fatal=false\nhls mediaError bufferStalledError fatal=false\nhls mediaError bufferStalledError fatal=false\nhls mediaError bufferStalledError fatal=false\n",
+   "t": 74.473834,
+   "paused": false,
+   "rs": 4,
+   "buf": [
+    [
+     66,
+     75.999999
+    ]
+   ],
+   "E": 74.60606714650226,
+   "stored": 15,
+   "debug": {
+    "wanted": [
+     {
+      "i": 38,
+      "ann": {
+       "type": "seg",
+       "i": 38,
+       "size": 3850481,
+       "start": 76,
+       "from": "E",
+       "askedAt": 34262.69999998808,
+       "askedHost": true,
+       "age": 11972
+      }
+     }
+    ],
+    "standing": [
+     [
+      42,
+      [
+       "B",
+       "A",
+       "E",
+       "C"
+      ]
+     ],
+     [
+      47,
+      [
+       "A",
+       "E",
+       "B"
+      ]
+     ]
+    ],
+    "peers": [
+     {
+      "id": "C",
+      "open": true,
+      "data": "open",
+      "out": true,
+      "queued": 2
+     },
+     {
+      "id": "B",
+      "open": true,
+      "data": "open",
+      "out": true,
+      "queued": 0
+     },
+     {
+      "id": "A",
+      "open": true,
+      "data": "open",
+      "out": true,
+      "queued": 0
+     },
+     {
+      "id": "E",
+      "open": true,
+      "data": "open",
+      "out": true,
+      "queued": 0
+     }
+    ],
+    "hostData": "connected",
+    "stored": [
+     22,
+     23,
+     24,
+     26,
+     27,
+     28,
+     29,
+     31,
+     32,
+     25,
+     33,
+     34,
+     35,
+     36,
+     37
+    ]
+   }
+  },
+  {
+   "log": "viewer E upload=true\nstartPlayer\nimport hls\n",
+   "t": 55.082948,
+   "paused": false,
+   "rs": 4,
+   "buf": [
+    [
+     46,
+     71.999999
+    ]
+   ],
+   "E": 74.60676685353351,
+   "stored": 14,
+   "debug": {
+    "wanted": [],
+    "standing": [
+     [
+      38,
+      [
+       "D",
+       "B",
+       "A",
+       "C"
+      ]
+     ],
+     [
+      43,
+      [
+       "A",
+       "B",
+       "D",
+       "C"
+      ]
+     ]
+    ],
+    "peers": [
+     {
+      "id": "A",
+      "open": true,
+      "data": "open",
+      "out": true,
+      "queued": 0
+     },
+     {
+      "id": "D",
+      "open": true,
+      "data": "open",
+      "out": true,
+      "queued": 0
+     },
+     {
+      "id": "C",
+      "open": true,
+      "data": "open",
+      "out": true,
+      "queued": 2
+     },
+     {
+      "id": "B",
+      "open": true,
+      "data": "open",
+      "out": true,
+      "queued": 0
+     }
+    ],
+    "hostData": "connected",
+    "stored": [
+     22,
+     23,
+     24,
+     27,
+     26,
+     28,
+     29,
+     31,
+     25,
+     32,
+     30,
+     33,
+     34,
+     35
+    ]
+   }
+  }
+ ],
+ "hostPerSec": [
+  0,
+  0,
+  0,
+  66.4,
+  88.8,
+  62.8,
+  61.2,
+  58.2,
+  91.7,
+  60.2,
+  60.2,
+  95.5,
+  30.5,
+  121.7,
+  30.8,
+  119.7,
+  29.4,
+  124.8,
+  91.7,
+  30.4,
+  153.5,
+  0,
+  121.4,
+  90.7,
+  61.2,
+  30.8,
+  0,
+  29.4,
+  0,
+  30.8,
+  0,
+  0,
+  0,
+  30.4,
+  0,
+  30.8,
+  0,
+  30.2,
+  0,
+  153.3,
+  0,
+  0,
+  0,
+  30.5,
+  91.5,
+  30.8,
+  123.3,
+  0,
+  122.6,
+  121.8,
+  0,
+  120.4,
+  123.2,
+  0,
+  121.2
+ ],
+ "elapsedS": 54.74
+}

@@ -1,6 +1,6 @@
 # ADR 0007 附錄 B：協定與封裝草稿（T-140）
 
-> **草稿（T-140）**：ADR 0007 採用前沒有效力，現行 `streaming.md`、`protocol.md`、`packages/shared` 不變。採用後由 T-141～T-144 依序搬進正式規格（先改規格與 shared，再改實作）。同步、背壓與選層規則見附錄 C。
+> **草稿（T-140）**：ADR 0007 採用前沒有效力，現行 `streaming.md`、`protocol.md`、`packages/shared` 不變。採用後由 T-141～T-147 依序搬進正式規格（先改規格與 shared，再改實作）。同步、背壓與選層規則見附錄 C。**第七版起資料改為固定片段表、收看端主動要**（附錄 D §2）：本附錄 §2 的塊標頭與 §4 的 `position`／`epoch` 資料流以附錄 D §2、§9 為準，其餘（時間軸、入口、sample entry、握手中的 `hello`／`probe`／`config`）不變。
 
 ## §1 頻道與識別碼
 
@@ -146,12 +146,14 @@
 - **伺服器要改**：`apps/signal/src/signaling/process.ts` 目前逐欄重組 `member:status` 再轉給房主，要加上這兩欄。
 - **是否升版依向後相容判斷**：`roomInfoSchema` 本身是 `z.object`（舊版略過新欄位），但 `qualitySchema` 是 `strictObject`。在 `RoomInfo` 加新的選填欄位不必升版；改動 `Quality` 或讓舊版會誤判的欄位才升 `PROTOCOL_VERSION = 3`。
 
+- **種子式散布（T-146）**：新增 `swarm:mode { on }`、`swarm:pair { a, b }`、`swarm:unpair { a, b }`（房主 → 伺服器，伺服器驗證角色），`swarm:paired { peer }`、`swarm:unpaired { peer }`（伺服器 → 收看者）。`signal` 的「收看者只能送給 host」改為附錄 D §6 的條件；伺服器不記錄 `signal.data`。`AGENTS.md` 的對應句子在採用時由協調者更新。
+
 ## §9 `streaming.md` 草稿變動
 
 1. **新增 §10「原片直送」**：ADR D2～D6、本附錄與附錄 C。
 2. **§2 畫質**：選「原片」或不低於片源 → 第一層；低於片源 → 第二層；第三層才用 `scaleResolutionDownBy`。畫質面板新增「上傳頻寬」。
 3. **§3 P2P**：房主在第一次 offer 前開 `pt-ctl`；第一、二層收看者的媒體暫停規則（附錄 C §5）。
-4. **§6 模式切換**：切到轉發時全部第三層；切回 P2P 時重新分配。
+4. **§6 模式切換**：切到轉發時全部第三層、撤銷所有收看者配對；切回 P2P 時重新分配。
 5. **§7 收看端播放**：`passthrough`／`transcode` 用 MediaSource（iOS 用 ManagedMediaSource 並設 `disableRemotePlayback = true`），`live` 用 `srcObject`；切換前先清掉另一種來源。「點擊開始觀看」不變。
 6. **§8 統計**：`member:status` 帶 `tier`、`driftMs`；第一、二層的 `bitrateKbps` 取 `pt-data` 收到速率。
 7. **§9 傳輸層契約**：房主端每位收看者的 DataChannel 掛勾、媒體暫停旗標；收看端暴露 DataChannel。介面在 T-141 由 Claude 與 GPT 協調定案（ADR D10）。
