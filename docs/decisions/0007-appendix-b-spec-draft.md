@@ -63,7 +63,7 @@
 1. 頻道開啟 → 收看端 5 秒內送 `hello`。
 2. 房主送 `probe { config, video, audio }` → 收看端 3 秒內回 `probeResult`。快速連換片時，只有最後一個 config 的回覆有效。
 3. 房主決定層級後送 `config`（欄位以下方訊息表為準；`live` 時沒有 MIME，收看端改用 `srcObject`）。收看端建立 MediaSource 與該 config 的 SourceBuffer。
-4. 房主送 `position`（欄位以下方訊息表為準；`entry` = 入口的輸出時間，附錄 C §3；`chunk` 見 §2）。收看端清掉該 config 的緩衝（`abort()` 會重設 append window），**重新套用兩軌的 append window**：影像 `[0, ∞)`、音訊 `[audioStart, audioEnd)`，然後回 `ready { config, epoch, dataId }`。新 config 為 5 秒內，同一 config 的新 epoch 為 3 秒內。
+4. 房主送 `position`（欄位以下方訊息表為準；`entry` = 入口的輸出時間，附錄 C §3；`chunk` 見 §2）。收看端清掉該 config 的緩衝：若 MediaSource 已因 `endOfStream()` 進入 `ended`，先對各 SourceBuffer `remove()`（MediaSource 會回到 `open`），等 `updateend` 後再 `abort()` 重設剖析器（`abort()` 也會重設 append window），**重新套用兩軌的 append window**：影像 `[0, ∞)`、音訊 `[audioStart, audioEnd)`，然後回 `ready { config, epoch, dataId }`。新 config 為 5 秒內，同一 config 的新 epoch 為 3 秒內。
 5. 房主收到相符的 `ready` 才開始送這組資料，**每次都先送一份帶當次 `(config, epoch)` 的 init segment**，再送入口片段。重複附加相同的 init 對 MSE 無害；這樣跳轉或換頻道時，送到一半的舊 init 被丟棄也不會漏掉。
 6. 收看端建立 MediaSource、SourceBuffer 或附加失敗時送 `fail { config, reason }`；房主把這位收看者降一層。
 

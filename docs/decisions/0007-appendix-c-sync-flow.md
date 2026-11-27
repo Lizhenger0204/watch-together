@@ -17,7 +17,7 @@
 
 **房主 `state { config, epoch, playing, ended, mediaTime, hostClock, rate }`**：`playing` = 沒暫停、不在 `seeking`、`readyState ≥ 3`；`mediaTime` = 房主畫面時間；`hostClock` = 讀取當下的房主時鐘。`play`、`pause`、`playing`、`waiting`、`seeking`（送 `playing: false`）、`seeked`、`ratechange` 時送，另每秒一次。
 
-**片尾**：`end` = 影音共同終點（`config.end`，附錄 B §4）。收看端不用自己看到的緩衝判斷片尾（分不出「已送完」與「還沒到」）。從位置 P 起「需要的緩衝」= `[P, min(P + 門檻, end))`，而且**位置 P 本身一定要有兩軌的資料**（只有影像或音訊已在該軌結尾時例外）。「已到片尾、不需要後續緩衝」的豁免，**只在本 `(config, epoch)` 已收到兩軌的送完標記（附錄 B §2 `kind = 4`）且全部附加完成後**才適用；最後一段延遲到達時，收看端照常留在 `waitData`。`end` 只用於緩衝判定，**不設 `MediaSource.duration`**：收到兩軌的送完標記、待附加佇列都清空、所有 SourceBuffer 都不在 `updating` 之後，才呼叫 `endOfStream()`，片長由 MSE 依實際附加的資料決定（影音在容差內不等長時以較長軌為準）。房主自然播完以 `state.ended = true` 表示，收看端停在最後一格，不做落後重新定位。
+**片尾**：`end` = 影音共同終點（`config.end`，附錄 B §4）。收看端不用自己看到的緩衝判斷片尾（分不出「已送完」與「還沒到」）。從位置 P 起「需要的緩衝」= `[P, min(P + 門檻, end))`，而且**位置 P 本身一定要有兩軌的資料**（只有影像或音訊已在該軌結尾時例外）。「已到片尾、不需要後續緩衝」的豁免，**只在本 `(config, epoch)` 已收到**本 config 實際建立的每一軌**（無聲片只有影像）的送完標記（附錄 B §2 `kind = 4`）且全部附加完成後**才適用；最後一段延遲到達時，收看端照常留在 `waitData`。`end` 只用於緩衝判定，**不設 `MediaSource.duration`**：收到每一軌的送完標記、待附加佇列都清空、所有 SourceBuffer 都不在 `updating` 之後，才呼叫 `endOfStream()`，片長由 MSE 依實際附加的資料決定（影音在容差內不等長時以較長軌為準）。房主自然播完以 `state.ended = true` 表示（狀態機的 `ended` 分支，§2）。
 
 **應在時間** `E = playing ? mediaTime + (本機時鐘 + offset − hostClock) / 1000 × rate : mediaTime`。
 
@@ -34,6 +34,7 @@
 | 1 | `notReady` | 本 `(config, epoch)` 尚未收到入口資料，或沒有有效對時 | 暫停，回報 `buffering` |
 | 2 | `seekTimeout` | 自發跳轉 5 秒仍未 `seeked` | 放棄等待這次跳轉（之後晚到的 `seeked` 只觸發重新評估），記一次失敗；連續 2 次失敗回報 `stuck`（房主重新定位，§3），否則回到評估 |
 | 3 | `seeking` | 自發跳轉尚未 `seeked`（未逾 5 秒） | 等待（房主暫停也一樣：進行中的跳轉先等完或逾時，再依房主狀態決定） |
+| 4a | `ended` | `state.ended = true` | 等本 epoch 每一軌的送完標記都附加完成，然後跳到最後一個有效影格並暫停；不做落後重新定位 |
 | 4 | `hostPaused` | `playing = false` | 暫停；`\|drift\| > 50 ms` 且 E 已緩衝時跳到 E；不排 hold |
 | 5 | `waitData` | 從 E 起需要的緩衝（門檻 0.5 秒，見 §1「片尾」）未齊，影音取較短者 | 暫停，回報 `buffering` |
 | 6 | `seek` | 落後 ≥ 300 ms 或超前 ≥ 3 秒；距上次跳轉 ≥ 1 秒 | 目標 `S = E + seekLead × R`；S 夾在 `end − 1 格` 以內；**S 本身有兩軌資料、且從 S 起需要的緩衝（門檻 0.5 秒）都已齊**才跳（片尾豁免的條件同 §1），否則留在 `waitData`。`seekLead` = 上次 `seeking→seeked` 耗時 + 50 ms，夾在 0～1 秒 |
