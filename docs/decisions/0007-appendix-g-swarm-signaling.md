@@ -16,7 +16,7 @@
 ## §3 處理順序
 
 1. `swarm:mode { on }`、`swarm:pair { a, aConn, b, bConn, liveId }`、`swarm:unpair { a, b, pairId }` 只有房主能送（伺服器檢查角色）。
-2. `swarm:pair` 在佇列內檢查：模式已開、P2P 且正在直播、`liveId` 等於目前的直播世代、`aConn`／`bConn` 等於兩人**此刻**的連線且都宣告過 `swarm:hello`、兩人都是本房在線且已 `auth` 的收看者。任一不符就回 `ack { ok: false }`、不建立配對——延遲到達的舊指令（同一條連線停播再開後、對方重連後）因此不會建立房主沒有指定的配對。**先提交**，提交後回房主 `ack { ok: true, pairId }`，再送 `swarm:paired { peer, pairId }` 給雙方。房主 15 秒內沒收到雙方的 `peerOpen` 就 `swarm:unpair` 清掉這一對。
+2. `swarm:pair` 在佇列內檢查：模式已開、P2P 且正在直播、`liveId` 等於目前的直播世代、`aConn`／`bConn` 等於兩人**此刻**的連線且都宣告過 `swarm:hello`、兩人都是本房在線且已 `auth` 的收看者。任一不符就回 `ack { ok: false }`、不建立配對——延遲到達的舊指令（同一條連線停播再開後、對方重連後）因此不會建立房主沒有指定的配對。**先提交**，提交後回房主 `ack { ok: true, pairId }`，再送 `swarm:paired { peer, pairId }` 給雙方。房主收到 `ack` 後，也在自己與雙方的 `pt-ctl` 送 `pairHint { peer, pairId }`（這條通道與 WebSocket 無關）；收看端收到 `pairHint` 卻沒收過對應的 `swarm:paired`，**立刻**送 `swarm:check`（第 7 點）。所以發 offer 方或應答方任一方漏收，都能在幾百毫秒內補回。房主 15 秒內沒收到雙方的 `peerOpen` 才 `swarm:unpair` 清掉這一對。T-146／T-147 分別驗收「發 offer 方漏收」與「應答方漏收」。
 3. **送到已核對的實體連線**：`swarm:paired`、`peer:signal`、`swarm:unpaired`、`swarm:valid` 都只送到配對紀錄裡那條 `connId` 的 WebSocket，不是「這位成員目前的任一連線」。
 4. 收看者 X → Y 的 `peer:signal { to, pairId, data }`：在佇列內、**實際送出前**確認：配對存在且 `pairId` 相符；X 這條連線的 `connId` 等於登記的那一個；Y 的登記連線仍在線；模式仍開；P2P、正在直播、直播世代沒變。轉送時帶 `pairId`；收看端只接受與目前配對相符的 `pairId`，舊配對的 SDP／candidate 直接丟掉。
 5. **誰發 offer**：`memberId` 較小的一方；3 秒、8 秒還沒收到 answer 就重送同一份 offer（對方可能因為還沒收到 `swarm:paired` 而先丟掉）。雙方的 `sw-ctl`、`sw-data` 都開啟、而且各自確認選中的 candidate pair 不是 relay（附錄 H）後，各自在 `pt-ctl` 向房主送 `peerOpen { peer, pairId }`，關閉時送 `peerClosed`；房主只把雙方都回報 `peerOpen` 的配對當作可指派的鄰居（附錄 D §4）。
