@@ -185,6 +185,7 @@ describe("HEVC MKV probe regressions (R5 & R6 review fixes)", () => {
     );
     const smallSeiInsp = await inspectHevcProfile(smallSeiMkv);
     expect(smallSeiInsp?.info.mismatchMain10On8Bit).toBe(true);
+    expect(smallSeiInsp?.info.hasInBandParameterSets).toBe(true);
     expect(
       (await buildZeroCopyHevcProfileFix(smallSeiMkv, smallSeiInsp!)).ok,
     ).toBe(true);
@@ -423,6 +424,62 @@ describe("HEVC MKV probe regressions (R5 & R6 review fixes)", () => {
         (await inspectHevcProfile(trailingMkv))!,
       ),
     ).toEqual({ ok: false, reason: "mkv-probe-unreadable" });
+
+    // 路徑 E：BlockGroup 超出 16 KiB 探測視窗，但在視窗內有效 Block 後含無效 VINT（0xFB 0x00）→ 三條路徑均須拒改
+    const invalidVintBg = ebmlEl(
+      [0xa0],
+      concat(
+        validBlockInBg,
+        new Uint8Array([0xfb, 0x00]),
+        new Uint8Array(18_000),
+      ),
+    );
+    const invalidVintCluster = ebmlEl(
+      [0x1f, 0x43, 0xb6, 0x75],
+      concat(tcEl, invalidVintBg),
+    );
+    for (const badBlob of [
+      // 首 Cluster
+      new Blob(
+        [ebmlHeader, segHdrUnknown, tracks, invalidVintCluster, pad45MB],
+        {
+          type: "video/x-matroska",
+        },
+      ),
+      // 有相對位置 Cue
+      new Blob(
+        [
+          ebmlHeader,
+          segHdrUnknown,
+          tracks,
+          makeRelCue(bgClusterPos, tcEl.length),
+          cleanCluster,
+          invalidVintCluster,
+          pad45MB,
+        ],
+        { type: "video/x-matroska" },
+      ),
+      // 無相對位置 Cue
+      new Blob(
+        [
+          ebmlHeader,
+          segHdrUnknown,
+          tracks,
+          makeClusterCue(bgNoRelPos),
+          cleanCluster,
+          invalidVintCluster,
+          pad45MB,
+        ],
+        { type: "video/x-matroska" },
+      ),
+    ]) {
+      expect(
+        await buildZeroCopyHevcProfileFix(
+          badBlob,
+          (await inspectHevcProfile(badBlob))!,
+        ),
+      ).toEqual({ ok: false, reason: "mkv-probe-unreadable" });
+    }
   });
 
   it("refuses hvc1 MP4 when a 66 KiB SEI in a probed keyframe hides a true 10-bit SPS", async () => {

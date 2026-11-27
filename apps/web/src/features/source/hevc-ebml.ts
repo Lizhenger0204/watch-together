@@ -300,6 +300,24 @@ function decodeMkvBlockPayload(
   };
 }
 
+/** 區分標頭確實被讀取視窗切斷，與視窗內已可判定的無效首 byte（如 0x00 或超長 VINT）。 */
+function isEbmlHeaderCutByWindow(
+  buf: Uint8Array,
+  pos: number,
+  maxLen: number,
+): boolean {
+  if (pos >= buf.length) return true;
+  const first = buf[pos]!;
+  if (first === 0) return false;
+  let len = 1;
+  let mask = 0x80;
+  while ((first & mask) === 0 && len <= maxLen) {
+    mask >>= 1;
+    len += 1;
+  }
+  return len <= maxLen && pos + len > buf.length;
+}
+
 function parseBlockGroupElement(
   buf: Uint8Array,
   groupStart: number,
@@ -314,13 +332,14 @@ function parseBlockGroupElement(
   while (pos < groupEnd) {
     const subId = readEbmlId(buf, pos);
     if (!subId) {
-      return groupTruncated
+      return groupTruncated && isEbmlHeaderCutByWindow(buf, pos, 4)
         ? { corrupt: false, block }
         : { corrupt: true, block: null };
     }
     const subSize = readEbmlVint(buf, pos + subId.length);
     if (!subSize) {
-      return groupTruncated
+      return groupTruncated &&
+        isEbmlHeaderCutByWindow(buf, pos + subId.length, 8)
         ? { corrupt: false, block }
         : { corrupt: true, block: null };
     }
@@ -421,13 +440,24 @@ export function extractVideoBlocksFromCluster(
     : Math.min(clusterBuf.length, start + sizeInfo.value);
 
   const results: MkvBlockPayload[] = [];
+  const clusterTruncated =
+    sizeInfo.unknown || start + sizeInfo.value > clusterBuf.length;
   let pos = start;
   while (pos < end && results.length < maxBlocks) {
     const cid = readEbmlId(clusterBuf, pos);
-    if (!cid) break;
+    if (!cid) {
+      return clusterTruncated && isEbmlHeaderCutByWindow(clusterBuf, pos, 4)
+        ? results
+        : [];
+    }
     if (sizeInfo.unknown && SEGMENT_LEVEL_IDS.has(cid.id)) break;
     const csize = readEbmlVint(clusterBuf, pos + cid.length);
-    if (!csize) break;
+    if (!csize) {
+      return clusterTruncated &&
+        isEbmlHeaderCutByWindow(clusterBuf, pos + cid.length, 8)
+        ? results
+        : [];
+    }
     const dataStart = pos + cid.length + csize.length;
     const blockTruncated = csize.unknown || dataStart + csize.value > end;
     const dataEnd = csize.unknown
