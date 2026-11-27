@@ -284,7 +284,9 @@ export async function inspectMp4Hevc(
           isTruncatedWindow,
         );
         if (inspected.hasInBandParameterSets) hasInBandParameterSets = true;
-        if (inspected.hasUnparsedSps) extraUnparsedSps = true;
+        if (inspected.hasUnparsedSps || inspected.windowExhaustedBeforeVcl) {
+          extraUnparsedSps = true;
+        }
         extraSps.push(...inspected.spsList);
       }
 

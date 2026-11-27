@@ -46,7 +46,15 @@ function ebmlEl(
   return concat(new Uint8Array(idBytes), ebmlVint(payload.length), payload);
 }
 
-function makeSyntheticSps() {
+function mp4Box(type: string, payload: Uint8Array): Uint8Array<ArrayBuffer> {
+  const out = new Uint8Array(8 + payload.length);
+  new DataView(out.buffer).setUint32(0, out.length, false);
+  for (let i = 0; i < 4; i += 1) out[4 + i] = type.charCodeAt(i);
+  out.set(payload, 8);
+  return out;
+}
+
+function makeSyntheticSps(bitDepthMinus8 = 0) {
   const bits: number[] = [];
   const pushBits = (val: number, count: number) => {
     for (let i = count - 1; i >= 0; i -= 1) bits.push((val >> i) & 1);
@@ -71,8 +79,8 @@ function makeSyntheticSps() {
   pushUE(160);
   pushUE(96);
   pushBits(0, 1);
-  pushUE(0);
-  pushUE(0);
+  pushUE(bitDepthMinus8);
+  pushUE(bitDepthMinus8);
   pushBits(1, 1);
   while (bits.length % 8 !== 0) bits.push(0);
   const rbsp = new Uint8Array(bits.length / 8);
@@ -155,8 +163,8 @@ describe("HEVC MKV probe regressions (R5 & R6 review fixes)", () => {
       reason: "mkv-probe-unreadable",
     });
 
-    // R5-2：小型 MKV 的前置 SEI 佔滿 16 KiB，後方完整接 SPS + VCL → 維持 mismatch=true 並修補成功
-    const bigSei = new Uint8Array(16_300);
+    // R5-2：小型 MKV 的前置 SEI 超過 16 KiB（17,000 bytes），觸發完整重讀後方 SPS + VCL → 維持 mismatch=true 並修補成功
+    const bigSei = new Uint8Array(17_000);
     bigSei[0] = (39 << 1) & 0x7e;
     bigSei[1] = 0x01;
     const smallSeiCluster = ebmlEl(
@@ -320,7 +328,7 @@ describe("HEVC MKV probe regressions (R5 & R6 review fixes)", () => {
       reason: "mkv-probe-unreadable",
     });
 
-    // R6-2：Cue 指向的 BlockGroup 內含宣告越出 BlockGroup 邊界的 Block → 不可當成乾淨，須回傳 mkv-probe-unreadable
+    // R6-2：損毀 BlockGroup（越界 Block、或有效 Block 後帶未知長度子元素）在首 Cluster、無相對位置 Cue、有相對位置 Cue 三條路徑皆須拒改
     const badBgBlock = concat(
       new Uint8Array([0xa1, 0x90, 0x81, 0x00, 0x00, 0x00]),
       lenPrefix(vcl),
@@ -329,8 +337,9 @@ describe("HEVC MKV probe regressions (R5 & R6 review fixes)", () => {
       [0x1f, 0x43, 0xb6, 0x75],
       concat(tcEl, ebmlEl([0xa0], badBgBlock.subarray(0, 12))),
     );
+    // 路徑 A：Cue 帶相對位置指向越界 BlockGroup
     const bgClusterPos = tracks.length + cueLen + cleanCluster.length;
-    const badBgLargeMkv = new Blob(
+    const badBgRelMkv = new Blob(
       [
         ebmlHeader,
         segHdrUnknown,
@@ -342,12 +351,147 @@ describe("HEVC MKV probe regressions (R5 & R6 review fixes)", () => {
       ],
       { type: "video/x-matroska" },
     );
-    const badBgLargeInsp = await inspectHevcProfile(badBgLargeMkv);
     expect(
-      await buildZeroCopyHevcProfileFix(badBgLargeMkv, badBgLargeInsp!),
-    ).toEqual({
+      await buildZeroCopyHevcProfileFix(
+        badBgRelMkv,
+        (await inspectHevcProfile(badBgRelMkv))!,
+      ),
+    ).toEqual({ ok: false, reason: "mkv-probe-unreadable" });
+
+    // 路徑 B：越界 BlockGroup 位於首 Cluster
+    const badBgFirstMkv = new Blob(
+      [ebmlHeader, segHdrUnknown, tracks, badBgCluster, pad45MB],
+      { type: "video/x-matroska" },
+    );
+    expect(
+      await buildZeroCopyHevcProfileFix(
+        badBgFirstMkv,
+        (await inspectHevcProfile(badBgFirstMkv))!,
+      ),
+    ).toEqual({ ok: false, reason: "mkv-probe-unreadable" });
+
+    // 路徑 C：無相對位置 Cue 指向越界 BlockGroup
+    const bgNoRelPos =
+      tracks.length + makeClusterCue(0).length + cleanCluster.length;
+    const badBgNoRelMkv = new Blob(
+      [
+        ebmlHeader,
+        segHdrUnknown,
+        tracks,
+        makeClusterCue(bgNoRelPos),
+        cleanCluster,
+        badBgCluster,
+        pad45MB,
+      ],
+      { type: "video/x-matroska" },
+    );
+    expect(
+      await buildZeroCopyHevcProfileFix(
+        badBgNoRelMkv,
+        (await inspectHevcProfile(badBgNoRelMkv))!,
+      ),
+    ).toEqual({ ok: false, reason: "mkv-probe-unreadable" });
+
+    // 路徑 D：BlockGroup 內有效 Block 後方緊接未知長度子元素（0xFB 0xFF）→ 不可提前返回放行
+    const validBlockInBg = ebmlEl(
+      [0xa1],
+      concat(new Uint8Array([0x81, 0x00, 0x00, 0x00]), lenPrefix(vcl)),
+    );
+    const trailingUnknownBg = ebmlEl(
+      [0xa0],
+      concat(validBlockInBg, new Uint8Array([0xfb, 0xff, 0x01])),
+    );
+    const trailingUnknownCluster = ebmlEl(
+      [0x1f, 0x43, 0xb6, 0x75],
+      concat(tcEl, trailingUnknownBg),
+    );
+    const trailingMkv = new Blob(
+      [
+        ebmlHeader,
+        segHdrUnknown,
+        tracks,
+        makeRelCue(bgClusterPos, tcEl.length),
+        cleanCluster,
+        trailingUnknownCluster,
+        pad45MB,
+      ],
+      { type: "video/x-matroska" },
+    );
+    expect(
+      await buildZeroCopyHevcProfileFix(
+        trailingMkv,
+        (await inspectHevcProfile(trailingMkv))!,
+      ),
+    ).toEqual({ ok: false, reason: "mkv-probe-unreadable" });
+  });
+
+  it("refuses hvc1 MP4 when a 66 KiB SEI in a probed keyframe hides a true 10-bit SPS", async () => {
+    const sps8 = makeSyntheticSps(0);
+    const sps10 = makeSyntheticSps(2);
+    const hvcc = new Uint8Array(23 + 5 + sps8.length);
+    hvcc[0] = 1;
+    hvcc[1] = HEVC_PROFILE_MAIN_10;
+    hvcc[2] = 0x20;
+    hvcc[12] = 93;
+    hvcc[16] = 0xfd;
+    hvcc[17] = 0xf8;
+    hvcc[18] = 0xf8;
+    hvcc[21] = 0x03;
+    hvcc[22] = 1;
+    hvcc[23] = 0x80 | HEVC_NAL_SPS;
+    hvcc[24] = 0;
+    hvcc[25] = 1;
+    hvcc[26] = (sps8.length >> 8) & 0xff;
+    hvcc[27] = sps8.length & 0xff;
+    hvcc.set(sps8, 28);
+
+    const vcl = new Uint8Array([0x26, 0x01, 0xde, 0xad]);
+    const sei66k = new Uint8Array(66_000);
+    sei66k[0] = (39 << 1) & 0x7e;
+    sei66k[1] = 0x01;
+    const s1 = lenPrefix(vcl);
+    const s2 = concat(lenPrefix(sei66k), lenPrefix(sps10), lenPrefix(vcl));
+
+    const hvc1 = mp4Box(
+      "hvc1",
+      concat(new Uint8Array(78), mp4Box("hvcC", hvcc)),
+    );
+    const stsd = mp4Box("stsd", concat(u32(0), u32(1), hvc1));
+    const stsc = mp4Box("stsc", concat(u32(0), u32(1), u32(1), u32(2), u32(1)));
+    const stsz = mp4Box(
+      "stsz",
+      concat(u32(0), u32(0), u32(2), u32(s1.length), u32(s2.length)),
+    );
+    const stss = mp4Box("stss", concat(u32(0), u32(2), u32(1), u32(2)));
+    const ftyp = mp4Box("ftyp", new TextEncoder().encode("isom\0\0\x02\0isom"));
+    const mdat = mp4Box("mdat", concat(s1, s2));
+    const build = (off: number) => {
+      const stco = mp4Box("stco", concat(u32(0), u32(1), u32(off)));
+      const moov = mp4Box(
+        "moov",
+        mp4Box(
+          "trak",
+          mp4Box(
+            "mdia",
+            mp4Box(
+              "minf",
+              mp4Box("stbl", concat(stsd, stsc, stsz, stss, stco)),
+            ),
+          ),
+        ),
+      );
+      return { moov, bytes: concat(ftyp, moov, mdat) };
+    };
+    const mdatStart = ftyp.length + build(0).moov.length + 8;
+    const blob = new Blob([build(mdatStart).bytes], { type: "video/mp4" });
+
+    const insp = await inspectHevcProfile(blob);
+    expect(insp?.container).toBe("mp4");
+    expect(insp?.info.mismatchMain10On8Bit).toBe(false);
+    expect(insp?.info.unsafeReason).toBe("unparsed-sps");
+    expect(await buildZeroCopyHevcProfileFix(blob, insp!)).toEqual({
       ok: false,
-      reason: "mkv-probe-unreadable",
+      reason: "unparsed-sps",
     });
   });
 });

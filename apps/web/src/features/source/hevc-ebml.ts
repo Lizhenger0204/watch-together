@@ -300,6 +300,57 @@ function decodeMkvBlockPayload(
   };
 }
 
+function parseBlockGroupElement(
+  buf: Uint8Array,
+  groupStart: number,
+  groupEnd: number,
+  declaredGroupEnd: number | undefined,
+  groupTruncated: boolean,
+  baseFileOffset: number,
+  targetTrack: number,
+): { corrupt: boolean; block: MkvBlockPayload | null } {
+  let block: MkvBlockPayload | null = null;
+  let pos = groupStart;
+  while (pos < groupEnd) {
+    const subId = readEbmlId(buf, pos);
+    if (!subId) {
+      return groupTruncated
+        ? { corrupt: false, block }
+        : { corrupt: true, block: null };
+    }
+    const subSize = readEbmlVint(buf, pos + subId.length);
+    if (!subSize) {
+      return groupTruncated
+        ? { corrupt: false, block }
+        : { corrupt: true, block: null };
+    }
+    if (subSize.unknown) return { corrupt: true, block: null };
+    const subStart = pos + subId.length + subSize.length;
+    const subDeclaredEnd = subStart + subSize.value;
+    if (declaredGroupEnd !== undefined && subDeclaredEnd > declaredGroupEnd) {
+      return { corrupt: true, block: null };
+    }
+    if (!groupTruncated && subDeclaredEnd > groupEnd) {
+      return { corrupt: true, block: null };
+    }
+    const subEnd = Math.min(groupEnd, subDeclaredEnd);
+    if (subId.id === EBML_ID_BLOCK && block === null) {
+      block = decodeMkvBlockPayload(
+        buf,
+        subStart,
+        subEnd,
+        baseFileOffset,
+        targetTrack,
+        null,
+        subDeclaredEnd > groupEnd,
+      );
+    }
+    if (subDeclaredEnd > groupEnd) break;
+    pos = subDeclaredEnd;
+  }
+  return { corrupt: false, block };
+}
+
 export function parseSingleBlockElement(
   buf: Uint8Array,
   elementFileOffset: number,
@@ -336,37 +387,17 @@ export function parseSingleBlockElement(
     );
   }
   if (idInfo.id === EBML_ID_BLOCK_GROUP) {
-    const declaredGroupEnd = sizeInfo.unknown
-      ? undefined
-      : start + sizeInfo.value;
-    let pos = start;
-    while (pos < end) {
-      const subId = readEbmlId(buf, pos);
-      if (!subId) return null;
-      const subSize = readEbmlVint(buf, pos + subId.length);
-      if (!subSize || subSize.unknown) return null;
-      const subStart = pos + subId.length + subSize.length;
-      const subDeclaredEnd = subStart + subSize.value;
-      if (declaredGroupEnd !== undefined && subDeclaredEnd > declaredGroupEnd) {
-        return null;
-      }
-      if (!truncated && subDeclaredEnd > end) return null;
-      const subEnd = Math.min(end, subDeclaredEnd);
-      if (subId.id === EBML_ID_BLOCK) {
-        return decodeMkvBlockPayload(
-          buf,
-          subStart,
-          subEnd,
-          elementFileOffset,
-          targetTrack,
-          null,
-          subDeclaredEnd > end,
-        );
-      }
-      if (subDeclaredEnd > end) return null;
-      pos = subEnd;
-    }
-    return null;
+    if (sizeInfo.unknown) return null;
+    const parsed = parseBlockGroupElement(
+      buf,
+      start,
+      end,
+      start + sizeInfo.value,
+      truncated,
+      elementFileOffset,
+      targetTrack,
+    );
+    return parsed.corrupt ? null : parsed.block;
   }
   return null;
 }
@@ -382,6 +413,9 @@ export function extractVideoBlocksFromCluster(
   const sizeInfo = readEbmlVint(clusterBuf, idInfo.length);
   if (!sizeInfo) return [];
   const start = idInfo.length + sizeInfo.length;
+  const declaredClusterEnd = sizeInfo.unknown
+    ? undefined
+    : start + sizeInfo.value;
   const end = sizeInfo.unknown
     ? clusterBuf.length
     : Math.min(clusterBuf.length, start + sizeInfo.value);
@@ -412,20 +446,24 @@ export function extractVideoBlocksFromCluster(
       );
       if (payload) results.push(payload);
     } else if (cid.id === EBML_ID_BLOCK_GROUP) {
-      for (const sub of iterateEbmlChildren(clusterBuf, dataStart, dataEnd)) {
-        if (sub.id !== EBML_ID_BLOCK) continue;
-        const payload = decodeMkvBlockPayload(
-          clusterBuf,
-          sub.dataStart,
-          sub.dataEnd,
-          clusterFileOffset,
-          targetTrack,
-          null,
-          blockTruncated,
-        );
-        if (payload) results.push(payload);
-        break;
+      if (
+        csize.unknown ||
+        (declaredClusterEnd !== undefined &&
+          dataStart + csize.value > declaredClusterEnd)
+      ) {
+        return [];
       }
+      const parsed = parseBlockGroupElement(
+        clusterBuf,
+        dataStart,
+        dataEnd,
+        dataStart + csize.value,
+        dataStart + csize.value > end,
+        clusterFileOffset,
+        targetTrack,
+      );
+      if (parsed.corrupt) return [];
+      if (parsed.block) results.push(parsed.block);
     }
     if (csize.unknown) break;
     pos = dataEnd;
