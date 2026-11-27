@@ -57,6 +57,7 @@
 | T-137 | 畫質支援 1080P 以上：解析度 1440／2160／原片（原片不縮放）、位元率加 25／40 Mbps；實際送出 > 1080 改 `maintain-resolution`；高畫質靜態、4K 位元率、「編碼跟不上」三種提示（只提示不強制）；協定升為 v2。ADR 0004、streaming.md §2／§8／§9、protocol.md（原暫定 T-136，與 BUG-004 撞號改號；交接備註見 [archive](archive/2026-11-handoffs.md) T-137） | Claude（研究、規格、審查）、Gemini（實作） | — | DONE |
 | T-138 | 瀏覽器內自動修正「標頭標成 Main 10、實際 8-bit」的 HEVC 片源（零複製 Blob 拼接，不重新編碼；先寫 ADR） | 進行中會話 | BUG-003 根因 | DOING |
 | T-139 | 收看端位元率與畫質不一致、Chrome 位元率衝不上去。已合併 `4c2326f`（`8b413fb`～`9f55935`）：(1) 統一 H.264 profile 協商與硬體編碼路徑、WHEP codec 偏好；(2) 音訊不參與 transport-cc，修正頻寬估計每 5 秒被砍；新增房主「Safari 模式」（42e01f 軟體編碼，直播中切換不中斷）。取證見 ADR 0005；真實網路、Realtime 轉發、Windows 待 T-113 | Gemini（第一部分實作）→ Claude Opus（第二部分接手實作）、Claude Opus（第一部分審查）、GPT（第二部分四輪審查） | T-137 | DONE |
+| T-140 | 原片直送架構研究（只寫 ADR 0007 與規格草稿、原型實驗，不實作正式功能）：三層傳送＝原片直送（DataChannel＋MSE，收看端同步播放）→ 原片直送＋只轉碼畫面（WebCodecs，音訊原封不動）→ 退回現有 WebRTC 即時編碼；含同步協定、拆檔、流量控制、轉發模式、Windows NVENC 實驗頁。起因：Windows NVENC 1080P 衝不上 8M、4K 軟體編碼掉幀 | Claude Opus（研究、ADR）、GPT（審查） | T-139 | DOING |
 
 可平行的組合：T-101 完成後 → T-102（Claude）∥ T-106（GPT）；T-102 完成後 → T-103、T-105（Claude，依序）∥ T-104（GPT）；T-103 完成後 → T-108、T-112（GPT）。T-115（Claude）可與 T-105／T-114 的審查同時進行；T-114 與 T-115 都合併後 → T-107（GPT）∥ T-109、T-110（Claude）。
 
