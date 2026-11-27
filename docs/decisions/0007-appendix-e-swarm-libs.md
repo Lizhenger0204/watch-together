@@ -12,7 +12,7 @@
 | --- | --- | --- | --- | --- |
 | 版本、更新 | 3.0.21（2026-07-27） | 4.0.0（2026-08-19）；5.0 alpha 每週更新 | hls.js 1.7.4（2026-10-28，每週 canary）；shaka 5.3.6（2026-11-20） | — |
 | 授權 | MIT | Apache-2.0 | 兩者 Apache-2.0 | — |
-| 體積（壓縮後） | `webtorrent.min.js` 223 KB（未 gzip）＋Service Worker | core＋hlsjs 整合，另需 hls.js | hls.js light 120 KB（gzip）；shaka 298 KB（gzip） | 最小 |
+| 體積（壓縮後） | `webtorrent.min.js` 223 KB（未 gzip）＋Service Worker | core＋hlsjs 整合，另需 hls.js | hls.js 完整版約 190 KB、light 120 KB（gzip）；shaka 298 KB（gzip） | 最小 |
 | 片段單位 | 檔案的**位元組區段**（piece），和時間、關鍵影格無關 | HLS／DASH 片段 | HLS 片段（我們自己產生播放清單） | 自訂 |
 | 完整性 | 要**先對整個檔案算 piece 雜湊**（建 torrent），50 GB 的片要先讀完整檔；第二層的轉碼輸出不是檔案，做不成 torrent | 有 `validateP2PSegment` 掛勾，可接我們的雜湊 | 不管（由我們的片段倉庫驗證，附錄 D §5） | 自己做 |
 | mkv／HEVC | `streamTo()` 直接播原檔，只支援瀏覽器原生能播的容器；**mkv 不保證**；預設會下載全部 piece（可用 `deselect`／範圍讀取限制） | 依 hls.js／shaka；我們的片段是 fMP4，可以 | fMP4 的 HEVC 依瀏覽器支援（README：「HEVC … subject to runtime support」）；mkv 由房主拆檔轉成 fMP4，與播放器無關 | 自己處理 |
@@ -26,8 +26,8 @@
 - (a)、(b) **不採用**。共同原因：兩者都缺少本專案必要的**成員授權、由房主決定的配對、依房主預算的排程**；這三件正是我們要自己控制的部分，用了套件也要繞過它的預設。另外 (a) 要先對整檔算 piece 雜湊、piece 與時間無關、第二層的轉碼輸出做不成 torrent；(b) 假設有 HTTP 來源（我們的來源是房主的 DataChannel，要把片段橋接到套件的 Fetch 介面，例如以 `httpRequestSetup` 傳回自訂 `Request`）。
 - (c) **hls.js（light build）列為候選**：把收看端 MSE 的建立、附加、`backBufferLength` 清除、卡住時微調（nudge）、跳轉到未緩衝位置、iOS 的 ManagedMediaSource 交給維護活躍的專案。**T-141 的採用門檻**，全部通過才採用：
   1. 附錄 B §3 的時間軸：九種素材的首格時間、影音對齊與 `buffered` 連續性（含起點不是 0、edit list、起始空白）。
-  2. 附錄 B §3 的**分軌 append window**（AAC priming、音訊比影像短）：原型用影音同段、單一 `audiovideo` SourceBuffer，**沒有驗證**這一項；light build 也沒有獨立音軌播放清單。要嘛證明單一 SourceBuffer 下結果相同，要嘛改用完整版的獨立音軌。
-  3. 附錄 C §4 的 `QuotaExceededError` 與 ManagedMediaSource `endstreaming`／`startstreaming` 恢復，能經由 hls.js 的設定或事件達成。
+  2. **附錄 F §3 的分軌契約**：影像與音訊各自的 SourceBuffer、各自的 append window（AAC priming、音訊比影像短）。原型用影音同段、單一 `audiovideo` SourceBuffer，**不符合**也**沒有驗證**這一項；light build 沒有獨立音軌播放清單，所以若採用 hls.js，要用完整版（`hls.min.js` 壓縮後約 190 KB）的獨立音軌。不接受單一 SourceBuffer：要接受就得先修改附錄 F §3，並用同一批素材驗證。
+  3. **附錄 F §2 的恢復流程**：`QuotaExceededError` 後開新 epoch 重新定位、ManagedMediaSource `endstreaming`／`startstreaming`（E 不在緩衝內時開新 epoch）、換 `pt-data` 時取消並重發請求，都能經由 hls.js 的設定或事件做到。
   4. hls.js 自己的 nudge 與跳轉不會干擾附錄 C §2 的追趕狀態機（量測同步誤差與額外跳轉次數）。
   5. 附錄 E §3 列的 hls.js 問題（自訂 loader、長 GOP 續接段跳轉、沒有 Cues 的 MKV）。
   shaka 也可行（`NetworkingEngine.registerScheme`），體積是 2.5 倍、原型沒驗證，列為備案。
@@ -47,7 +47,7 @@
 
 - 「房主上傳」與每位收看者的上傳 Mbps：20 秒內**完整送出**的片段（最後一則交給 `send()` 之後才計入）的應用層位元組，不含 SCTP／DTLS 開銷，所以秒級數字會跳動；「從房主／從其他人」是收看端收齊的片段位元組。
 - 「誤差」：收看端每 100 ms 採樣一次「畫面時間 − 應在時間」，**只在播放中、差距 ≤ 0.4 秒時採樣**；卡住、跳轉中的時段不在 p95 內。
-- 「房主跳轉 → 回到 100 ms 內」：以房主的跳轉編號（`seekId`）辨識同一次跳轉，起點固定為第一則帶新編號的 `state` 的房主時刻；終點是跳轉之後、位於新位置的**第一張已呈現畫面**（`requestVideoFrameCallback` 回報）且以該畫面的顯示時刻算出的誤差 < 100 ms。**包含等資料的時間**。
+- 「房主跳轉 → 回到 100 ms 內」：以房主的跳轉編號（`seekId`）辨識同一次跳轉，起點固定為第一則帶新編號的 `state` 的房主時刻；終點是跳轉之後、位於新位置的**第一張已呈現畫面**（`requestVideoFrameCallback` 回報）且以該畫面的顯示時刻算出的誤差 < 100 ms。**包含等資料的時間**。本次樣本都是**往後跳 20 秒**，「位於新位置」以 `mediaTime ≥ 目標 − 0.5 秒` 判斷；往回或小幅跳轉時這個條件分不出舊畫面，要改成綁定「該次跳轉完成後的新畫面」。
 - 原型每段直送 1 份（`k = 1`），附錄 D §8 在 1080P 3 人時會用 `k = 3`（不需要散布）；這裡刻意用 `k = 1` 測散布本身。
 - **單一台 M1、單次樣本、loopback**；收看者之間**全連**（3 人時每人 2 個 peer）；用 `BroadcastChannel` 代替有驗證的信令；同機時鐘相同、省略對時。
 
