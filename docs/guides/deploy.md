@@ -117,5 +117,22 @@ pnpm --filter @project/signal exec wrangler deploy --env production --dry-run
 | `/api/health` 顯示首頁或 404     | 確認網域綁到第 7 步的正式 Worker，並用第 6 步指令重新部署。                             |
 | 加入房間一直收到 `429`           | 同一 IP 每分鐘最多送出 10 次加入請求。等一分鐘再確認邀請碼並重試。                      |
 | 轉發顯示 `503` 或直連收不到畫面  | 分別確認 Realtime 或 TURN 的兩項機密都已設定到 `production`，再重試。                   |
+| HEVC 影片在 Windows 顯示標頭有誤（標成 Main 10、實際 8-bit） | 播放器會先嘗試自動免重編碼修正；若該檔無法自動修正，可用下方 FFmpeg 指令轉檔後再選片。 |
+
+### 修正 HEVC 畸形標頭（標成 Main 10、實際 8-bit）的 FFmpeg 指令
+
+FFmpeg 的 `hevc_metadata` 不支援修改 `profile`，需重新編碼視訊並直接複製音訊（`-c:a copy`）。若原 MKV 的音訊不是 MP4 支援格式（例如 AC-3），請把 `-c:a copy` 改為 `-c:a aac -b:a 192k`：
+
+- **有 NVIDIA 顯示卡（最快）**：
+
+```sh
+ffmpeg -i "input.mkv" -c:v hevc_nvenc -profile:v main -pix_fmt yuv420p -cq 20 -tag:v hvc1 -c:a copy -movflags +faststart "output.mp4"
+```
+
+- **沒有 NVIDIA 顯示卡（CPU 轉碼）**：
+
+```sh
+ffmpeg -i "input.mkv" -c:v libx265 -pix_fmt yuv420p -crf 20 -tag:v hvc1 -c:a copy -movflags +faststart "output.mp4"
+```
 
 [自訂網域故障排除](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/) · [Workers 限流說明](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/)
