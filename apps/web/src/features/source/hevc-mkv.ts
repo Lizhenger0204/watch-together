@@ -236,6 +236,7 @@ export async function inspectMkvHevc(
   if (!hvcc) return null;
 
   let cueTargets: MkvCueTarget[] = [];
+  let probeTargetUnreadable = false;
   if (cuesOffset !== null) {
     const cuesEl = await readEbmlElementPayload(
       file,
@@ -243,29 +244,51 @@ export async function inspectMkvHevc(
       EBML_ID_CUES,
       MAX_CUES_BYTES,
     );
-    if (cuesEl) {
+    if (!cuesEl) {
+      probeTargetUnreadable = true;
+    } else {
       cueTargets = parseCuesForTrack(
         cuesEl.payload,
         segmentDataStart,
         foundTrack.trackNumber,
       );
+      if (cueTargets.length === 0) probeTargetUnreadable = true;
     }
   }
 
   const probeBlocks: MkvBlockPayload[] = [];
-  let probeTargetUnreadable = false;
-  if (firstClusterOffset !== null) {
-    const clusterHead = await sliceBlobBytes(
+  if (firstClusterOffset === null) {
+    // 超過 64 個頂層元素仍未見首個 Cluster：大型 MKV 不得跳過首 Cluster 只看後段 Cue
+    probeTargetUnreadable = true;
+  } else {
+    let clusterHead = await sliceBlobBytes(
       file,
       firstClusterOffset,
       CLUSTER_PROBE_BYTES,
     );
-    const firstBlocks = extractVideoBlocksFromCluster(
+    let firstBlocks = extractVideoBlocksFromCluster(
       clusterHead,
       firstClusterOffset,
       foundTrack.trackNumber,
       2,
     );
+    if (
+      file.size <= SMALL_MKV_SCAN_LIMIT &&
+      (firstBlocks.length === 0 || firstBlocks.some((b) => b.truncated))
+    ) {
+      // 小型 MKV 若前 16 KiB 剛好切斷首個視訊 block（如前置 16 KiB SEI），讀完整 Cluster 再檢視
+      clusterHead = await sliceBlobBytes(
+        file,
+        firstClusterOffset,
+        file.size - firstClusterOffset,
+      );
+      firstBlocks = extractVideoBlocksFromCluster(
+        clusterHead,
+        firstClusterOffset,
+        foundTrack.trackNumber,
+        2,
+      );
+    }
     if (firstBlocks.length === 0) probeTargetUnreadable = true;
     probeBlocks.push(...firstBlocks);
   }
@@ -292,9 +315,6 @@ export async function inspectMkvHevc(
       }
     }
   }
-  const largeMkvProbeFailed =
-    file.size > SMALL_MKV_SCAN_LIMIT &&
-    (probeTargetUnreadable || probeBlocks.length === 0);
 
   const nalLenSize = hvcc.lengthSizeMinusOne + 1;
   let hasInBandParameterSets = false;
@@ -313,8 +333,12 @@ export async function inspectMkvHevc(
     );
     if (inspected.hasInBandParameterSets) hasInBandParameterSets = true;
     if (inspected.hasUnparsedSps) extraUnparsedSps = true;
+    if (inspected.windowExhaustedBeforeVcl) probeTargetUnreadable = true;
     extraSps.push(...inspected.spsList);
   }
+  const largeMkvProbeFailed =
+    file.size > SMALL_MKV_SCAN_LIMIT &&
+    (probeTargetUnreadable || probeBlocks.length === 0);
 
   const containerUnsafeReason = foundTrack.hasContentEncoding
     ? "mkv-content-encoding"
@@ -365,18 +389,41 @@ async function readCueTargetBlock(
   const clusterDataStart = cue.clusterOffset + idInfo.length + sizeInfo.length;
 
   if (cue.relativePosition !== null) {
+    // 嚴格限制 CueRelativePosition 必須落在該 Cluster 的實際範圍內，不可越界讀到下一個 Cluster
+    if (sizeInfo.unknown) {
+      if (cue.relativePosition > 0) return null;
+    } else if (cue.relativePosition >= sizeInfo.value) {
+      return null;
+    }
     const blockOffset = clusterDataStart + cue.relativePosition;
-    const blockBuf = await sliceBlobBytes(
-      file,
+    const remainingInCluster = sizeInfo.unknown
+      ? undefined
+      : sizeInfo.value - cue.relativePosition;
+    const maxWindow =
+      file.size <= SMALL_MKV_SCAN_LIMIT
+        ? SMALL_MKV_SCAN_LIMIT
+        : BLOCK_PREFIX_READ_BYTES;
+    const readBytes =
+      remainingInCluster !== undefined
+        ? Math.min(maxWindow, remainingInCluster)
+        : maxWindow;
+    if (readBytes <= 0) return null;
+    const blockBuf = await sliceBlobBytes(file, blockOffset, readBytes);
+    return parseSingleBlockElement(
+      blockBuf,
       blockOffset,
-      BLOCK_PREFIX_READ_BYTES,
+      targetTrack,
+      remainingInCluster,
     );
-    return parseSingleBlockElement(blockBuf, blockOffset, targetTrack);
   }
+  const clusterReadLen =
+    file.size <= SMALL_MKV_SCAN_LIMIT
+      ? Math.min(SMALL_MKV_SCAN_LIMIT, file.size - cue.clusterOffset)
+      : CLUSTER_PROBE_BYTES;
   const clusterHead = await sliceBlobBytes(
     file,
     cue.clusterOffset,
-    CLUSTER_PROBE_BYTES,
+    clusterReadLen,
   );
   return (
     extractVideoBlocksFromCluster(

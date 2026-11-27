@@ -449,12 +449,14 @@ export function inspectSampleParameterSets(
   hasInBandParameterSets: boolean;
   spsList: ParsedHevcSps[];
   hasUnparsedSps: boolean;
+  windowExhaustedBeforeVcl: boolean;
 } {
   if (nalLengthSize < 1 || nalLengthSize > 4) {
     return {
       hasInBandParameterSets: false,
       spsList: [],
       hasUnparsedSps: false,
+      windowExhaustedBeforeVcl: false,
     };
   }
   let offset = 0;
@@ -500,6 +502,8 @@ export function inspectSampleParameterSets(
   }
 
   // 若前置非 VCL 剛好填滿截斷讀取視窗而尚未抵達 VCL，或非 VCL 後方殘留不完整標頭，一律視為證據不足。
+  const windowExhaustedBeforeVcl =
+    !reachedVcl && isTruncatedWindow && sample.length > 0;
   if (
     offset > 0 &&
     !reachedVcl &&
@@ -508,5 +512,10 @@ export function inspectSampleParameterSets(
     hasUnparsedSps = true;
   }
 
-  return { hasInBandParameterSets, spsList, hasUnparsedSps };
+  return {
+    hasInBandParameterSets,
+    spsList,
+    hasUnparsedSps,
+    windowExhaustedBeforeVcl,
+  };
 }

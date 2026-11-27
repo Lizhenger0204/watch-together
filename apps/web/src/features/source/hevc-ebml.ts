@@ -398,12 +398,21 @@ export function parseSingleBlockElement(
   buf: Uint8Array,
   elementFileOffset: number,
   targetTrack: number,
+  maxElementBytes?: number,
 ): MkvBlockPayload | null {
   const idInfo = readEbmlId(buf, 0);
   if (!idInfo) return null;
   const sizeInfo = readEbmlVint(buf, idInfo.length);
   if (!sizeInfo) return null;
   const start = idInfo.length + sizeInfo.length;
+  // 若已知所屬 Cluster 剩餘空間，block 宣告長度絕不可越出 Cluster 邊界
+  if (
+    maxElementBytes !== undefined &&
+    !sizeInfo.unknown &&
+    start + sizeInfo.value > maxElementBytes
+  ) {
+    return null;
+  }
   const truncated = sizeInfo.unknown || start + sizeInfo.value > buf.length;
   const end = sizeInfo.unknown
     ? buf.length
