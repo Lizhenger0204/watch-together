@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <title>T-140 原片直送原型</title>
+    <style>
+      body { font: 14px system-ui; margin: 16px; }
+      video { width: 640px; max-width: 100%; background: #000; }
+      pre { white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <h1 id="title">T-140 原片直送原型</h1>
+    <p id="hostUi" hidden><input id="file" type="file" accept="video/*,.mkv" /></p>
+    <video controls playsinline></video>
+    <pre id="log"></pre>
+    <script type="module">
+      const role = new URLSearchParams(location.search).get("role") ?? "host";
+      document.querySelector("#title").textContent += role === "host" ? "（房主）" : "（收看者）";
+      document.querySelector("#hostUi").hidden = role !== "host";
+      if (role === "host" || role === "viewer") await import(role === "host" ? "./host.js" : "./viewer.js");
+    </script>
+  </body>
+</html>

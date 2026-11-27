@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>T-140 編碼器實驗頁</title>
+<style>
+body{font:15px/1.6 system-ui,sans-serif;margin:16px;max-width:880px}
+fieldset{margin:12px 0}textarea{width:100%;height:260px;font:12px monospace}
+pre{background:#f4f4f4;padding:8px;white-space:pre-wrap;max-height:240px;overflow:auto}
+video{width:320px;background:#000}button{font-size:15px;padding:4px 14px}
+</style>
+</head>
+<body>
+<h1>T-140 編碼器實驗頁（WebCodecs 對照 WebRTC）</h1>
+<ol>
+<li>用桌面 Chrome 或 Edge 直接開這個檔案（雙擊即可，不用安裝）。需要網路：會從 cdn.jsdelivr.net 載入拆檔套件 mediabunny 1.65.2。</li>
+<li>選一支本機影片（建議 4K 或 1080P、至少 90 秒），按「開始」。全程約 4～6 分鐘，期間不要切走分頁。</li>
+<li>若跳出麥克風或鏡頭權限，請按「允許」：Chrome 只有在取得權限後，才會回報 WebRTC 用的是哪個編碼器。</li>
+<li>跑完後按「複製 JSON」，貼回給 Claude。頁面先不要關，可到 <code>chrome://webrtc-internals</code> 按「Create dump」另存一份。</li>
+</ol>
+<fieldset>
+<input id="file" type="file" accept="video/*,.mkv" />
+目標高度 <select id="height"><option>1080</option><option>1440</option><option>720</option></select>
+位元率 <select id="br"><option value="8">8 Mbps</option><option value="15">15 Mbps</option><option value="25">25 Mbps</option></select>
+WebCodecs 秒數 <input id="wcs" value="30" size="3" /> WebRTC 秒數 <input id="rtcs" value="60" size="3" />
+<button id="run">開始</button>
+</fieldset>
+<pre id="status"></pre>
+<video id="v" muted playsinline></video>
+<p><button id="copy">複製 JSON</button></p>
+<textarea id="out" readonly></textarea>
+<script type="module">
+const MB_URL = "https://cdn.jsdelivr.net/npm/mediabunny@1.65.2/dist/bundles/mediabunny.min.mjs";
+const $ = (s) => document.querySelector(s);
+const say = (m) => ($("#status").textContent += m + "\n");
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const r1 = (x) => (x == null || !isFinite(x) ? null : Math.round(x * 10) / 10);
+
+// ---- H.264 Annex B：解析 slice header 取得每張畫面的基本 QP（26 + pic_init_qp_minus26 + slice_qp_delta）----
+class Bits {
+  constructor(u) { this.u = u; this.p = 0; }
+  bit() { const b = (this.u[this.p >> 3] >> (7 - (this.p & 7))) & 1; this.p++; return b; }
+  bits(n) { let v = 0; for (let i = 0; i < n; i++) v = v * 2 + this.bit(); return v; }
+  ue() { let z = 0; while (this.bit() === 0 && z < 32) z++; return z ? 2 ** z - 1 + this.bits(z) : 0; }
+  se() { const k = this.ue(); return k & 1 ? (k + 1) / 2 : -k / 2; }
+  get end() { return this.p >= this.u.length * 8; }
+}
+function rbsp(n) {
+  const o = new Uint8Array(n.length); let k = 0, z = 0;
+  for (const b of n) { if (z >= 2 && b === 3) { z = 0; continue; } o[k++] = b; z = b === 0 ? z + 1 : 0; }
+  return o.subarray(0, k);
+}
+function* nals(u) {
+  let i = 0, s = -1;
+  while (i + 2 < u.length) {
+    if (u[i] === 0 && u[i + 1] === 0 && u[i + 2] === 1) { if (s >= 0) yield u.subarray(s, i > 0 && u[i - 1] === 0 ? i - 1 : i); i += 3; s = i; } else i++;
+  }
+  if (s >= 0) yield u.subarray(s);
+}
+const SPS = {}, PPS = {};
+const HIGH = [100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135];
+function sps(r) {
+  const b = new Bits(r); b.bits(8); const prof = b.bits(8); b.bits(16); const id = b.ue(); const s = { ch: 1, sep: 0 };
+  if (HIGH.includes(prof)) {
+    s.ch = b.ue(); if (s.ch === 3) s.sep = b.bit(); b.ue(); b.ue(); b.bit();
+    if (b.bit()) for (let i = 0; i < (s.ch !== 3 ? 8 : 12); i++) if (b.bit()) { let last = 8, next = 8; for (let j = 0; j < (i < 6 ? 16 : 64); j++) { if (next) next = (last + b.se() + 256) % 256; last = next || last; } }
+  }
+  s.fn = b.ue() + 4; s.poc = b.ue();
+  if (s.poc === 0) s.pocBits = b.ue() + 4;
+  else if (s.poc === 1) { s.az = b.bit(); b.se(); b.se(); const n = b.ue(); for (let i = 0; i < n; i++) b.se(); }
+  b.ue(); b.bit(); b.ue(); b.ue(); s.fmo = b.bit(); SPS[id] = s;
+}
+function pps(r) {
+  const b = new Bits(r); b.bits(8); const id = b.ue(); const p = { sps: b.ue() };
+  p.cabac = b.bit(); p.bf = b.bit(); p.bad = b.ue() > 0; p.l0 = b.ue(); p.l1 = b.ue(); p.wp = b.bit(); p.wb = b.bits(2);
+  p.qp = 26 + b.se(); b.se(); b.se(); b.bit(); b.bit(); p.rpc = b.bit(); PPS[id] = p;
+}
+function sliceQp(r, type, ref) {
+  const b = new Bits(r); b.bits(8); b.ue(); const st = b.ue() % 5; const p = PPS[b.ue()]; if (!p || p.bad) return null; const s = SPS[p.sps]; if (!s) return null;
+  if (s.sep) b.bits(2); b.bits(s.fn); let field = 0; if (!s.fmo) { field = b.bit(); if (field) b.bit(); }
+  if (type === 5) b.ue();
+  if (s.poc === 0) { b.bits(s.pocBits); if (p.bf && !field) b.se(); } else if (s.poc === 1 && !s.az) { b.se(); if (p.bf && !field) b.se(); }
+  if (p.rpc) b.ue();
+  const B = st === 1, P = st === 0 || st === 3; if (B) b.bit();
+  let l0 = p.l0, l1 = p.l1; if ((P || B) && b.bit()) { l0 = b.ue(); if (B) l1 = b.ue(); }
+  if (st !== 2 && st !== 4) for (let k = 0; k < (B ? 2 : 1); k++) if (b.bit()) { let idc; do { idc = b.ue(); if (idc < 3) b.ue(); } while (idc !== 3 && !b.end); }
+  if ((p.wp && P) || (p.wb === 1 && B)) {
+    b.ue(); const ch = s.ch !== 0 && !s.sep; if (ch) b.ue();
+    for (const n of B ? [l0, l1] : [l0]) for (let i = 0; i <= n; i++) { if (b.bit()) { b.se(); b.se(); } if (ch && b.bit()) { b.se(); b.se(); b.se(); b.se(); } }
+  }
+  if (ref) { if (type === 5) { b.bit(); b.bit(); } else if (b.bit()) { let m; do { m = b.ue(); if (m === 1 || m === 3 || m === 2 || m === 6 || m === 4) b.ue(); if (m === 3) b.ue(); } while (m !== 0 && !b.end); } }
+  if (p.cabac && st !== 2 && st !== 4) b.ue();
+  return p.qp + b.se();
+}
+function frameQp(u) {
+  for (const n of nals(u)) {
+    const t = n[0] & 31;
+    if (t === 7) sps(rbsp(n)); else if (t === 8) pps(rbsp(n));
+    else if (t === 1 || t === 5) return sliceQp(rbsp(n), t, (n[0] >> 5) & 3);
+  }
+  return null;
+}
+
+// ---- 測試 1：WebCodecs 轉碼（拆檔 → 硬體解碼 → 縮放 → 編碼），盡快跑，量是否快過播放速度 ----
+async function webcodecs(file, o) {
+  const MB = await import(MB_URL);
+  const input = new MB.Input({ source: new MB.BlobSource(file), formats: MB.ALL_FORMATS });
+  const vt = await input.getPrimaryVideoTrack(); const dcfg = await vt.getDecoderConfig();
+  const sink = new MB.EncodedPacketSink(vt);
+  const first = await sink.getKeyPacket(o.start) ?? await sink.getFirstPacket();
+  const H = o.height, W = Math.round((vt.displayWidth * H) / vt.displayHeight / 2) * 2;
+  const ecfg = { codec: "avc1.640028", width: W, height: H, bitrate: o.bitrate, framerate: o.fps, bitrateMode: "variable", latencyMode: o.mode, hardwareAcceleration: o.hw, avc: { format: "annexb" } };
+  const sup = await VideoEncoder.isConfigSupported(ecfg).catch((e) => ({ supported: false, error: String(e) }));
+  const res = { test: `webcodecs-${o.mode}-${o.hw}`, source: { codec: dcfg.codec, w: vt.displayWidth, h: vt.displayHeight, fps: r1(o.fps) }, out: `${W}x${H}`, supported: sup.supported };
+  if (!sup.supported) return res;
+  const st = { n: 0, bytes: 0, qp: [], keys: 0, ooo: 0, maxTs: -Infinity, minTs: Infinity, err: null };
+  const enc = new VideoEncoder({
+    output(c) { const u = new Uint8Array(c.byteLength); c.copyTo(u); st.n++; st.bytes += u.length; if (c.type === "key") st.keys++; if (c.timestamp < st.maxTs) st.ooo++; st.maxTs = Math.max(st.maxTs, c.timestamp); st.minTs = Math.min(st.minTs, c.timestamp); const q = frameQp(u); if (q != null) st.qp.push(q); },
+    error(e) { st.err = String(e); },
+  });
+  enc.configure(ecfg);
+  const cv = new OffscreenCanvas(W, H), ctx = cv.getContext("2d");
+  let lastKey = -Infinity, decoded = 0;
+  const dec = new VideoDecoder({
+    output(f) {
+      ctx.drawImage(f, 0, 0, W, H);
+      const g = new VideoFrame(cv, { timestamp: f.timestamp, duration: f.duration ?? undefined }); f.close();
+      const key = g.timestamp - lastKey >= 2e6; if (key) lastKey = g.timestamp;
+      enc.encode(g, { keyFrame: key }); g.close(); decoded++;
+    },
+    error(e) { st.err = String(e); },
+  });
+  dec.configure(dcfg);
+  const end = first.timestamp + o.secs, t0 = performance.now();
+  for await (const p of sink.packets(first)) {
+    if (p.timestamp > end || st.err) break;
+    while (dec.decodeQueueSize > 6 || enc.encodeQueueSize > 6) await sleep(1);
+    dec.decode(p.toEncodedVideoChunk());
+  }
+  await dec.flush(); await enc.flush();
+  const wall = (performance.now() - t0) / 1000, media = (st.maxTs - st.minTs) / 1e6 + 1 / o.fps;
+  const qs = st.qp.slice().sort((a, b) => a - b);
+  Object.assign(res, {
+    error: st.err, frames: st.n, wallS: r1(wall), encodeFps: r1(st.n / wall), speedX: r1(media / wall), kbps: Math.round((st.bytes * 8) / media / 1000),
+    targetKbps: o.bitrate / 1000, avgQp: r1(qs.reduce((a, b) => a + b, 0) / qs.length), qpP10: qs[Math.floor(qs.length * 0.1)], qpP90: qs[Math.floor(qs.length * 0.9)],
+    keyFrames: st.keys, bFrames: st.ooo > 0, outOfOrderChunks: st.ooo, config: sup.config,
+  });
+  enc.close(); dec.close();
+  return res;
+}
+
+// ---- 測試 2：WebRTC（與正式房主端同一條路：<video> → captureStream → H.264 送出），loopback ----
+const keep = [];
+async function webrtc(file, o) {
+  const v = $("#v"); v.src = URL.createObjectURL(file); v.loop = true; await v.play();
+  const stream = v.captureStream(); while (!stream.getVideoTracks().length) await sleep(50);
+  let track = stream.getVideoTracks()[0];
+  // 10-bit 片源直接交給 WebRTC 會讓分頁崩潰（BUG-004），比照正式房主端先經畫布轉成 8-bit
+  if (o.tenBit) track = to8bit(track, v.videoWidth, v.videoHeight);
+  track.contentHint = "motion";
+  const a = new RTCPeerConnection(), b = new RTCPeerConnection(); keep.push(a, b);
+  a.onicecandidate = (e) => e.candidate && b.addIceCandidate(e.candidate);
+  b.onicecandidate = (e) => e.candidate && a.addIceCandidate(e.candidate);
+  const tr = a.addTransceiver(track, { direction: "sendonly" });
+  const codecs = RTCRtpSender.getCapabilities("video").codecs;
+  const rank = (c) => (c.mimeType !== "video/H264" ? 9 : !/packetization-mode=1/.test(c.sdpFmtpLine ?? "") ? 5 : new RegExp(`profile-level-id=${o.profile}`).test(c.sdpFmtpLine) ? 0 : 3);
+  tr.setCodecPreferences(codecs.slice().sort((x, y) => rank(x) - rank(y)));
+  await a.setLocalDescription(); await b.setRemoteDescription(a.localDescription);
+  await b.setLocalDescription();
+  let ans = b.localDescription.sdp; const kbps = o.bitrate / 1000;
+  // 應急方案 A 的對照：maxBitrate 放大 1.5 倍，並要求頻寬估計的下限與起始值 = 目標位元率
+  if (o.boost) ans = ans.replace(/^(a=fmtp:\d+ .*profile-level-id=.*)$/gm, `$1;x-google-min-bitrate=${kbps};x-google-start-bitrate=${kbps}`);
+  await a.setRemoteDescription({ type: "answer", sdp: ans });
+  const p = tr.sender.getParameters();
+  p.encodings[0].maxBitrate = o.bitrate * (o.boost ? 1.5 : 1); p.encodings[0].scaleResolutionDownBy = Math.max(1, v.videoHeight / o.height); p.encodings[0].maxFramerate = 30;
+  p.degradationPreference = o.height > 1080 ? "maintain-resolution" : "maintain-framerate";
+  await tr.sender.setParameters(p);
+  const samples = [];
+  for (let i = 0; i < o.secs; i++) {
+    await sleep(1000);
+    const s = await a.getStats(); let out = null, pair = null;
+    s.forEach((x) => { if (x.type === "outbound-rtp" && x.kind === "video") out = x; if (x.type === "candidate-pair" && x.nominated) pair = x; });
+    if (out) samples.push({ t: i, bytes: out.bytesSent, frames: out.framesEncoded, qpSum: out.qpSum, impl: out.encoderImplementation, pe: out.powerEfficientEncoder, w: out.frameWidth, h: out.frameHeight, fps: out.framesPerSecond, lim: out.qualityLimitationReason, target: out.targetBitrate, avail: pair?.availableOutgoingBitrate });
+    if (i % 10 === 9) say(`  WebRTC ${o.profile} ${i + 1}/${o.secs} 秒`);
+  }
+  const warm = Math.min(20, Math.floor(o.secs / 3)), x = samples[warm], z = samples.at(-1), dt = z.t - x.t;
+  const lim = {}; for (const s of samples.slice(warm)) lim[s.lim] = (lim[s.lim] ?? 0) + 1;
+  const codec = [...(await a.getStats()).values()].find((r) => r.type === "codec" && r.mimeType === "video/H264");
+  return {
+    test: `webrtc-${o.profile}${o.boost ? "-boost" : ""}`, encoderImplementation: z.impl ?? "（未取得權限，無法讀取）", powerEfficientEncoder: z.pe ?? null, sdpFmtpLine: codec?.sdpFmtpLine ?? null,
+    kbps: Math.round(((z.bytes - x.bytes) * 8) / dt / 1000), targetKbps: o.bitrate / 1000, avgQp: r1((z.qpSum - x.qpSum) / (z.frames - x.frames)), encodeFps: r1((z.frames - x.frames) / dt),
+    resolution: `${z.w}x${z.h}`, targetBitrateKbps: Math.round((z.target ?? 0) / 1000), availableOutgoingKbps: Math.round((z.avail ?? 0) / 1000), qualityLimitation: lim, steadySeconds: dt,
+    perSecond: samples.map((s, i) => (i ? Math.round(((s.bytes - samples[i - 1].bytes) * 8) / 1000) : null)),
+  };
+}
+
+function to8bit(track, w, h) {
+  const gen = new MediaStreamTrackGenerator({ kind: "video" }), cv = new OffscreenCanvas(w & ~1, h & ~1), ctx = cv.getContext("2d");
+  new MediaStreamTrackProcessor({ track }).readable.pipeThrough(new TransformStream({
+    transform(f, c) { ctx.drawImage(f, 0, 0, cv.width, cv.height); const g = new VideoFrame(cv, { timestamp: f.timestamp }); f.close(); c.enqueue(g); },
+  })).pipeTo(gen.writable).catch(() => {});
+  return gen;
+}
+
+async function permission() {
+  for (const c of [{ audio: true }, { video: true }]) {
+    // 串流要保持開啟到測完：Chrome 只在頁面「正在擷取」時才在 getStats() 提供 encoderImplementation
+    try { keep.push(await navigator.mediaDevices.getUserMedia(c)); return Object.keys(c)[0]; } catch { /* 下一種 */ }
+  }
+  return "denied";
+}
+
+async function sourceFps(file) {
+  const MB = await import(MB_URL);
+  const input = new MB.Input({ source: new MB.BlobSource(file), formats: MB.ALL_FORMATS });
+  const vt = await input.getPrimaryVideoTrack(); const sink = new MB.EncodedPacketSink(vt);
+  let n = 0, t0 = null; for await (const p of sink.packets()) { t0 ??= p.timestamp; if (p.timestamp - t0 >= 4) break; n++; }
+  const codec = (await vt.getDecoderConfig()).codec;
+  return { fps: n / 4, duration: await input.computeDuration(), format: (await input.getFormat()).name, codec, tenBit: /^(hev1|hvc1)\.2\./.test(codec) };
+}
+
+$("#run").onclick = async () => {
+  const file = $("#file").files[0]; if (!file) return alert("請先選一支影片");
+  $("#run").disabled = true; $("#status").textContent = "";
+  const height = Number($("#height").value), bitrate = Number($("#br").value) * 1e6, wcs = Number($("#wcs").value), rtcs = Number($("#rtcs").value);
+  const gl = document.createElement("canvas").getContext("webgl"), ext = gl?.getExtension("WEBGL_debug_renderer_info");
+  const out = { page: "T-140 encoder-lab v2", at: new Date().toISOString(), ua: navigator.userAgent, gpu: ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : null, file: { name: file.name, mb: r1(file.size / 1e6) }, settings: { height, bitrate, wcs, rtcs }, results: [] };
+  const show = () => ($("#out").value = JSON.stringify(out, null, 1));
+  try {
+    out.permission = await permission();
+    Object.assign(out.file, await sourceFps(file)); out.file.mbps = r1((file.size * 8) / out.file.duration / 1e6);
+    const start = Math.min(30, Math.max(0, out.file.duration - wcs - 1));
+    for (const [mode, hw] of [["quality", "prefer-hardware"], ["realtime", "prefer-hardware"], ["quality", "prefer-software"]]) {
+      say(`WebCodecs ${mode} ${hw}…`);
+      out.results.push(await webcodecs(file, { mode, hw, height, bitrate, fps: out.file.fps, secs: wcs, start }).catch((e) => ({ test: `webcodecs-${mode}-${hw}`, error: String(e) }))); show();
+    }
+    for (const [profile, boost, label] of [["42001f", false, "預設，硬體"], ["42e01f", false, "Safari 模式，軟體"], ["42001f", true, "硬體＋方案 A"]]) {
+      say(`WebRTC ${profile}（${label}）${rtcs} 秒…`);
+      out.results.push(await webrtc(file, { profile, boost, height, bitrate, secs: rtcs, tenBit: out.file.tenBit }).catch((e) => ({ test: `webrtc-${profile}${boost ? "-boost" : ""}`, error: String(e) }))); show();
+    }
+    say("完成。請按「複製 JSON」貼回。");
+  } catch (e) { out.error = String(e); say(`錯誤：${e}`); }
+  show(); $("#run").disabled = false; window.labDone = out;
+};
+$("#copy").onclick = () => navigator.clipboard.writeText($("#out").value).then(() => say("已複製"));
+</script>
+</body>
+</html>
