@@ -17,6 +17,8 @@
 
 **房主 `state { config, epoch, playing, mediaTime, hostClock, rate }`**：`playing` = 沒暫停、不在 `seeking`、`readyState ≥ 3`；`mediaTime` = 房主畫面時間；`hostClock` = 讀取當下的房主時鐘。`play`、`pause`、`playing`、`waiting`、`seeking`（送 `playing: false`）、`seeked`、`ratechange` 時送，另每秒一次。
 
+**剩餘片長** = `config.end − E`（附錄 B §4；收看端不用自己看到的緩衝判斷片尾，因為分不出「已送完」與「還沒到」）。
+
 **應在時間** `E = playing ? mediaTime + (本機時鐘 + offset − hostClock) / 1000 × rate : mediaTime`。
 
 ## §2 收看端播放狀態機

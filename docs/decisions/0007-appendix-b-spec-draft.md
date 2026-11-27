@@ -20,7 +20,7 @@
 
 ## §2 二進位分塊（`pt-data`）
 
-每則 = 16 bytes 標頭＋資料，整則 ≤ `min(64 KiB, sctp.maxMessageSize)`。欄位 big-endian：
+每則 = 16 bytes 標頭＋資料，整則 ≤ `chunk`。`chunk` 由**房主**決定（`min(64 KiB, 房主端 sctp.maxMessageSize)`），放在 `position` 訊息裡；兩端都用這個值計算片段上限 `min(4 MiB, 256 × (chunk − 16))`，收看端不用自己的 `maxMessageSize`（兩端可能不同）。驗收含兩端 `maxMessageSize` 不同的情況。欄位 big-endian：
 
 | 位移 | 長度 | 欄位 | 說明 |
 | --- | --- | --- | --- |
@@ -45,15 +45,16 @@
 
 - **MP4／MOV**：從 `stts`／`ctts` 取每個 sample 的來源 DTS、CTS 與 duration。只支援下列 edit list，其他（多段、`media_rate ≠ 1`、中間空白段）該片源停用第一、二層：
   - 沒有 edit list：`偏移 M = 0`；
-  - 一段 media edit（`media_time = M`、長度 `U`），前面可有一段起始空白（長 `E`）：`輸出 PTS = CTS − M + E`、`輸出 DTS = DTS − M + E`。**第一版只接受「只平移、不裁掉影像畫面」的 edit**：以容器 timescale 精確比較（不留容差），影像 edit 的起點必須等於第一個入口的 PTS（起點之前只能有該入口的前導畫面，而前導畫面的入口本來就不用），且 edit 涵蓋**所有**影像 sample 的完整呈現區間 `[PTS, PTS + duration)`；否則停用該片源的第一、二層。例如每格 40 ms、解碼順序 `I(0) → P(80) → B(40)`、edit 終點 80 ms：P 會被裁掉，而 B 參照 P，必須降層。影像 SourceBuffer 的 `appendWindowEnd` 不設（`Infinity`）。音訊只可裁掉開頭的 priming 與結尾不足一個 audio frame 的部分（見下方 priming）。**影音的有效區間必須一致**：兩軌套用 edit 後的開頭、結尾各自相差 ≤ 1 個 audio frame，否則（例如影像 30 秒、音訊 edit 在 28 秒結束）停用該片源的第一、二層，避免收看端在片尾一直等已經送完的音軌，或播出房主沒播的音訊。片尾的緩衝判定用影音較早結束的那一軌。
+  - 一段 media edit（`media_time = M`、長度 `U`），前面可有一段起始空白（長 `E`）：`輸出 PTS = CTS − M + E`、`輸出 DTS = DTS − M + E`。**第一版只接受「只平移、不裁掉影像畫面」的 edit**：以容器 timescale 精確比較（不留容差），影像 edit 的起點必須等於第一個入口的 PTS（起點之前只能有該入口的前導畫面，而前導畫面的入口本來就不用），且 edit 涵蓋**所有**影像 sample 的完整呈現區間 `[PTS, PTS + duration)`；否則停用該片源的第一、二層。例如每格 40 ms、解碼順序 `I(0) → P(80) → B(40)`、edit 終點 80 ms：P 會被裁掉，而 B 參照 P，必須降層。影像 SourceBuffer 的 `appendWindowEnd` 不設（`Infinity`）。音訊只可裁掉開頭的 priming 與結尾不足一個 audio frame 的部分（見下方「音訊 priming 與裁切」）。影音有效區間不一致（例如影像 30 秒、音訊 edit 在 28 秒結束）時停用第一、二層，規則見下方「影音共同有效區間」。
   - 影像與音訊各自依自己的 edit 計算。mediabunny 的 `packet.timestamp` 應等於輸出 PTS，T-141 以單元測試核對兩者，不一致時以本節為準。
 - **MKV**：容器只有 PTS（區塊時間），視為輸出 PTS。DTS 推導：依解碼順序第 i 個 sample 的 `DTS_i = 全軌 PTS 由小到大排序後的第 i 個值 − D`。重排深度上限 16，所以只需往後看 16 個 sample；`D` = 使前 5 個 GOP 都滿足 `DTS ≤ PTS` 的最小值，之後固定。可接受條件（每個片段都檢查）：沒有重複 PTS（否則會出現零長度 sample）、`DTS_i ≤ PTS_i`、`DTS_i + duration_i = DTS_{i+1}`（誤差 ≤ 1 ms，含跨片段的最後一個與下一段第一個）、重排深度 ≤ 16。不符合就停用該片源的第一、二層。
 - **封裝時間與位移**：`O = max(0, −全片最小輸出 DTS)`，取 timescale 的整數。**封裝時間 = 輸出時間 + O**，寫進 `tfdt`（解碼時間）；`trun` 的 composition offset = `PTS − DTS`（O 互相抵銷）。收看端每個 SourceBuffer 設 `timestampOffset = −O`；`appendWindowStart`／`appendWindowEnd` 一律以**輸出時間**表示（不含 O）。
-- **音訊 priming**：輸出 PTS < 0 的音訊 sample（AAC priming）由 `appendWindowStart = 0` 去掉；跨過 0 的 sample 由瀏覽器裁切（Chrome 會做部分裁切；Safari 未驗證，列入 T-113）。這與房主 `<video>` 的行為一致。
+- **影音共同有效區間** `[start, end)`：影像為第一個入口的輸出 PTS 到最後一個影像 sample 的呈現結束；音訊為套用 edit（或無 edit 時全部 sample）後的有效範圍。**所有片源**（MP4 有沒有 edit、MKV）都檢查：兩軌頭尾各差 ≤ 1 個 audio frame，否則停用第一、二層。`start` 取影像起點，`end` 取兩軌較早的終點，放在 `config`（§4）。
+- **音訊 priming 與裁切**：音訊 SourceBuffer 的 `appendWindowStart = 音訊有效起點`（有起始空白 `E` 時就是 `E`，不是 0）、`appendWindowEnd = 音訊有效終點`；整段落在窗外的 sample（AAC priming）被丟掉，跨過窗邊的 sample 由瀏覽器裁切。MSE 允許瀏覽器丟掉跨界的整個 sample：Chrome 會做部分裁切；平台實測無法保留所需部分時（Safari 待 T-113），該平台的收看者降層。與房主 `<video>` 的行為一致。
 - **入口**：H.264 只用 IDR（open GOP 的非 IDR I 幀不當入口）。HEVC 的 IDR、BLA、CRA **一律要求後面沒有前導畫面**：依解碼順序在入口之後、PTS 早於入口的 sample 不存在（`IDR_N_LP`、`BLA_N_LP` 一定符合；`IDR_W_RADL`、帶 RADL／RASL 的 BLA 與 CRA 要實際檢查）。帶前導畫面的入口第一版不用：移除前導會讓同一段的 DTS 出現空隙（例如入口在 0 ms、移除 40／80 ms 兩個前導後下一格是 120 ms），超過 MSE 的兩格門檻時後續畫面會被丟掉。片源在 10 秒內找不到可用入口就停用第一、二層。T-141 可研究「移除前導後把空隙併入入口的 sample duration」等做法，用帶 RADL 的 IDR／BLA 與含兩個以上前導畫面的 CRA 跨片段驗收後再放寬。
 - **不用 `appendWindowStart` 裁影像**：MSE 丟棄視窗外的畫面時會設「需要隨機進入點」，連後面有效的畫面也一起丟掉（[MSE coded frame processing](https://w3c.github.io/media-source/#sourcebuffer-coded-frame-processing)）。所以入口一律選沒有前導畫面的（上一條），影像 SourceBuffer 的 `appendWindowStart` 一律為 0、`appendWindowEnd` 不設。
 - **續接片段**：GOP 內的後續 sample，不必以關鍵影格開頭。音訊片段約 1 秒，每個都可當入口。
-- **驗收**：T-141 用 VFR＋B 幀的 H.264、open GOP 的 HEVC（確認帶前導的 CRA 不被選為入口）、AAC priming、帶 edit list 的 MP4（含一支 `I → P → B` 順序、終點裁到 P 而必須降層的）、帶 RADL 的 HEVC IDR（確認不被選為入口）、音訊 edit 比影像早結束的 MP4（必須降層）六種素材，在 Chrome 實際附加後檢查 `buffered` 連續、入口後沒有畫面被丟（`totalVideoFrames` 與預期相同）、首格時間與房主 `<video>` 相同、影音對齊誤差 < 1 格。
+- **驗收**：T-141 用 VFR＋B 幀的 H.264、open GOP 的 HEVC（確認帶前導的 CRA 不被選為入口）、AAC priming、帶 edit list 的 MP4（含一支 `I → P → B` 順序、終點裁到 P 而必須降層的）、帶 RADL 的 HEVC IDR（確認不被選為入口）、音訊 edit 比影像早結束的 MP4（必須降層）、影音在容差內不同長度的片（片尾正常結束、接近片尾跳轉）、有起始空白的音訊 edit 七種素材，在 Chrome 實際附加後檢查 `buffered` 連續、入口後沒有畫面被丟（`totalVideoFrames` 與預期相同）、首格時間與房主 `<video>` 相同、影音對齊誤差 < 1 格。
 
 ## §4 `pt-ctl` 訊息與握手
 
@@ -88,8 +89,8 @@
 | --- | --- |
 | `pong` | `{ t0, t1 }` |
 | `probe` | `{ config, video, audio }`（候選 MIME，含 codecs；無聲片沒有 `audio`） |
-| `config` | `{ config, tier: 'passthrough' \| 'transcode' \| 'live', reason?, video?, audio?, offset }` |
-| `position` | `{ config, epoch, dataId, entry }` |
+| `config` | `{ config, tier: 'passthrough' \| 'transcode' \| 'live', reason?, video?, audio?, offset, start, end }`；`start`／`end` 為影音共同有效區間（輸出時間，§3），收看端據此設 MediaSource 的 `duration = end`、音訊的 append window，以及附錄 C 的「剩餘片長 = end − E」 |
+| `position` | `{ config, epoch, dataId, entry, chunk }` |
 | `state` | `{ config, epoch, playing, mediaTime, hostClock, rate }` |
 
 - 房主只採用 `(config, epoch, dataId)` 都是目前值的 `status`；累計值的檢查見附錄 C §4。
