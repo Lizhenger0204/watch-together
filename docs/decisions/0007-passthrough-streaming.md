@@ -61,7 +61,7 @@ WebRTC 是通話用的即時編碼：先顧延遲、位元率只是上限、沒�
 細節見附錄 B §3～§5。
 
 - **拆檔：mediabunny**（MPL-2.0，純 TypeScript）：同時支援 MP4／MOV 與 MKV，依時間取關鍵影格，從 `File` 隨機讀取，50 GB 也不必整檔載入。固定用發佈超過 14 天的版本（目前 1.65.2），未被標成 deprecated。比較見附錄 A §5。
-- **時間軸**：統一用房主 `<video>` 的呈現時間（套用 edit list 後）。mediabunny 只給 PTS；原型「片段內 PTS 排序當 DTS」在可變幀率＋open GOP 會讓相鄰片段出現 83 ms 缺口（GPT 實測），**不能沿用**。MP4 讀 `stts`／`ctts` 與 edit list（第一版只接受單段、只平移不裁影像的 edit，其他停用第一、二層）；MKV 以固定重排延遲推導 DTS，不允許重複 PTS 等情況，驗證不過就停用。負時間以全片位移寫進 `tfdt`、收看端 `timestampOffset` 抵銷；AAC priming 由音訊的 `appendWindowStart = 0` 去掉。
+- **時間軸**：統一用房主 `<video>` 的呈現時間（套用 edit list 後）。mediabunny 只給 PTS；原型「片段內 PTS 排序當 DTS」在可變幀率＋open GOP 會讓相鄰片段出現 83 ms 缺口（GPT 實測），**不能沿用**。MP4 讀 `stts`／`ctts` 與 edit list（第一版只接受單段、只平移不裁影像的 edit，其他停用第一、二層）；MKV 以固定重排延遲推導 DTS，不允許重複 PTS 等情況，驗證不過就停用。負時間以全片位移寫進 `tfdt`、收看端 `timestampOffset` 抵銷；AAC priming 由音訊自己的 append window（`config.audioStart`／`audioEnd`）去掉；片尾以影音共同終點判定，不設 `MediaSource.duration`。
 - **片段**：分「入口片段」與「續接片段」。所有片段封裝後 ≤ `min(4 MiB, 256 × (每則大小 − 16))`（無例外，放不下的 sample 讓該片源停用第一、二層），影像片段另限 2 秒。H.264 只用 IDR 當入口；HEVC 的入口（IDR、BLA、CRA）一律要求**後面沒有前導畫面**（第一版不處理帶 RADL／RASL 的入口，open GOP 片源找不到入口就停用第一、二層）。不用 `appendWindowStart` 裁影像（MSE 丟棄時會連後面的有效畫面一起丟）。
 - **HEVC `hvc1`／`hev1`**：預設封成 `hev1`（樣本內參數集原樣保留）。只收 `hvc1` 的收看者（例如 Safari）另用一個 `hvc1` config：逐樣本移除與 `hvcC` 完全相同的參數集，遇到不同的參數集就降層。mediabunny 的 codec 字串一律回報 `hev1`，不能拿來判斷。H.264 一律 `avc1`。
 - **T-138**：現行只在房主試播失敗時才產生修正 Blob。改為 `features/source/`（GPT）對外提供偵測結果與「按需修補」：偵測到「標頭 Main 10、實際 8-bit」時，**不論房主本機能否直接播**，拆檔都讀修正後的零複製 Blob，避免 Windows 收看端的 MSE 拒絕；修補不可用時照送原片，收看端解碼失敗就降層。

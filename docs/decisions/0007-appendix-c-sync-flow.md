@@ -17,7 +17,7 @@
 
 **房主 `state { config, epoch, playing, mediaTime, hostClock, rate }`**：`playing` = 沒暫停、不在 `seeking`、`readyState ≥ 3`；`mediaTime` = 房主畫面時間；`hostClock` = 讀取當下的房主時鐘。`play`、`pause`、`playing`、`waiting`、`seeking`（送 `playing: false`）、`seeked`、`ratechange` 時送，另每秒一次。
 
-**剩餘片長** = `config.end − E`（附錄 B §4；收看端不用自己看到的緩衝判斷片尾，因為分不出「已送完」與「還沒到」）。
+**片尾**：`end` = 影音共同終點（`config.end`，附錄 B §4）。收看端不用自己看到的緩衝判斷片尾（分不出「已送完」與「還沒到」）。從位置 P 起「需要的緩衝」= `[P, min(P + 門檻, end))`；`P ≥ end − 1 格` 時視為已到片尾，不需要緩衝。`end` 只用於緩衝判定，**不拿來設 `MediaSource.duration`**：房主送完最後一段後送 `state`，收看端附加完畢就呼叫 `endOfStream()`，片長由 MSE 依實際附加的資料決定（影音在容差內不等長時以較長軌為準，不會被延長後又截斷）。到達片尾時，收看端跟著房主的 `ended`（房主 `state.playing = false`、`mediaTime ≥ end`）停在最後一格，不做落後重新定位。
 
 **應在時間** `E = playing ? mediaTime + (本機時鐘 + offset − hostClock) / 1000 × rate : mediaTime`。
 
@@ -35,8 +35,8 @@
 | 2 | `seekTimeout` | 自發跳轉 5 秒仍未 `seeked` | 放棄等待這次跳轉（之後晚到的 `seeked` 只觸發重新評估），記一次失敗；連續 2 次失敗回報 `stuck`（房主重新定位，§3），否則回到評估 |
 | 3 | `seeking` | 自發跳轉尚未 `seeked`（未逾 5 秒） | 等待（房主暫停也一樣：進行中的跳轉先等完或逾時，再依房主狀態決定） |
 | 4 | `hostPaused` | `playing = false` | 暫停；`\|drift\| > 50 ms` 且 E 已緩衝時跳到 E；不排 hold |
-| 5 | `waitData` | E 位置的影音緩衝（取小）< `min(0.5, 剩餘片長)` 秒 | 暫停，回報 `buffering` |
-| 6 | `seek` | 落後 ≥ 300 ms 或超前 ≥ 3 秒；距上次跳轉 ≥ 1 秒 | 目標 `S = E + seekLead × R`；**S 到 S + min(0.5, 剩餘片長) 的影音都已緩衝**才跳，否則留在 `waitData`。`seekLead` = 上次 `seeking→seeked` 耗時 + 50 ms，夾在 0～1 秒 |
+| 5 | `waitData` | 從 E 起需要的緩衝（門檻 0.5 秒，見 §1「片尾」）未齊，影音取較短者 | 暫停，回報 `buffering` |
+| 6 | `seek` | 落後 ≥ 300 ms 或超前 ≥ 3 秒；距上次跳轉 ≥ 1 秒 | 目標 `S = E + seekLead × R`；S 夾在 `end − 1 格` 以內；**從 S 起需要的緩衝（門檻 0.5 秒）都已齊**才跳，否則留在 `waitData`。`seekLead` = 上次 `seeking→seeked` 耗時 + 50 ms，夾在 0～1 秒 |
 | 7 | `hold` | 80 ms ≤ 超前 < 3 秒 | 暫停，排 `drift / R` 秒的計時器 |
 | 8 | `play` | 其他 | 若暫停中就 `play()`（這是從 `hold`、`waitData`、`hostPaused` 恢復的唯一路徑）；`playbackRate = R × (1 − sign(drift) × min(0.05, 0.5 × \|drift\|))`，`\|drift\| ≤ 15 ms` 時 `= R` |
 
@@ -47,7 +47,7 @@
 
 - 參與者：已按「開始觀看」、在線、第一或第二層的收看者。第三層與尚未開始的人不參與。
 - 觸發：參與者 `buffering` 超過 2 秒，或房主跳轉。房主記下「暫停原因 = 等人」再暫停。
-- 結束：全部參與者在 E 位置有 `min(1, 剩餘片長)` 秒緩衝，或等滿 8 秒。只有暫停原因仍是「等人」才自動繼續；等待中房主手動暫停或播放、或再次跳轉，都覆蓋這次等待（跳轉則以新 epoch 重新等）。
+- 結束：全部參與者從 E 起需要的緩衝（門檻 1 秒）都已齊，或等滿 8 秒。只有暫停原因仍是「等人」才自動繼續；等待中房主手動暫停或播放、或再次跳轉，都覆蓋這次等待（跳轉則以新 epoch 重新等）。
 - 8 秒逾時後，同一位收看者 60 秒內不能再觸發。
 - 開啟時入口一律選 Kp（§3），因為房主暫停時到不了下一個入口。
 
@@ -126,7 +126,7 @@
 | 不調整／暫停等待／落後跳轉／超前跳轉 | 15 ms／80 ms／300 ms／3 s |
 | 速率調整上限、增益 | ±5%、0.5 |
 | 跳轉間隔、跳轉提前量上限、跳轉逾時 | 1 s、1 s、5 s |
-| `X`、開播所需緩衝 | `min(1 s, 剩餘片長)`、`min(0.5 s, 剩餘片長)` |
+| `X`、開播與跳轉所需緩衝 | `min(1 s, end − t)`、門檻 0.5 s（依 §1「片尾」截到 `end`） |
 | 入口估計上限、開播期限（不計暫停與等點擊） | 10 s、10 s |
 | 重新定位（只在本 epoch 已對齊後） | `stuck`，或落後 > 3 s 持續 2 s |
 | `bufferedAmount` 高／低水位、`pt-ctl` 上限 | 1 MiB／256 KiB、16 KiB |
