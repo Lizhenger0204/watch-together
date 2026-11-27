@@ -30,7 +30,8 @@ let manifest = null;
 let initBytes = null;
 let st = null;
 let hls = null;
-let jumpAt = null;
+let jump = null; // { id, at, target }：本次房主跳轉的固定起點
+let lastSeekId = null;
 
 function onSignal(msg) {
   if (msg.from === "host") return hostSignal(msg);
@@ -130,7 +131,9 @@ function onHostCtl(msg) {
   }
   if (msg.type === "state") {
     // 房主跳轉：新狀態與目前推算差 > 1 秒。從房主送出這則狀態的時刻起算，到收看端畫面回到 100 ms 內
-    if (st && Math.abs(msg.mediaTime - expected()) > 1) jumpAt = msg.hostClock;
+    // 房主跳轉：以 seekId 辨識，起點固定為「第一則帶新 seekId 的 state」的房主時刻，之後不覆寫
+    if (lastSeekId !== null && msg.seekId !== lastSeekId && jump?.id !== msg.seekId) jump = { id: msg.seekId, at: msg.hostClock, target: msg.mediaTime };
+    lastSeekId = msg.seekId;
     st = { ...msg, at: nowMs() };
   }
   if (msg.type === "seg") {
@@ -256,6 +259,12 @@ async function startPlayer() {
   video.muted = true;
   video.requestVideoFrameCallback(function f(_n, md) {
     lastFrame = { p: md.expectedDisplayTime, m: md.mediaTime };
+    // 跳轉恢復：本次跳轉之後呈現、位於新位置的畫面，以該畫面的顯示時刻與媒體時間計算誤差
+    const shown = performance.timeOrigin + md.expectedDisplayTime;
+    if (jump && st?.playing && shown > jump.at && md.mediaTime >= jump.target - 0.5) {
+      const E = st.mediaTime + ((shown - st.hostClock) / 1000) * st.rate;
+      if (Math.abs(md.mediaTime - E) < 0.1) (m.hostSeekRecover.push(Math.round(shown - jump.at)), (jump = null));
+    }
     if (!m.firstFrameAt && !video.paused) m.firstFrameAt = nowMs();
     video.requestVideoFrameCallback(f);
   });
@@ -300,7 +309,6 @@ async function syncLoop() {
       video.playbackRate = Math.abs(d) <= 0.015 ? st.rate : st.rate * (1 - Math.sign(d) * Math.min(0.05, 0.5 * Math.abs(d)));
       m.drift.push({ t: nowMs(), d: +(d * 1000).toFixed(1) });
       if (seekAt && Math.abs(d) < 0.1) (m.seekRecover.push(Math.round(nowMs() - seekAt)), (seekAt = null));
-      if (jumpAt && Math.abs(d) < 0.1) (m.hostSeekRecover.push(Math.round(nowMs() - jumpAt)), (jumpAt = null));
     }
   }
 }

@@ -34,7 +34,7 @@
 | 1 | `notReady` | 本 `(config, epoch)` 尚未收到入口資料，或沒有有效對時 | 暫停，回報 `buffering` |
 | 2 | `seekTimeout` | 自發跳轉 5 秒仍未 `seeked` | 放棄等待這次跳轉（之後晚到的 `seeked` 只觸發重新評估），記一次失敗；連續 2 次失敗回報 `stuck`（房主重新定位，§3），否則回到評估 |
 | 3 | `seeking` | 自發跳轉尚未 `seeked`（未逾 5 秒） | 等待（房主暫停也一樣：進行中的跳轉先等完或逾時，再依房主狀態決定） |
-| 4a | `ended` | `state.ended = true` | 等本 epoch 每一軌的送完標記都附加完成，然後跳到最後一個有效影格並暫停；不做落後重新定位 |
+| 4a | `ended` | `state.ended = true` | 等附錄 F §2「片尾」的條件成立（本 epoch 從入口到最後一段每一軌都已附加），然後跳到最後一個有效影格並暫停；不做落後重新定位 |
 | 4 | `hostPaused` | `playing = false` | 暫停；`\|drift\| > 50 ms` 且 E 已緩衝時跳到 E；不排 hold |
 | 5 | `waitData` | 從 E 起需要的緩衝（門檻 0.5 秒，見 §1「片尾」）未齊，影音取較短者 | 暫停，回報 `buffering` |
 | 6 | `seek` | 落後 ≥ 300 ms 或超前 ≥ 3 秒；距上次跳轉 ≥ 1 秒 | 目標 `S = E + seekLead × R`；S 夾在 `end − 1 格` 以內；**S 本身有兩軌資料、且從 S 起需要的緩衝（門檻 0.5 秒）都已齊**才跳（片尾豁免的條件同 §1），否則留在 `waitData`。`seekLead` = 上次 `seeking→seeked` 耗時 + 50 ms，夾在 0～1 秒 |

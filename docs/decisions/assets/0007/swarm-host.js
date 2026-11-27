@@ -99,7 +99,9 @@ video.requestVideoFrameCallback(function f(_n, md) {
   lastFrame = { p: md.expectedDisplayTime, m: md.mediaTime };
   video.requestVideoFrameCallback(f);
 });
-const state = () => ({ type: "state", playing: !video.paused && !video.seeking && video.readyState >= 3, mediaTime: presented(), hostClock: nowMs(), rate: video.playbackRate });
+let seekId = 0; // 房主跳轉編號（量測用）：先於廣播的監聽器遞增
+video.addEventListener("seeking", () => seekId++);
+const state = () => ({ type: "state", seekId, playing: !video.paused && !video.seeking && video.readyState >= 3, mediaTime: presented(), hostClock: nowMs(), rate: video.playbackRate });
 const ready = () => [...links.values()].filter((l) => l.ready && l.ctl.readyState === "open");
 function ctl(l, msg) {
   if (l.ctl.readyState === "open") l.ctl.send(JSON.stringify(msg));
