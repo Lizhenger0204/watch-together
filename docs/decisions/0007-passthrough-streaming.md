@@ -3,7 +3,7 @@
 - 狀態：**草稿**（T-140，待使用者決定「待決事項」後改為已採用；採用前現行規則不變）
 - 日期：2026-11-27（第八版：加入種子式散布 D13，依使用者決定改寫 D7、D9、D11；依 GPT 審查補附錄 F）
 - 相關：ADR 0002、0004、0005、0006（T-138，已合併）
-- 附錄：[A. 實驗與查證](0007-appendix-a-evidence.md)、[B. 協定與封裝草稿](0007-appendix-b-spec-draft.md)、[C. 同步與選層](0007-appendix-c-sync-flow.md)、[D. 種子式散布](0007-appendix-d-swarm.md)、[E. 套件與原型](0007-appendix-e-swarm-libs.md)、[F. 片段請求協定](0007-appendix-f-swarm-protocol.md)、[G. 收看者信令與 IP](0007-appendix-g-swarm-signaling.md)（皆為草稿）
+- 附錄：[A. 實驗與查證](0007-appendix-a-evidence.md)、[B. 協定與封裝草稿](0007-appendix-b-spec-draft.md)、[C. 同步與選層](0007-appendix-c-sync-flow.md)、[D. 種子式散布](0007-appendix-d-swarm.md)、[E. 套件與原型](0007-appendix-e-swarm-libs.md)、[F. 片段請求協定](0007-appendix-f-swarm-protocol.md)、[G. 收看者信令與 IP](0007-appendix-g-swarm-signaling.md)、[H. 經 TURN 的連線](0007-appendix-h-turn.md)（皆為草稿）
 - 原型：`docs/decisions/assets/0007/`（不進 `apps/`，見該資料夾 README）
 
 ## 背景
@@ -28,8 +28,8 @@ WebRTC 是通話用的即時編碼：先顧延遲、位元率只是上限、沒�
 
 - **畫質**等於片源；第一層沒有編碼器，NVENC 的問題直接消失。
 - **房主負擔**：第一層只讀檔與轉送。現行 P2P 每位收看者各編一次（ADR 0004：3 人 4K 降到 13 fps）。
-- **收看端**有預讀緩衝，網路抖動不會立刻卡住畫面。
-- **代價**：要自己做時間軸、同步、流量控制與相容判斷（D2～D5、D8）。
+- **收看端**有預讀緩衝，抖動不會立刻卡住。
+- **代價**：要自己做時間軸、同步、流量控制與相容判斷。
 
 收看端用 **MSE**，不用 WebCodecs＋canvas：MSE 有原生影音同步與硬體解碼，iOS 有 ManagedMediaSource（附錄 A §4）。WebCodecs 只用在房主端第二層。
 
@@ -91,7 +91,7 @@ WebRTC 是通話用的即時編碼：先顧延遲、位元率只是上限、沒�
 
 - DataChannel 與媒體一樣走 DTLS，P2P 直連不經伺服器；開播、切模式、踢人照舊由伺服器驗證角色。
 - **收看者之間的信令（規則改變）**：現行「收看者的 `signal` 只能送給房主」改為：只有房主登記、綁定雙方當下連線與直播工作階段的配對，伺服器才轉送（附錄 G §3）。
-- **使用者決定（2026-11-27）**：同房成員可以互相看到 IP；沒進房的人絕不能拿到。可驗收的承諾：**本產品不會把任何成員的 IP、SDP 或 candidate 交給沒有用邀請碼進房並完成驗證的人**（STUN／TURN 伺服器本來就看得到連線來源，與現在相同）。授權以伺服器轉送信令的那一刻為準；踢出、離開、斷線即撤銷；邀請碼防暴力猜測是第一道防線；檢查點與 E2E 見附錄 G §4。
+- **使用者決定（2026-11-27）**：同房成員可以互相看到 IP；沒進房的人絕不能拿到。可驗收的承諾：**本產品只把成員的 IP、SDP 與 candidate 交給已驗證、且當下對這個房間與目標連線有授權的房主或收看者**（STUN／TURN 伺服器本來就看得到連線來源，與現在相同）。授權以伺服器轉送信令的那一刻為準；踢出、離開、斷線即撤銷；邀請碼防暴力猜測是第一道防線；檢查點與 E2E 見附錄 G §4。
 - 其他收看者轉來的片段一律以房主公布的 SHA-256 驗證（D13）。
 - **與現行直播不同**：收看端拿到的是原片的壓縮資料，包含尚未播出的預讀內容（最多約 20 秒），技術上可以完整存下，畫質等於原片；踢人只能停止之後的交付。這點要在房主開啟原片直送時說明。
 - 訊息邊界有上限（片段組裝大小、塊數一致性、控制訊息速率與方向），違規就關閉頻道改第三層；頻道打不開或對方不回 `hello`，也在期限內改第三層（附錄 B §2、§7）。
@@ -105,7 +105,7 @@ WebRTC 是通話用的即時編碼：先顧延遲、位元率只是上限、沒�
   - `transport/p2p/`（GPT）：房主端每位收看者的 DataChannel 掛勾與 sender `replaceTrack(null)`；收看端暴露 DataChannel（現行 `ViewerTransport` 只有 `remoteStream`）。
   - `features/source/`（GPT）：對外提供實際採用的 Blob（含 T-138 修正）與 T-138 偵測結果。
   - `features/player/`、`features/room/`（Claude）：`<video>` 在 MSE 與 `srcObject` 間切換、成員列表標籤。
-  - 伺服器（Claude）：`apps/signal/src/signaling/process.ts` 目前逐欄重組 `member:status`，要加 `tier`、`driftMs` 才轉得到房主；種子式散布另加配對登記（存 RoomDO storage）與收看者之間 `signal` 的轉送條件（附錄 G）；`packages/shared` 同步更新。`memberStatusSchema` 與 `roomInfoSchema` 都是 `z.object`（舊版略過新的選填欄位），不必升版；改動 strict 的 `Quality` 或舊版會誤判的欄位才升 v3。
+  - 伺服器（Claude）：`apps/signal/src/signaling/process.ts` 目前逐欄重組 `member:status`，要加 `tier`、`driftMs` 才轉得到房主；種子式散布另加配對登記（存 RoomDO storage）與收看者之間 `peer:signal` 的轉送條件（附錄 G）；`packages/shared` 同步更新。`memberStatusSchema` 與 `roomInfoSchema` 都是 `z.object`（舊版略過新的選填欄位），不必升版；改動 strict 的 `Quality` 或舊版會誤判的欄位才升 v3。
 - **`runtime/` 邊界不受影響**：伺服器只多轉欄位與信令，沒有新的媒體路徑或 Workers 專屬 API。
 
 ## D11. 分階段實作計畫
@@ -117,7 +117,7 @@ WebRTC 是通話用的即時編碼：先顧延遲、位元率只是上限、沒�
 | T-143 | 能力回報、房間預算選層、降到第三層、UI 標籤、`member:status` 新欄位；預設改為開啟 | E2E：收看端停用 HEVC 解碼時 HEVC 片走第三層；`tier` 轉給房主。不依賴 T-144 |
 | T-144 | 第二層轉碼（試速、降層） | E2E：`h264-2160p-aac.mp4` 選 1080P，收看端 `videoHeight = 1080`；注入慢速時走第三層 |
 | T-146 | 收看者之間的信令與配對（先改 `protocol.md`、`packages/shared`）：`swarm:*` 訊息、伺服器轉送條件、撤銷 | 伺服器單元測試＋附錄 G §4 #5 的 E2E（合法配對收得到；未 `auth`、無效 token、被踢出、離開、舊 `pairId`、舊邀請碼都收不到 candidate） |
-| T-147 | 種子式散布（依賴 T-142、T-146）：房主協調排程、小塊雜湊與邊收邊轉、收看者「幫忙轉送」設定與提示、選層預算（附錄 D §8） | Vitest：排程與預算每列一個案例；E2E：3 位收看者；竄改時分開驗收壞塊不上播放器、只有檢舉時的處置、房主證據時的處置（附錄 D §5）；經 TURN 的連線不收原片（附錄 D §9）；多台機器實測 4K 40 Mbps 3 人、1080P 15 Mbps 7 人 |
+| T-147 | 種子式散布（依賴 T-142、T-146）：房主協調排程、小塊雜湊與邊收邊轉、收看者「幫忙轉送」設定與提示、選層預算（附錄 D §8） | Vitest：排程與預算每列一個案例；E2E：3 位收看者；竄改時分開驗收壞塊不上播放器、只有檢舉時的處置、房主證據時的處置（附錄 D §5）；首次連線、ICE restart、播放中換成 TURN 都不送原片（附錄 H）；多台機器實測 4K 40 Mbps 3 人、1080P 15 Mbps 7 人 |
 | T-113 | 人工驗收（既有） | Windows／Android／iOS 收看、中國大陸、真實網路 SCTP 吞吐 |
 
 原 T-145（Realtime DataChannel 研究）依使用者決定刪除；T-146、T-147 編號由協調者確認。每個任務都能獨立審查與合併。
@@ -135,7 +135,7 @@ WebRTC 是通話用的即時編碼：先顧延遲、位元率只是上限、沒�
 - **房主上傳省多少**（上傳 110 Mbps、收看者上傳都夠、排得出指派；房間人數含房主）：4K 40 Mbps 房間 3／5／8 人，房主從 88／176／308 Mbps（現行只放得下 1 人原片）降到 **44 Mbps**，省 50%／75%／86%；收看者的上傳預算平均每人 24／36／42 Mbps。1080P 15 Mbps：3 人不需要散布；5／8 人房主 49.5 Mbps，省 25%／57%，每人約 5／10 Mbps（附錄 D §8）。
 - **收看者付出**：上傳頻寬（可關閉；手機、行動網路、背景分頁、上傳很小的人預設只下載；以 × 0.5 配速，自己緩衝不夠時先停）、記憶體（最多 96 MiB）、直連成員彼此看得到 IP。
 - **與三層**：第二層的轉碼版本照同樣方式散布；第三層不變；預算依附錄 D §8 重算。
-- **經 TURN 的連線**（`getStats()` 選中的 candidate pair 有 `relay`）：不收原片（改轉碼 1080P 或直播，上限 8 Mbps）、不參與散布；4K 原片經 TURN 每人每小時約 20 GB，轉碼約 4 GB（附錄 D §9）。
+- **經 TURN 的連線**（承載 DataChannel 的 transport 選中的 pair 有 `relay`，或路徑未知）：不收原片（改轉碼或直播，影像上限 8 Mbps）、不參與散布，預算先扣；4K 原片經 TURN 每人每小時約 20 GB，轉碼約 4 GB（附錄 H）。
 - **不重複造輪子**：WebTorrent、p2p-media-loader 都缺少本專案要的成員授權、房主配對與預算排程（附錄 E §2），散布排程與同步自己寫（純函式）。收看端的 MSE 管理以 **hls.js** 為候選，T-141 通過採用門檻（分軌裁切、quota 與 ManagedMediaSource 恢復、nudge 對同步的影響）才採用，否則照附錄 B、C 自寫。
 - **原型**（同一台 M1、單次）：1080P 15 Mbps、3 人時房主 20 秒內送出 **15.3 Mbps**（全部直送組 67，仍在補緩衝）；竄改者被排除，壞資料沒進播放器。4K 多人在單機沒跑成（附錄 E §3）。
 

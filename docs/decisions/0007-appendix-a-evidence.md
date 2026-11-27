@@ -44,7 +44,7 @@
 
 **原型踩到、已寫進 ADR 規則的問題**（每一項都有修正前後的量測紀錄）：
 
-1. 收看端第一次換 epoch 時把還在佇列的 init segment 一起清掉 → 一位收看者永遠收不到畫面。原型的修法是依 config 保留 init；正式草稿改為每次 `position` 後重送帶當次 epoch 的 init（附錄 B §4），T-142 以草稿為準。
+1. 收看端第一次換 epoch 時把還在佇列的 init segment 一起清掉 → 一位收看者永遠收不到畫面。原型的修法是依 config 保留 init；正式草稿也改為收看端依 config 快取 init、每次重設後自己重新附加（附錄 F §2）。
 2. 爆量送出 → SCTP 停滯 2～30 秒以上（§2）。改為配速。
 3. 用收看者回報的 `currentTime` 算超前量 → 跳轉後誤用慢速配速，加入要 11 秒。改用房主媒體時間後降到 1.3～2.0 秒。
 4. 跳轉後舊位置 `readyState` 停在 2，判斷順序錯誤 → 收看端永遠不跳轉。
@@ -148,6 +148,6 @@ W3C 規格對 `latencyMode: 'quality'` 只說「SHOULD optimize for encoding qua
 3. 選一支本機片（建議先用「1080P 衝不上 8 Mbps」那支，再用一支 4K），解析度 1080、位元率 8 Mbps，按「開始」。約 4～6 分鐘，不要切走分頁。跳出麥克風或鏡頭權限時按「允許」（不允許也能跑，只是讀不到 `encoderImplementation`）。
 4. 完成後按「複製 JSON」貼回來。內容包含：GPU 名稱、每組測試的 `encoderImplementation`、實際位元率、平均 QP、編碼 fps、轉碼倍速、有沒有 B 幀，以及 WebRTC 每秒位元率。
 5. 先不要關頁，開新分頁到 `chrome://webrtc-internals`（Edge 是 `edge://webrtc-internals`），按「Create dump」存檔。
-6. 另外在**正式網站**用 P2P 開播同一支片 60 秒（有一位收看者），再到 `chrome://webrtc-internals` 按「Create dump」另存一份。兩份 dump 一起傳回。
+6. 另外在**正式網站**用 P2P 開播同一支片 60 秒（有一位收看者），再到 `chrome://webrtc-internals` 按「Create dump」另存一份。兩份 dump 一起傳回。**分享前先遮蔽**：正式房間的 dump 含 IP、SDP 與 candidate（`a=candidate`、`c=IN IP4`／`IP6`、`address` 欄位），先刪除或改成 `x.x.x.x` 再傳；實驗頁的 dump 同樣處理。
 
 測試組合：WebCodecs quality／realtime（硬體）、quality（軟體）；WebRTC 預設 `42001f`（硬體）、Safari 模式 `42e01f`（軟體）、方案 A（硬體＋上限 1.5 倍＋SDP 提示）。

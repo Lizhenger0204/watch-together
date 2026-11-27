@@ -146,7 +146,7 @@
 - **伺服器要改**：`apps/signal/src/signaling/process.ts` 目前逐欄重組 `member:status` 再轉給房主，要加上這兩欄。
 - **是否升版依向後相容判斷**：`roomInfoSchema` 本身是 `z.object`（舊版略過新欄位），但 `qualitySchema` 是 `strictObject`。在 `RoomInfo` 加新的選填欄位不必升版；改動 `Quality` 或讓舊版會誤判的欄位才升 `PROTOCOL_VERSION = 3`。
 
-- **種子式散布（T-146）**：訊息與條件見附錄 G §6：`swarm:mode { on }`、`swarm:pair { a, aConn, b, bConn, liveSession }`、`swarm:unpair { a, b, pairId }`（房主 → 伺服器），`swarm:paired`／`swarm:unpaired { peer, pairId }`、`swarm:check`／`swarm:valid`，`signal` 加 `pairId`，休眠 attachment 加 `connId`。伺服器不記錄 `signal.data`。`AGENTS.md` 的對應句子在採用時由協調者更新。
+- **種子式散布（T-146）**：訊息與條件見附錄 G §6。收看者之間的信令用新的 `peer:signal`（不沿用 `signal`，避免舊版收看端誤收）；`signal` 的「收看者只能送給 host」不變。伺服器不記錄信令內容。`AGENTS.md` 的對應句子在採用時由協調者更新。
 
 ## §9 `streaming.md` 草稿變動
 

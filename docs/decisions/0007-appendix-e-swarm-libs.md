@@ -24,7 +24,7 @@
 **結論**：
 
 - (a)、(b) **不採用**。共同原因：兩者都缺少本專案必要的**成員授權、由房主決定的配對、依房主預算的排程**；這三件正是我們要自己控制的部分，用了套件也要繞過它的預設。另外 (a) 要先對整檔算 piece 雜湊、piece 與時間無關、第二層的轉碼輸出做不成 torrent；(b) 假設有 HTTP 來源（我們的來源是房主的 DataChannel，要把片段橋接到套件的 Fetch 介面，例如以 `httpRequestSetup` 傳回自訂 `Request`）。
-- (c) **hls.js（light build）列為候選**：把收看端 MSE 的建立、附加、`backBufferLength` 清除、卡住時微調（nudge）、跳轉到未緩衝位置、iOS 的 ManagedMediaSource 交給維護活躍的專案。**T-141 的採用門檻**，全部通過才採用：
+- (c) **hls.js（完整版，要用獨立音軌）列為候選**：把收看端 MSE 的建立、附加、`backBufferLength` 清除、卡住時微調（nudge）、跳轉到未緩衝位置、iOS 的 ManagedMediaSource 交給維護活躍的專案。**T-141 的採用門檻**，全部通過才採用：
   1. 附錄 B §3 的時間軸：九種素材的首格時間、影音對齊與 `buffered` 連續性（含起點不是 0、edit list、起始空白）。
   2. **附錄 F §3 的分軌契約**：影像與音訊各自的 SourceBuffer、各自的 append window（AAC priming、音訊比影像短）。原型用影音同段、單一 `audiovideo` SourceBuffer，**不符合**也**沒有驗證**這一項；light build 沒有獨立音軌播放清單，所以若採用 hls.js，要用完整版（`hls.min.js` 壓縮後約 190 KB）的獨立音軌。不接受單一 SourceBuffer：要接受就得先修改附錄 F §3，並用同一批素材驗證。
   3. **附錄 F §2 的恢復流程**：`QuotaExceededError` 後開新 epoch 重新定位、ManagedMediaSource `endstreaming`／`startstreaming`（E 不在緩衝內時開新 epoch）、換 `pt-data` 時取消並重發請求，都能經由 hls.js 的設定或事件做到。
@@ -71,7 +71,7 @@
 **hls.js 的實際問題**（寫進 T-142 的注意事項）：
 
 1. 自訂 loader 的回呼必須是**非同步**，而且 `abort()` 要呼叫 `onAbort`；否則 hls.js 在第一次 `BUFFER_RESET` 後永遠停在 `FRAG_LOADING`（原型踩到）。
-2. 影音同段的 fMP4，hls.js 建一個 `audiovideo` SourceBuffer；light build 沒有獨立音軌播放清單（alternate audio），所以影音要同段。
+2. 原型用影音同段的 fMP4，hls.js 建一個 `audiovideo` SourceBuffer（light build 沒有獨立音軌播放清單）。這**不符合**附錄 F §3 的分軌契約，正式版要改用完整版的獨立音軌（§2 門檻第 2 點）。
 3. hls.js 以第一段的 `tfdt` 對齊播放清單時間（`initPTS`，原型的片從 0 開始所以一致）。附錄 B §3 的輸出時間軸要等於播放清單時間：起點不是 0、有 edit list、有起始空白的片，T-141 要用附錄 B §3 的素材驗證。
 4. 長 GOP 切成的續接段不是獨立可解的。跳轉落在續接段時 hls.js 的行為未驗證；我們的追趕本來只跳到入口附近（附錄 C §3），T-142 要驗收「長 GOP 片跳轉」。
 5. 播放清單要事先知道所有片段：MP4 從 `stss` 直接得到；MKV 靠 Cues。沒有 Cues 的 MKV 要掃描，大檔可能很慢，T-141 量測，太慢就這種片走第三層。
