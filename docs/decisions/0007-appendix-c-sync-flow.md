@@ -1,6 +1,6 @@
 # ADR 0007 附錄 C：同步、流量控制與選層規則草稿（T-140）
 
-> **草稿（T-140）**：ADR 0007 採用前沒有效力。單位：時鐘與期限一律**毫秒**，`performance.now()`、`performance.timeOrigin` 與 `requestVideoFrameCallback` 的 `expectedDisplayTime` 都以同一份文件的時間原點計；媒體時間一律**秒**（輸出時間軸，附錄 B §3）；位元率 **bit/s**；位元組 **byte**。識別碼 `(config, epoch, dataId)` 與握手見附錄 B §1、§4。
+> **草稿（T-140）**：ADR 0007 採用前沒有效力。第七版起資料改為片段表與收看端主動要，本附錄哪些條文沿用、哪些被取代見[附錄 F §1](0007-appendix-f-swarm-protocol.md)。單位：時鐘與期限一律**毫秒**，`performance.now()`、`performance.timeOrigin` 與 `requestVideoFrameCallback` 的 `expectedDisplayTime` 都以同一份文件的時間原點計；媒體時間一律**秒**（輸出時間軸，附錄 B §3）；位元率 **bit/s**；位元組 **byte**。識別碼 `(config, epoch, dataId)` 與握手見附錄 B §1、§4。
 
 ## §1 對時與畫面時間
 

@@ -24,12 +24,13 @@ const badPeers = new Set();
 const early = new Map();
 const wanted = new Set(); // 播放器正在等的片段（一律算急件）
 const standing = new Map(); // i → Set(peer)：別人先來要、我還沒有的片段
-const m = { id: ME, upload: UPLOAD, fromHost: 0, fromPeers: 0, uploaded: 0, hashFail: 0, repairs: 0, dupBytes: 0, drift: [], waiting: 0, joinAt: nowMs(), firstFrameAt: null, seekRecover: [] };
+const m = { id: ME, upload: UPLOAD, fromHost: 0, fromPeers: 0, uploaded: 0, hashFail: 0, repairs: 0, dupBytes: 0, drift: [], waiting: 0, joinAt: nowMs(), firstFrameAt: null, seekRecover: [], hostSeekRecover: [] };
 let host = null;
 let manifest = null;
 let initBytes = null;
 let st = null;
 let hls = null;
+let jumpAt = null;
 
 function onSignal(msg) {
   if (msg.from === "host") return hostSignal(msg);
@@ -127,7 +128,11 @@ function onHostCtl(msg) {
     toHost({ type: "ready" });
     startPlayer();
   }
-  if (msg.type === "state") st = { ...msg, at: nowMs() };
+  if (msg.type === "state") {
+    // 房主跳轉：新狀態與目前推算差 > 1 秒。從房主送出這則狀態的時刻起算，到收看端畫面回到 100 ms 內
+    if (st && Math.abs(msg.mediaTime - expected()) > 1) jumpAt = msg.hostClock;
+    st = { ...msg, at: nowMs() };
+  }
   if (msg.type === "seg") {
     if (store.has(msg.i)) return;
     ann.set(msg.i, { ...msg, askedAt: performance.now(), askedHost: msg.from === "host" });
@@ -295,6 +300,7 @@ async function syncLoop() {
       video.playbackRate = Math.abs(d) <= 0.015 ? st.rate : st.rate * (1 - Math.sign(d) * Math.min(0.05, 0.5 * Math.abs(d)));
       m.drift.push({ t: nowMs(), d: +(d * 1000).toFixed(1) });
       if (seekAt && Math.abs(d) < 0.1) (m.seekRecover.push(Math.round(nowMs() - seekAt)), (seekAt = null));
+      if (jumpAt && Math.abs(d) < 0.1) (m.hostSeekRecover.push(Math.round(nowMs() - jumpAt)), (jumpAt = null));
     }
   }
 }

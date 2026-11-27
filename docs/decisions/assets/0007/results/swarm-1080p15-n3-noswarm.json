@@ -13,48 +13,50 @@
  "phases": {
   "steady": {
    "seconds": 20,
-   "hostMbps": 67.1,
-   "hostSeedMbps": 62.4,
+   "hostMbps": 67,
+   "hostSeedMbps": 63.9,
    "hostRepairMbps": 0,
-   "hostJoinMbps": 4.7,
+   "hostJoinMbps": 3.1,
    "viewers": [
     {
      "id": "A",
      "upload": true,
-     "fromHostMbps": 15.3,
+     "fromHostMbps": 18.3,
      "fromPeersMbps": 0,
      "uploadMbps": 0,
      "hashFail": 0,
      "repairs": 0,
      "waiting": 0,
-     "driftP50": 24.8,
-     "driftP95": 41.5,
-     "driftN": 197,
-     "startMs": 1139,
+     "driftP50": 1.9,
+     "driftP95": 8.7,
+     "driftN": 196,
+     "startMs": 1183,
      "seekRecover": [
-      1222
+      1120
      ],
+     "hostSeekRecover": [],
      "badPeers": [],
      "dropped": 0
     },
     {
      "id": "B",
      "upload": true,
-     "fromHostMbps": 25.9,
+     "fromHostMbps": 22.8,
      "fromPeersMbps": 0,
      "uploadMbps": 0,
      "hashFail": 0,
      "repairs": 0,
      "waiting": 0,
      "driftP50": 24.6,
-     "driftP95": 41.2,
+     "driftP95": 41.3,
      "driftN": 197,
-     "startMs": 5121,
+     "startMs": 2079,
      "seekRecover": [
-      5586
+      1015
      ],
+     "hostSeekRecover": [],
      "badPeers": [],
-     "dropped": 3
+     "dropped": 0
     },
     {
      "id": "C",
@@ -65,13 +67,14 @@
      "hashFail": 0,
      "repairs": 0,
      "waiting": 0,
-     "driftP50": 24.6,
-     "driftP95": 48.6,
+     "driftP50": 24.8,
+     "driftP95": 41.4,
      "driftN": 197,
-     "startMs": 4938,
+     "startMs": 4803,
      "seekRecover": [
-      812
+      921
      ],
+     "hostSeekRecover": [],
      "badPeers": [],
      "dropped": 3
     }
@@ -93,14 +96,18 @@
      "uploadMbps": 0,
      "hashFail": 0,
      "repairs": 0,
-     "waiting": 3,
-     "driftP50": 32.6,
-     "driftP95": 126.3,
-     "driftN": 81,
-     "startMs": 1139,
+     "waiting": 2,
+     "driftP50": 32.2,
+     "driftP95": 135.1,
+     "driftN": 83,
+     "startMs": 1183,
      "seekRecover": [
-      1222,
-      910
+      1120,
+      1321
+     ],
+     "hostSeekRecover": [
+      184,
+      4816
      ],
      "badPeers": [],
      "dropped": 2
@@ -114,16 +121,20 @@
      "hashFail": 0,
      "repairs": 0,
      "waiting": 2,
-     "driftP50": 41,
-     "driftP95": 173.6,
-     "driftN": 82,
-     "startMs": 5121,
+     "driftP50": 26.1,
+     "driftP95": 125.3,
+     "driftN": 83,
+     "startMs": 2079,
      "seekRecover": [
-      5586,
-      1320
+      1015,
+      1014
+     ],
+     "hostSeekRecover": [
+      33,
+      4557
      ],
      "badPeers": [],
-     "dropped": 5
+     "dropped": 2
     },
     {
      "id": "C",
@@ -133,17 +144,21 @@
      "uploadMbps": 0,
      "hashFail": 0,
      "repairs": 0,
-     "waiting": 2,
-     "driftP50": 32.7,
-     "driftP95": 141.5,
-     "driftN": 81,
-     "startMs": 4938,
+     "waiting": 1,
+     "driftP50": 34,
+     "driftP95": 164.5,
+     "driftN": 84,
+     "startMs": 4803,
      "seekRecover": [
-      812,
-      1217
+      921,
+      1827
+     ],
+     "hostSeekRecover": [
+      27,
+      5273
      ],
      "badPeers": [],
-     "dropped": 5
+     "dropped": 3
     }
    ],
    "events": []
@@ -181,59 +196,59 @@
    "dupMB": 3.8
   }
  ],
- "sha256Ms4MiB": 2.29,
+ "sha256Ms4MiB": 2.33,
  "hostPerSec": [
   0,
   0,
   0,
   64.9,
   89.5,
-  60.8,
-  66.6,
-  59.6,
-  86.4,
-  90.7,
-  63.3,
+  65.2,
+  55.6,
+  65.5,
   89.5,
-  31.9,
-  93.3,
-  90.6,
-  91.1,
-  61.2,
-  91.7,
-  59.1,
-  61.7,
-  123,
-  60.2,
+  56.1,
+  96.3,
+  90.7,
   91.8,
-  30.4,
-  91.2,
-  60.3,
-  122.7,
-  61.3,
+  30.5,
+  92.7,
+  60.8,
   90.6,
-  29.3,
-  122.6,
-  29.6,
-  122.5,
-  91.1,
-  0,
-  0,
   92.2,
-  91.6,
-  0,
+  90.6,
   30.2,
-  60.3,
-  90,
-  91.7,
-  92.2,
-  92.1,
+  91.6,
+  91.2,
+  61.2,
+  91.2,
+  91,
+  30.9,
+  121.6,
   90.6,
+  30.6,
+  91.6,
+  89.6,
+  92.9,
+  61.1,
+  91.8,
   0,
-  92.2,
+  93,
+  0,
+  91,
+  0,
+  90.1,
+  30.2,
+  60.2,
+  91.7,
+  91.6,
+  92.8,
+  90.7,
+  30.6,
+  61.8,
   91.1,
   92.1,
-  89.6
+  89.7
  ],
- "elapsedS": 50.457
+ "elapsedS": 50.461
 }

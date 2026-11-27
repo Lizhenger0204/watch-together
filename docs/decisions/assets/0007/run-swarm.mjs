@@ -67,7 +67,7 @@ async function phase(label, ms) {
     hostJoinMbps: mbps(h0.sent.join, h1.sent.join),
     viewers: v1.map((v, k) => {
       const a = v0.find((x) => x.id === v.id) ?? { fromHost: 0, fromPeers: 0, uploaded: 0, hashFail: 0, repairs: 0, waiting: 0 };
-      return { id: v.id, upload: v.upload, fromHostMbps: mbps(a.fromHost, v.fromHost), fromPeersMbps: mbps(a.fromPeers, v.fromPeers), uploadMbps: mbps(a.uploaded, v.uploaded), hashFail: v.hashFail - a.hashFail, repairs: v.repairs - a.repairs, waiting: v.waiting - a.waiting, driftP50: v.p50, driftP95: v.p95, driftN: v.driftN, startMs: v.startMs, seekRecover: v.seekRecover, badPeers: v.badPeers, dropped: v.dropped };
+      return { id: v.id, upload: v.upload, fromHostMbps: mbps(a.fromHost, v.fromHost), fromPeersMbps: mbps(a.fromPeers, v.fromPeers), uploadMbps: mbps(a.uploaded, v.uploaded), hashFail: v.hashFail - a.hashFail, repairs: v.repairs - a.repairs, waiting: v.waiting - a.waiting, driftP50: v.p50, driftP95: v.p95, driftN: v.driftN, startMs: v.startMs, seekRecover: v.seekRecover, hostSeekRecover: v.hostSeekRecover, badPeers: v.badPeers, dropped: v.dropped };
     }),
     events: h1.events.slice(h0.events.length),
   };
