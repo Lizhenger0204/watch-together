@@ -458,8 +458,15 @@ describe("HEVC container regressions (R3 review fixes)", () => {
       ],
       { type: "video/x-matroska" },
     );
-    // 嚴格解析 Tracks/TrackEntry 時即拒絕越界 CRC 元素
-    expect(await inspectHevcProfile(badCrcMkv)).toBeNull();
+    // 嚴格邊界檢查保留 mismatchMain10On8Bit 診斷與拒改原因（不丟失 HEVC_PROFILE_MISMATCH 指引），同時拒絕修補
+    const badCrcInsp = await inspectHevcProfile(badCrcMkv);
+    expect(badCrcInsp?.info.mismatchMain10On8Bit).toBe(true);
+    expect(badCrcInsp?.info.unsafeReason).toBe("mkv-tracks-corrupt-bounds");
+    const badCrcFix = await buildZeroCopyHevcProfileFix(badCrcMkv, badCrcInsp!);
+    expect(badCrcFix).toEqual({
+      ok: false,
+      reason: "mkv-tracks-corrupt-bounds",
+    });
 
     // 5. BlockGroup 內含未知長度 Block（0xA1 0xFF）→ 必須拒絕
     const unknownBlockGroup = ebmlEl(

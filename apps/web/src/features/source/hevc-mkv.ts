@@ -29,6 +29,7 @@ import {
   EBML_ID_TRACKS,
   computeEbmlCrc32Patch,
   extractVideoBlocksFromCluster,
+  iterateEbmlChildren,
   iterateEbmlChildrenStrict,
   parseCuesForTrack,
   parseSeekHead,
@@ -69,6 +70,7 @@ export interface MkvHevcInspection {
   trackEntryPayload: Uint8Array;
   trackEntryPayloadOffset: number;
   segmentHasCrc32: boolean;
+  largeMkvProbeFailed: boolean;
   trackNumber: number;
   segmentDataStart: number;
   firstClusterOffset: number | null;
@@ -152,21 +154,27 @@ export async function inspectMkvHevc(
     hasContentEncoding: boolean;
   } | null = null;
 
-  const trackEntries = iterateEbmlChildrenStrict(
+  let tracksCorruptBounds = false;
+  const strictTrackEntries = iterateEbmlChildrenStrict(
     tracksEl.payload,
     0,
     tracksEl.payload.length,
   );
-  if (!trackEntries) return null;
+  if (!strictTrackEntries) tracksCorruptBounds = true;
+  const trackEntries =
+    strictTrackEntries ??
+    iterateEbmlChildren(tracksEl.payload, 0, tracksEl.payload.length);
 
   for (const entry of trackEntries) {
     if (entry.id !== EBML_ID_TRACK_ENTRY) continue;
-    const entryFields = iterateEbmlChildrenStrict(
+    const strictEntryFields = iterateEbmlChildrenStrict(
       tracksEl.payload,
       entry.dataStart,
       entry.dataEnd,
     );
-    if (!entryFields) return null;
+    const entryFields =
+      strictEntryFields ??
+      iterateEbmlChildren(tracksEl.payload, entry.dataStart, entry.dataEnd);
     let trackNumber = -1;
     let trackType = -1;
     let codecId = "";
@@ -208,6 +216,7 @@ export async function inspectMkvHevc(
       codecPrivate &&
       trackNumber >= 0
     ) {
+      if (!strictEntryFields) tracksCorruptBounds = true;
       foundTrack = {
         trackNumber,
         codecPrivateBytes: codecPrivate.bytes,
@@ -244,23 +253,25 @@ export async function inspectMkvHevc(
   }
 
   const probeBlocks: MkvBlockPayload[] = [];
+  let probeTargetUnreadable = false;
   if (firstClusterOffset !== null) {
     const clusterHead = await sliceBlobBytes(
       file,
       firstClusterOffset,
       CLUSTER_PROBE_BYTES,
     );
-    probeBlocks.push(
-      ...extractVideoBlocksFromCluster(
-        clusterHead,
-        firstClusterOffset,
-        foundTrack.trackNumber,
-        2,
-      ),
+    const firstBlocks = extractVideoBlocksFromCluster(
+      clusterHead,
+      firstClusterOffset,
+      foundTrack.trackNumber,
+      2,
     );
+    if (firstBlocks.length === 0) probeTargetUnreadable = true;
+    probeBlocks.push(...firstBlocks);
   }
-  if (cueTargets.length >= 2) {
+  if (cueTargets.length >= 1) {
     const sampleCueIndices = new Set<number>([
+      0,
       Math.floor(cueTargets.length * 0.25),
       Math.floor(cueTargets.length * 0.5),
       Math.floor(cueTargets.length * 0.75),
@@ -274,9 +285,16 @@ export async function inspectMkvHevc(
         target,
         foundTrack.trackNumber,
       );
-      if (block) probeBlocks.push(block);
+      if (!block) {
+        probeTargetUnreadable = true;
+      } else {
+        probeBlocks.push(block);
+      }
     }
   }
+  const largeMkvProbeFailed =
+    file.size > SMALL_MKV_SCAN_LIMIT &&
+    (probeTargetUnreadable || probeBlocks.length === 0);
 
   const nalLenSize = hvcc.lengthSizeMinusOne + 1;
   let hasInBandParameterSets = false;
@@ -288,7 +306,11 @@ export async function inspectMkvHevc(
       probedLacedBlock = true;
       continue;
     }
-    const inspected = inspectSampleParameterSets(block.bytes, nalLenSize);
+    const inspected = inspectSampleParameterSets(
+      block.bytes,
+      nalLenSize,
+      block.truncated === true,
+    );
     if (inspected.hasInBandParameterSets) hasInBandParameterSets = true;
     if (inspected.hasUnparsedSps) extraUnparsedSps = true;
     extraSps.push(...inspected.spsList);
@@ -296,9 +318,11 @@ export async function inspectMkvHevc(
 
   const containerUnsafeReason = foundTrack.hasContentEncoding
     ? "mkv-content-encoding"
-    : probedLacedBlock
-      ? "mkv-inband-laced-block"
-      : null;
+    : tracksCorruptBounds
+      ? "mkv-tracks-corrupt-bounds"
+      : probedLacedBlock
+        ? "mkv-inband-laced-block"
+        : null;
 
   const info = classifyHevcHeader(
     "mkv",
@@ -320,6 +344,7 @@ export async function inspectMkvHevc(
     trackEntryPayload: foundTrack.trackEntryPayload,
     trackEntryPayloadOffset: foundTrack.trackEntryPayloadOffset,
     segmentHasCrc32,
+    largeMkvProbeFailed,
     trackNumber: foundTrack.trackNumber,
     segmentDataStart,
     firstClusterOffset,
@@ -405,20 +430,19 @@ export async function patchMkvZeroCopy(
   if (!tracksCrc.ok) return tracksCrc;
   if (tracksCrc.patch) patches.push(tracksCrc.patch);
 
-  if (
-    file.size <= SMALL_MKV_SCAN_LIMIT &&
-    inspection.firstClusterOffset !== null
-  ) {
-    // 小型 MKV（≤ 4 MB）無論抽查是否命中皆完整走訪全部 Cluster（含未知長度 Cluster），
-    // 絕不漏修後段未抽查的 in-band 參數集，且對每份參數集套用相同安全條件並同步更新 CRC-32。
+  if (file.size <= SMALL_MKV_SCAN_LIMIT) {
+    // 小型 MKV（≤ 4 MB）無論抽查是否命中、也不受頂層 64 元素步數上限影響，
+    // 一律從首個 Cluster（若尚未見 Cluster 則從 Segment 起點）完整走訪到檔尾。
+    const walkStart =
+      inspection.firstClusterOffset ?? inspection.segmentDataStart;
     const segTail = await sliceBlobBytes(
       file,
-      inspection.firstClusterOffset,
-      file.size - inspection.firstClusterOffset,
+      walkStart,
+      file.size - walkStart,
     );
     const walked = walkSmallMkvClusters(
       segTail,
-      inspection.firstClusterOffset,
+      walkStart,
       inspection.trackNumber,
     );
     if (!walked.ok) return walked;
@@ -472,6 +496,8 @@ export async function patchMkvZeroCopy(
     // 依 RFC 9559 §22.1，Matroska Cues 不保證列出同一 Cluster 內的全部關鍵幀；
     // 超過 4 MB 且抽查命中 in-band 時不做多 GB 整檔掃描，改保守降級以避免漏修。
     return { ok: false, reason: "mkv-inband-unverified-coverage" };
+  } else if (inspection.largeMkvProbeFailed) {
+    return { ok: false, reason: "mkv-probe-unreadable" };
   }
 
   const blob = spliceZeroCopyBlob(

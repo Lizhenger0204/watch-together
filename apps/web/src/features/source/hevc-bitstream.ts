@@ -444,6 +444,7 @@ export function readNalLength(
 export function inspectSampleParameterSets(
   sample: Uint8Array,
   nalLengthSize: number,
+  isTruncatedWindow = false,
 ): {
   hasInBandParameterSets: boolean;
   spsList: ParsedHevcSps[];
@@ -498,7 +499,12 @@ export function inspectSampleParameterSets(
     offset = dataStart + nalLen;
   }
 
-  if (offset > 0 && !reachedVcl && offset < sample.length) {
+  // 若前置非 VCL 剛好填滿截斷讀取視窗而尚未抵達 VCL，或非 VCL 後方殘留不完整標頭，一律視為證據不足。
+  if (
+    offset > 0 &&
+    !reachedVcl &&
+    (isTruncatedWindow || offset < sample.length)
+  ) {
     hasUnparsedSps = true;
   }
 

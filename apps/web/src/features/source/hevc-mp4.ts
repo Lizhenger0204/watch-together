@@ -277,7 +277,12 @@ export async function inspectMp4Hevc(
         const readLen = Math.min(kf.size, KEYFRAME_PROBE_BYTES);
         if (readLen <= 0) continue;
         const sampleHead = await sliceBlobBytes(file, kf.offset, readLen);
-        const inspected = inspectSampleParameterSets(sampleHead, nalLenSize);
+        const isTruncatedWindow = sampleHead.length < kf.size;
+        const inspected = inspectSampleParameterSets(
+          sampleHead,
+          nalLenSize,
+          isTruncatedWindow,
+        );
         if (inspected.hasInBandParameterSets) hasInBandParameterSets = true;
         if (inspected.hasUnparsedSps) extraUnparsedSps = true;
         extraSps.push(...inspected.spsList);
@@ -376,7 +381,12 @@ export async function patchMp4ZeroCopy(
       const readLen = Math.min(sample.size, KEYFRAME_PROBE_BYTES);
       if (readLen <= 0) continue;
       const sampleHead = await sliceBlobBytes(file, sample.offset, readLen);
-      const patched = patchSampleParameterSets(sampleHead, nalLenSize);
+      const isTruncatedWindow = sampleHead.length < sample.size;
+      const patched = patchSampleParameterSets(
+        sampleHead,
+        nalLenSize,
+        isTruncatedWindow,
+      );
       if (!patched.ok) return { ok: false, reason: patched.reason };
       if (patched.changed) {
         if (!patched.sameLength) {

@@ -307,6 +307,7 @@ function writeNalLength(
 export function patchSampleParameterSets(
   sample: Uint8Array,
   nalLengthSize: number,
+  isTruncatedWindow = false,
 ): SamplePatchResult {
   if (nalLengthSize < 1 || nalLengthSize > 4) {
     return {
@@ -367,7 +368,11 @@ export function patchSampleParameterSets(
     offset = dataStart + nalLen;
   }
 
-  if (offset > 0 && !reachedVcl && offset < sample.length) {
+  // 若尚未抵達首個 VCL 且樣本仍超出讀取視窗（如前置 SEI 剛好佔滿 64 KiB），或非 VCL 後殘留不完整標頭，拒絕宣稱掃描完成。
+  if (
+    !reachedVcl &&
+    (isTruncatedWindow || (offset > 0 && offset < sample.length))
+  ) {
     return {
       ok: false,
       foundParameterSets: true,

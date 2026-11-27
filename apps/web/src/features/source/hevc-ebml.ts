@@ -63,6 +63,7 @@ export interface MkvBlockPayload {
   fileOffset: number;
   bytes: Uint8Array;
   laced: boolean;
+  truncated?: boolean;
   blockGroup?: {
     payloadOffset: number;
     payload: Uint8Array;
@@ -377,6 +378,7 @@ function decodeMkvBlockPayload(
   baseFileOffset: number,
   targetTrack: number,
   blockGroup: { payloadOffset: number; payload: Uint8Array } | null = null,
+  truncated = false,
 ): MkvBlockPayload | null {
   const trackVint = readEbmlVint(buf, dataStart);
   if (!trackVint || trackVint.value !== targetTrack) return null;
@@ -387,6 +389,7 @@ function decodeMkvBlockPayload(
     fileOffset: baseFileOffset + dataStart + headerLen,
     bytes: buf.subarray(dataStart + headerLen, dataEnd),
     laced: ((flags >> 1) & 0x03) !== 0,
+    truncated,
     blockGroup,
   };
 }
@@ -401,6 +404,7 @@ export function parseSingleBlockElement(
   const sizeInfo = readEbmlVint(buf, idInfo.length);
   if (!sizeInfo) return null;
   const start = idInfo.length + sizeInfo.length;
+  const truncated = sizeInfo.unknown || start + sizeInfo.value > buf.length;
   const end = sizeInfo.unknown
     ? buf.length
     : Math.min(buf.length, start + sizeInfo.value);
@@ -412,6 +416,8 @@ export function parseSingleBlockElement(
       end,
       elementFileOffset,
       targetTrack,
+      null,
+      truncated,
     );
   }
   if (idInfo.id === EBML_ID_BLOCK_GROUP) {
@@ -423,6 +429,8 @@ export function parseSingleBlockElement(
           sub.dataEnd,
           elementFileOffset,
           targetTrack,
+          null,
+          truncated,
         );
       }
     }
@@ -454,6 +462,7 @@ export function extractVideoBlocksFromCluster(
     const csize = readEbmlVint(clusterBuf, pos + cid.length);
     if (!csize) break;
     const dataStart = pos + cid.length + csize.length;
+    const blockTruncated = csize.unknown || dataStart + csize.value > end;
     const dataEnd = csize.unknown
       ? end
       : Math.min(end, dataStart + csize.value);
@@ -465,6 +474,8 @@ export function extractVideoBlocksFromCluster(
         dataEnd,
         clusterFileOffset,
         targetTrack,
+        null,
+        blockTruncated,
       );
       if (payload) results.push(payload);
     } else if (cid.id === EBML_ID_BLOCK_GROUP) {
@@ -476,6 +487,8 @@ export function extractVideoBlocksFromCluster(
           sub.dataEnd,
           clusterFileOffset,
           targetTrack,
+          null,
+          blockTruncated,
         );
         if (payload) results.push(payload);
         break;
