@@ -480,6 +480,79 @@ describe("HEVC MKV probe regressions (R5 & R6 review fixes)", () => {
         ),
       ).toEqual({ ok: false, reason: "mkv-probe-unreadable" });
     }
+
+    // 路徑 F：探測視窗最後 1 byte 為部分 VINT（0x01 需 8 bytes 或 0x41 最小 payload 256 bytes），但父 BlockGroup 空間不足 → 拒改
+    const buildCutVintBgCluster = (
+      windowBytes: number,
+      prefixBytes: number,
+      tail: number[],
+    ) => {
+      const padPayloadLen =
+        windowBytes - prefixBytes - 4 - validBlockInBg.length - 3 - 2;
+      const bg = ebmlEl(
+        [0xa0],
+        concat(
+          validBlockInBg,
+          ebmlEl([0xec], new Uint8Array(padPayloadLen)),
+          new Uint8Array(tail),
+        ),
+      );
+      return ebmlEl([0x1f, 0x43, 0xb6, 0x75], concat(tcEl, bg));
+    };
+    const cut16kCluster = buildCutVintBgCluster(
+      16_384,
+      7 + tcEl.length,
+      [0xfb, 0x01, 0x00],
+    );
+    const cut8kCluster = buildCutVintBgCluster(8_192, 0, [0xfb, 0x01, 0x00]);
+    const cutMinValCluster = buildCutVintBgCluster(
+      16_384,
+      7 + tcEl.length,
+      [0xfb, 0x41, 0x00, 0x00, 0x00],
+    );
+    for (const badCutBlob of [
+      // 首 Cluster（16 KiB 視窗，8-byte VINT 超出剩餘 2 bytes）
+      new Blob([ebmlHeader, segHdrUnknown, tracks, cut16kCluster, pad45MB], {
+        type: "video/x-matroska",
+      }),
+      // 首 Cluster（16 KiB 視窗，2-byte VINT 0x41 最小 payload 256 > 剩餘 2 bytes）
+      new Blob([ebmlHeader, segHdrUnknown, tracks, cutMinValCluster, pad45MB], {
+        type: "video/x-matroska",
+      }),
+      // 無相對位置 Cue（16 KiB 視窗）
+      new Blob(
+        [
+          ebmlHeader,
+          segHdrUnknown,
+          tracks,
+          makeClusterCue(bgNoRelPos),
+          cleanCluster,
+          cut16kCluster,
+          pad45MB,
+        ],
+        { type: "video/x-matroska" },
+      ),
+      // 有相對位置 Cue（8 KiB 視窗）
+      new Blob(
+        [
+          ebmlHeader,
+          segHdrUnknown,
+          tracks,
+          makeRelCue(bgClusterPos, tcEl.length),
+          cleanCluster,
+          cut8kCluster,
+          pad45MB,
+        ],
+        { type: "video/x-matroska" },
+      ),
+    ]) {
+      expect(
+        await buildZeroCopyHevcProfileFix(
+          badCutBlob,
+          (await inspectHevcProfile(badCutBlob))!,
+        ),
+      ).toEqual({ ok: false, reason: "mkv-probe-unreadable" });
+    }
   });
 
   it("refuses hvc1 MP4 when a 66 KiB SEI in a probed keyframe hides a true 10-bit SPS", async () => {
