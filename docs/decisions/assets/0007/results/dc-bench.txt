@@ -1,0 +1,19 @@
+# T-140 run-dc-bench.mjs 原始輸出（Claude，M1、Chrome 158、headless，2026-11-27）
+# 每行：query、收看人數、每人平均 Mbps、最低 0.5 秒窗 Mbps、低於 0.5 Mbps 的窗數、房主端偵測到的最長「bufferedAmount 不降」毫秒（配速時此值會誤報，不採用）
+{"query":"chunk=65536&high=1048576&low=262144","viewers":1,"per":[{"mbps":210,"minWindowMbps":1,"zeroWindows":0}],"hostMaxStallMs":2702}
+{"query":"chunk=65536&high=1048576&low=262144","viewers":2,"per":[{"mbps":77.8,"minWindowMbps":1,"zeroWindows":0},{"mbps":131.9,"minWindowMbps":1,"zeroWindows":0}],"hostMaxStallMs":4301}
+{"query":"chunk=16384&high=1048576&low=262144","viewers":1,"per":[{"mbps":214.6,"minWindowMbps":41,"zeroWindows":0}],"hostMaxStallMs":1801}
+{"query":"chunk=16384&high=1048576&low=262144","viewers":2,"per":[{"mbps":109.5,"minWindowMbps":0.8,"zeroWindows":0},{"mbps":85.3,"minWindowMbps":0.5,"zeroWindows":0}],"hostMaxStallMs":3701}
+{"query":"chunk=262144&high=4194304&low=1048576","viewers":1,"per":[{"mbps":221.7,"minWindowMbps":46.2,"zeroWindows":0}],"hostMaxStallMs":1802}
+{"query":"chunk=262144&high=4194304&low=1048576","viewers":2,"per":[{"mbps":124.6,"minWindowMbps":4.2,"zeroWindows":0},{"mbps":91.1,"minWindowMbps":4.2,"zeroWindows":0}],"hostMaxStallMs":2701}
+{"query":"chunk=65536&high=262144&low=65536","viewers":1,"per":[{"mbps":178.3,"minWindowMbps":2.1,"zeroWindows":0}],"hostMaxStallMs":2701}
+{"query":"chunk=65536&high=262144&low=65536","viewers":2,"per":[{"mbps":114.2,"minWindowMbps":2.1,"zeroWindows":0},{"mbps":71.5,"minWindowMbps":1,"zeroWindows":0}],"hostMaxStallMs":3700}
+{"query":"rate=12&high=1048576&low=262144","viewers":1,"per":[{"mbps":12,"minWindowMbps":11.5,"zeroWindows":0}],"hostMaxStallMs":0}
+{"query":"rate=12&high=1048576&low=262144","viewers":2,"per":[{"mbps":12,"minWindowMbps":11.5,"zeroWindows":0},{"mbps":12,"minWindowMbps":11.5,"zeroWindows":0}],"hostMaxStallMs":0}
+{"query":"rate=12&high=1048576&low=262144","viewers":3,"per":[{"mbps":12,"minWindowMbps":11.5,"zeroWindows":0},{"mbps":12,"minWindowMbps":11.5,"zeroWindows":0},{"mbps":12,"minWindowMbps":11.5,"zeroWindows":0}],"hostMaxStallMs":0}
+{"query":"rate=50&high=1048576&low=262144","viewers":1,"per":[{"mbps":50,"minWindowMbps":49.1,"zeroWindows":0}],"hostMaxStallMs":2898}
+{"query":"rate=50&high=1048576&low=262144","viewers":2,"per":[{"mbps":50,"minWindowMbps":49.1,"zeroWindows":0},{"mbps":50,"minWindowMbps":48.2,"zeroWindows":0}],"hostMaxStallMs":2497}
+{"query":"rate=50&high=1048576&low=262144","viewers":3,"per":[{"mbps":50,"minWindowMbps":23.1,"zeroWindows":0},{"mbps":50,"minWindowMbps":0,"zeroWindows":1},{"mbps":50,"minWindowMbps":6.3,"zeroWindows":0}],"hostMaxStallMs":3698}
+{"query":"rate=100&high=1048576&low=262144","viewers":1,"per":[{"mbps":100,"minWindowMbps":98.6,"zeroWindows":0}],"hostMaxStallMs":1395}
+{"query":"rate=100&high=1048576&low=262144","viewers":2,"per":[{"mbps":78.2,"minWindowMbps":1,"zeroWindows":0},{"mbps":93.7,"minWindowMbps":4.2,"zeroWindows":0}],"hostMaxStallMs":4099}
+{"query":"rate=100&high=1048576&low=262144","viewers":3,"per":[{"mbps":50.9,"minWindowMbps":2.1,"zeroWindows":0},{"mbps":93.4,"minWindowMbps":2.1,"zeroWindows":0},{"mbps":57.8,"minWindowMbps":1,"zeroWindows":0}],"hostMaxStallMs":3893}

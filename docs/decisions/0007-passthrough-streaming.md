@@ -37,7 +37,7 @@ WebRTC 是通話用的即時編碼：先顧延遲、位元率只是上限、沒�
 
 - **對時**：類 NTP，`offset = t1 − (t0 + t2) / 2`，取有效期內 RTT 最小的樣本；連上與 ICE restart 後先密集量 8 次。時間一律用 `performance.timeOrigin + performance.now()`（毫秒）。
 - **房主廣播** `state`：播放／暫停／跳轉／速率／緩衝時立刻送，另每秒一次。媒體時間取「畫面上的時間」（`requestVideoFrameCallback` 的錨點往後推；暫停、跳轉、緩衝時錨點作廢）。只用 `currentTime` 時原型有 20～50 ms 的固定偏差。
-- **追趕**以房主的 `rate` 為基準：差 ≤ 15 ms 不動；小差距 ±5% 調速；超前 80 ms～3 秒暫停等待；落後 ≥ 300 ms 或超前 ≥ 3 秒跳轉。狀態有固定優先順序（房主暫停 > 等資料 > 跳轉中 > 暫停等待 > 調速），計時器與跳轉都可取消、完成後重讀當前狀態，不直接 `play()`。原型只用 ±5% 調速時跳轉後最多 15 秒才收斂，改成這組規則後 1～6 秒。
+- **追趕**以房主的 `rate` 為基準：差 ≤ 15 ms 不動；小差距 ±5% 調速；超前 80 ms～3 秒暫停等待；落後 ≥ 300 ms 或超前 ≥ 3 秒跳轉（落點要先確認已緩衝）。狀態有固定優先順序（未就緒 > 房主暫停 > 跳轉中 > 等資料 > 跳轉 > 暫停等待 > 播放），只有定位或播放意圖改變才作廢計時器與跳轉；跳轉有 5 秒逾時，連續失敗就請房主重新定位。原型只用 ±5% 調速時跳轉後最多 15 秒才收斂，改用簡化版（落後跳轉、超前暫停）後 1～6 秒；完整狀態機（附錄 C §2）尚未實測。
 - **有人緩衝卡住（建議預設：不等人）**：卡住的人自己追，資料到了就跳到現在的位置；落後太多時房主替他重新定位（附錄 C §3）。一位網路差的收看者不應讓全房停；現行直播也不等人。房主可選「等所有人」（T-143 之後），參與者、逾時與冷卻見附錄 C §2。
 
 ## D3. 加入與跳轉從哪個關鍵影格開始
@@ -51,7 +51,7 @@ WebRTC 是通話用的即時編碼：先顧延遲、位元率只是上限、沒�
 - **頻道**：每位收看者既有的 P2P `RTCPeerConnection` 上開 `pt-ctl`（JSON）與 `pt-data`（二進位），都**可靠有序**；MSE 的片段少一塊就作廢，部分可靠沒有好處。每則最大 64 KiB 且不超過 `sctp.maxMessageSize`。
 - **配速，不爆量**：原型一次塞整段進 SCTP 時，同機 loopback 出現 2～40 秒的停滯；配速後 12 Mbps × 3、50 Mbps × 2 都平順（附錄 A §2；GPT 複跑配速結果一致，停滯成因與約 150 Mbps 的臨界值未再重現，列為待驗）。
 - **房間預算**：上傳頻寬 × 70%。先為每位收看者依所在層的穩態碼率預留（含 RTP 音訊與約 10% 協定開銷），餘額才給加入、跳轉的追趕；放不下的人改第二層或第三層（附錄 C §5）。第一版由房主在畫質面板選上傳頻寬。
-- **雙邊背壓**：除了房主端 `bufferedAmount`，收看端回報「已附加進 SourceBuffer」的進度與位元組；房主限制在途＋待附加＋已附加的超前位元組，而不只看房主時間。卡住的收看者不會被無限灌資料。
+- **雙邊背壓**：除了房主端 `bufferedAmount`，收看端分開回報「已收到」與「已附加進 SourceBuffer」的累計位元組；房主分別限制網路在途（8 MiB）、收看端待處理（16 MiB）與超前位元組。超前秒數在收看端開播前以入口為準、開播後同時受收看端位置約束，所以中途加入不會卡住，卡住的收看者也不會被無限灌資料。
 - **MSE 上限**：Chrome 影像 SourceBuffer 預設 150 MiB；超前量取 `min(20 秒, 80 MiB × 8 ÷ 位元率)`（40 Mbps 約 16.8 秒），再以實際位元組限制。`QuotaExceededError` 有限次重試，之後縮小超前量、重新定位或降層。ManagedMediaSource 的 `endstreaming` 時停止供貨。
 - **第一、二層的收看者不收 RTP**：房主對該收看者的 sender `replaceTrack(null)`，改回第三層時再 `replaceTrack(track)`，不必重新協商。
 - **房主上傳**（P2P）：穩態約「1.0～1.5 倍位元率 × 人數」。房主 110 Mbps 上傳、預算 77 Mbps 時，4K 40 Mbps 原片只放得下 1 人，其餘收看者走第二層（1080P 8 Mbps）（附錄 B §6）。
@@ -61,16 +61,16 @@ WebRTC 是通話用的即時編碼：先顧延遲、位元率只是上限、沒�
 細節見附錄 B §3～§5。
 
 - **拆檔：mediabunny**（MPL-2.0，純 TypeScript）：同時支援 MP4／MOV 與 MKV，依時間取關鍵影格，從 `File` 隨機讀取，50 GB 也不必整檔載入。固定用發佈超過 14 天的版本（目前 1.65.2），未被標成 deprecated。比較見附錄 A §5。
-- **時間軸**：mediabunny 只給 PTS，不給 DTS。原型「片段內 PTS 排序當 DTS」在可變幀率＋open GOP 會讓相鄰片段出現 83 ms 缺口（GPT 實測），**不能沿用**。MP4 由 `stts`／`ctts` 取得來源 DTS 與 sample duration；MKV 沒有 DTS，以整條軌的固定重排延遲推導，驗證不過（片段不連續、DTS > PTS）就降層。負的時間戳（AAC priming）以全片固定位移處理，收看端用 `timestampOffset` 抵銷；edit list 照房主 `<video>` 的呈現時間對齊。
-- **片段**：分「入口片段」（可隨機進入的影格開頭）與「續接片段」。長 GOP 時續接片段可不以關鍵影格開頭；從入口開始時，以 `appendWindowStart` 去掉 open GOP／HEVC CRA 的前導畫面。
-- **HEVC `hvc1`／`hev1`**：沿用來源的 sample entry 類型（mediabunny 的 codec 字串一律回報 `hev1`，要另外讀容器）。MKV 抽查位元流確認沒有與 `hvcC` 不同的參數集時才標 `hvc1`，否則標 `hev1`；Safari 收看者遇到 `hev1` 走第二或第三層。H.264 一律 `avc1`。
-- **T-138**：偵測到「標頭 Main 10、實際 8-bit」時，**不論房主本機能否直接播放**，拆檔都讀修正後的零複製 Blob，避免 Windows 收看端的 MSE 拒絕。`features/source/`（GPT）要對外提供「實際採用的 Blob」（D10）。
+- **時間軸**：統一用房主 `<video>` 的呈現時間（套用 edit list 後）。mediabunny 只給 PTS；原型「片段內 PTS 排序當 DTS」在可變幀率＋open GOP 會讓相鄰片段出現 83 ms 缺口（GPT 實測），**不能沿用**。MP4 讀 `stts`／`ctts` 與 edit list（只支援單段 media edit＋可選的起始空白，其他停用第一、二層）；MKV 以固定重排延遲推導 DTS，不允許重複 PTS 等情況，驗證不過就停用。負時間以全片位移寫進 `tfdt`、收看端 `timestampOffset` 抵銷；AAC priming 由 `appendWindowStart = 0` 去掉。
+- **片段**：分「入口片段」（可隨機進入的 sample 開頭）與「續接片段」，影像片段 ≤ `min(2 秒, 4 MiB)`。從入口開始時以 `appendWindowStart` 去掉 open GOP／HEVC CRA 的前導畫面。
+- **HEVC `hvc1`／`hev1`**：預設封成 `hev1`（樣本內參數集原樣保留）。只收 `hvc1` 的收看者（例如 Safari）另用一個 `hvc1` config：逐樣本移除與 `hvcC` 完全相同的參數集，遇到不同的參數集就降層。mediabunny 的 codec 字串一律回報 `hev1`，不能拿來判斷。H.264 一律 `avc1`。
+- **T-138**：現行只在房主試播失敗時才產生修正 Blob。改為 `features/source/`（GPT）對外提供偵測結果與「按需修補」：偵測到「標頭 Main 10、實際 8-bit」時，**不論房主本機能否直接播**，拆檔都讀修正後的零複製 Blob，避免 Windows 收看端的 MSE 拒絕；修補不可用時照送原片，收看端解碼失敗就降層。
 - **10-bit**：第一層不經 WebRTC，不碰 BUG-004；收看端能否解 Main 10 照能力檢查。第二層經 canvas 轉 8-bit。
 - **音訊**：AAC、Opus、FLAC、MP3 依收看端 `isTypeSupported` 決定，封裝器要支援各自的 sample entry；無聲片只建影像 SourceBuffer。**AC-3／E-AC-3** 在 Chrome（桌面、Android）的 MSE 與 WebCodecs 都不支援，現行房主 `<video>` 也解不了，**現在就沒有聲音**；可選 WASM 解碼（待決 2）。DTS／TrueHD 沒有可用解碼器。MKV 有多條音軌時選第一條支援的；都不支援就只送影像並提示。
 
 ## D6. 第二層：只轉碼畫面
 
-- 管線：封包 → `VideoDecoder`（偏好硬體）→ `OffscreenCanvas` 縮放（兼 10-bit 轉 8-bit）→ `VideoEncoder`（H.264、`latencyMode: 'quality'`、`bitrateMode: 'variable'`）→ 時間戳沿用來源 → 與原音軌封成 fMP4 → 照 D4 送出。編碼器設定以 `isConfigSupported` 回傳與輸出的 `decoderConfig` 為準。
+- 管線：封包 → `VideoDecoder`（偏好硬體）→ `OffscreenCanvas` 縮放（兼 10-bit 轉 8-bit）→ `VideoEncoder`（H.264、`latencyMode: 'quality'`、`bitrateMode: 'variable'`、`avc: { format: 'avc' }`）→ 時間戳沿用來源 → 與原音軌封成 fMP4 → 照 D4 送出。`avcC` 與 codec 字串取自輸出的 `decoderConfig`，中途改變就開新 config。
 - 每 2 秒強制一個關鍵影格；開播前試轉 3 秒，低於 1.2 倍速不啟用；播放中連續 10 秒低於 1.1 倍速，該層收看者改第三層。
 - M1：quality 6.8 倍速、realtime 4.5 倍速，位元率貼近目標，未觀察到輸出重排。`prefer-hardware` 只是偏好，不保證真的用硬體。
 - 輸出用 H.264：相容性最好；Chromium 的 HEVC 編碼只有硬體與 Main profile。
@@ -108,7 +108,7 @@ WebRTC 是通話用的即時編碼：先顧延遲、位元率只是上限、沒�
   - `transport/p2p/`（GPT）：房主端每位收看者的 DataChannel 掛勾與 sender `replaceTrack(null)`；收看端暴露 DataChannel（現行 `ViewerTransport` 只有 `remoteStream`）。
   - `features/source/`（GPT）：對外提供實際採用的 Blob（含 T-138 修正）與 T-138 偵測結果。
   - `features/player/`、`features/room/`（Claude）：`<video>` 在 MSE 與 `srcObject` 間切換、成員列表標籤。
-  - 伺服器（Claude）：`apps/signal/src/signaling/process.ts` 目前逐欄重組 `member:status`，要加 `tier`、`driftMs` 才轉得到房主；`packages/shared` 同步更新。`memberStatusSchema` 是 `z.object`，舊版會略過新欄位，不必升版；動到 strict 的 `RoomInfo` 才升 v3。
+  - 伺服器（Claude）：`apps/signal/src/signaling/process.ts` 目前逐欄重組 `member:status`，要加 `tier`、`driftMs` 才轉得到房主；`packages/shared` 同步更新。`memberStatusSchema` 與 `roomInfoSchema` 都是 `z.object`（舊版略過新的選填欄位），不必升版；改動 strict 的 `Quality` 或舊版會誤判的欄位才升 v3。
 - **`runtime/` 邊界不受影響**：伺服器只多轉兩個欄位，沒有新的媒體路徑或 Workers 專屬 API。
 
 ## D11. 分階段實作計畫
@@ -116,7 +116,7 @@ WebRTC 是通話用的即時編碼：先顧延遲、位元率只是上限、沒�
 | 任務 | 內容 | 驗收與 E2E |
 | --- | --- | --- |
 | T-141 | 跨目錄契約（D10）與向後相容掛勾；`passthrough/` 純函式：時間軸、fMP4（mp4a／Opus／fLaC）、對時與追趕狀態機、入口選擇、預算分配、分塊驗證 | Vitest：時間軸以 VFR＋open GOP 素材驗證片段連續；封裝結果以 box 解析器逐欄比對；狀態機每個轉換一個案例；預算表每列一個案例。掛勾預設不啟用，既有 E2E 全過 |
-| T-142 | 第一層端到端（房主開關「原片直送（實驗）」預設關閉）：送出、MSE、同步、跳轉、中途加入、房主重連 | E2E（`channel: 'chrome'`）：新增 ≤ 1 MB、約 30 秒、GOP 2 秒的 H.264＋AAC fixture 驗收完整流程（收看端用 MediaSource、與房主差 < 100 ms、跳轉 5 秒內恢復、第二位收看者中途加入）；HEVC 依 BUG-003 規則先確認平台能解再驗收、否則明示 skip |
+| T-142 | 第一層端到端（房主開關「原片直送（實驗）」預設關閉）：最小握手（`hello`→`probe`→`config`→`position`→`ready`，附錄 B §4）、送出、MSE、同步、跳轉、中途加入、房主重連；不支援就第三層 | E2E（`channel: 'chrome'`）：新增 ≤ 1 MB、約 30 秒、GOP 2 秒的 H.264＋AAC fixture 驗收完整流程（收看端用 MediaSource、與房主差 < 100 ms、跳轉 5 秒內恢復、第二位收看者中途加入）；HEVC 依 BUG-003 規則先確認平台能解再驗收、否則明示 skip |
 | T-143 | 能力回報、選層、降到第三層、UI 標籤、`member:status` 新欄位；預設改為開啟 | E2E：收看端以 `--disable-features=PlatformHEVCDecoderSupport` 啟動時 HEVC 片走第三層；`tier` 正確轉給房主。不依賴 T-144 |
 | T-144 | 第二層轉碼（試速、降層） | E2E：`h264-2160p-aac.mp4` 選 1080P，收看端 `videoHeight = 1080`；注入慢速時走第三層 |
 | T-145 | 研究：Realtime DataChannel 轉發（D7 B） | 原型量測與 ADR 補充 |

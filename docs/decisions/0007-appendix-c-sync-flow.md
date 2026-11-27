@@ -1,103 +1,115 @@
 # ADR 0007 附錄 C：同步、流量控制與選層規則草稿（T-140）
 
-> **草稿（T-140）**：ADR 0007 採用前沒有效力。單位：時間戳與時鐘一律**毫秒**（`performance.timeOrigin + performance.now()`），媒體時間一律**秒**（與 `HTMLMediaElement.currentTime` 相同），位元率 **bit/s**，位元組 **byte**。識別碼（`session`、`config`、`epoch`）的定義見附錄 B §1。
+> **草稿（T-140）**：ADR 0007 採用前沒有效力。單位：時鐘與期限一律**毫秒**，`performance.now()`、`performance.timeOrigin` 與 `requestVideoFrameCallback` 的 `expectedDisplayTime` 都以同一份文件的時間原點計；媒體時間一律**秒**（輸出時間軸，附錄 B §3）；位元率 **bit/s**；位元組 **byte**。識別碼 `(config, epoch, dataId)` 與握手見附錄 B §1、§4。
 
 ## §1 對時與畫面時間
 
 **對時**（收看端主動）：
 
-1. 收看端送 `ping { t0 }`，房主回 `pong { t0, t1 }`，收看端收到時記 `t2`。樣本 = `{ rtt: t2 − t0, offset: t1 − (t0 + t2) / 2, at: t2 }`。
-2. 有效樣本：最近 60 秒內、最多 16 筆。估計值取其中 RTT 最小者；誤差上限 RTT／2。
-3. 頻道開啟、ICE restart 完成（`iceConnectionState` 回到 `connected`）、分頁回到前景時，清空樣本並以 50 ms 間隔量 8 次；平時每 2 秒一次。沒有有效樣本時不做追趕（只顯示「同步中」）。
-4. `房主時鐘現在 = 本機時鐘 + offset`。
+1. 收看端送 `ping { t0 }`，房主回 `pong { t0, t1 }`，收看端收到時記 `t2`。樣本 = `{ rtt: t2 − t0, offset: t1 − (t0 + t2) / 2, at: t2 }`；時鐘 = `performance.timeOrigin + performance.now()`。
+2. 有效樣本：最近 60 秒內、最多 16 筆；估計值取 RTT 最小者（誤差上限 RTT／2）。
+3. 頻道開啟、ICE restart 回到 `connected`、分頁回到前景時清空樣本，以 50 ms 間隔量 8 次；平時每 2 秒一次。沒有有效樣本時不追趕，只顯示「同步中」。
 
-**畫面時間**（雙方相同算法）：
+**畫面時間**（雙方同一算法）：
 
 - 錨點 = 最近一次 `requestVideoFrameCallback` 的 `{ p: expectedDisplayTime, m: mediaTime }`。
-- 只有在「正在播放、不在 `seeking`、不在 `waiting`、錨點距今 < 250 ms、錨點之後沒有發生 `pause`／`seeking`／`waiting`／`ratechange`／換來源」時，畫面時間 = `m + (now − p) / 1000 × playbackRate`；其他情況用 `currentTime`。上述事件發生時立即作廢錨點。
-- `expectedDisplayTime` 是瀏覽器的預估值；作廢規則就是避免在暫停或卡住時繼續外插。
+- 「正在播放、不在 `seeking`／`waiting`、錨點距今 < 250 ms、錨點之後沒有 `pause`／`seeking`／`waiting`／`ratechange`／換來源」時，畫面時間 = `m + (performance.now() − p) / 1000 × playbackRate`；否則用 `currentTime`。上述事件發生時立即作廢錨點（`expectedDisplayTime` 是預估值，作廢規則避免在暫停或卡住時繼續外插）。
 
-**房主廣播** `state { session, config, epoch, playing, mediaTime, hostClock, rate }`：
+**房主 `state { config, epoch, playing, mediaTime, hostClock, rate }`**：`playing` = 沒暫停、不在 `seeking`、`readyState ≥ 3`；`mediaTime` = 房主畫面時間；`hostClock` = 讀取當下的房主時鐘。`play`、`pause`、`playing`、`waiting`、`seeking`（送 `playing: false`）、`seeked`、`ratechange` 時送，另每秒一次。
 
-- `playing` = 房主 `<video>` 沒有暫停、不在 `seeking`、`readyState ≥ 3`；`rate` = `playbackRate`。
-- `mediaTime` 為房主畫面時間；`hostClock` 為讀取 `mediaTime` 當下的房主時鐘。
-- 觸發：`play`、`pause`、`playing`、`waiting`、`seeking`（此時 `playing: false`）、`seeked`、`ratechange`，另每秒一次。
-
-**應在時間** = `playing ? mediaTime + (房主時鐘現在 − hostClock) / 1000 × rate : mediaTime`。
+**應在時間** `E = playing ? mediaTime + (本機時鐘 + offset − hostClock) / 1000 × rate : mediaTime`。
 
 ## §2 收看端播放狀態機
 
-每 100 ms，以及收到 `state`、`seeked`、`updateend`、計時器到期時評估一次。`drift = 收看端畫面時間 − 應在時間`（秒，正值＝超前）。依下列**優先順序**取第一個成立的狀態：
+**評估時機**：每 100 ms，以及收到 `state`、`seeked`、`updateend`、計時器到期時。`drift = 收看端畫面時間 − E`（秒，正值＝超前），`R` = 房主 `rate`。
+
+**意圖改變**才讓進行中的工作（hold 計時器、自發跳轉）失效：`config`／`epoch` 改變、`playing` 由真變假或由假變真、`R` 改變。每秒的例行 `state` 內容沒變，不作廢任何工作。每項工作帶一個「意圖代號」；回呼時代號已失效就什麼都不做，否則重新評估，不直接 `play()`。
+
+依**優先順序**取第一個成立的狀態：
 
 | 優先 | 狀態 | 條件 | 動作 |
 | --- | --- | --- | --- |
-| 1 | `stale` | 訊息的 `session`／`config` 不是目前的 | 丟棄 |
-| 2 | `hostPaused` | `state.playing = false` | 暫停；若 \|drift\| > 50 ms 且目標已緩衝則跳到應在時間；取消 hold |
-| 3 | `waitData` | 應在時間位置的影音緩衝（取兩者較小）< 0.5 秒 | 不播放，回報 `buffering`；不改速率 |
-| 4 | `seeking` | 收看端自己發起的跳轉尚未 `seeked` | 等待 |
-| 5 | `seek` | 落後 ≥ 300 ms，或超前 ≥ 3 秒；且**目標到目標＋0.5 秒的影音都已緩衝**；距上次跳轉 ≥ 1 秒 | 跳到 `應在時間 + seekLead`；`seekLead` = 上次 `seeking→seeked` 耗時 + 50 ms，夾在 0～1 秒 |
-| 6 | `hold` | 80 ms ≤ 超前 < 3 秒 | 暫停並排一個 `drift` 秒的計時器 |
-| 7 | `rate` | 其他 | `playbackRate = rate × (1 − sign(drift) × min(0.05, 0.5 × \|drift\|))`；\|drift\| ≤ 15 ms 時 `= rate` |
+| 1 | `notReady` | 本 `(config, epoch)` 尚未收到入口資料，或沒有有效對時 | 暫停，回報 `buffering` |
+| 2 | `hostPaused` | `playing = false` | 暫停；`\|drift\| > 50 ms` 且 E 已緩衝時跳到 E；不排 hold |
+| 3 | `seeking` | 自發跳轉尚未 `seeked`，且未逾 5 秒 | 等待。逾 5 秒：取消，記一次失敗；連續 2 次失敗回報 `stuck`，房主重新定位（§3） |
+| 4 | `waitData` | E 位置的影音緩衝（取小）< `min(0.5, 剩餘片長)` 秒 | 暫停，回報 `buffering` |
+| 5 | `seek` | 落後 ≥ 300 ms 或超前 ≥ 3 秒；距上次跳轉 ≥ 1 秒 | 目標 `S = E + seekLead × R`；**S 到 S + min(0.5, 剩餘片長) 的影音都已緩衝**才跳，否則留在 `waitData`。`seekLead` = 上次 `seeking→seeked` 耗時 + 50 ms，夾在 0～1 秒 |
+| 6 | `hold` | 80 ms ≤ 超前 < 3 秒 | 暫停，排 `drift / R` 秒的計時器 |
+| 7 | `play` | 其他 | 若暫停中就 `play()`（這是從 `hold`、`waitData`、`hostPaused` 恢復的唯一路徑）；`playbackRate = R × (1 − sign(drift) × min(0.05, 0.5 × \|drift\|))`，`\|drift\| ≤ 15 ms` 時 `= R` |
 
-- 每個 hold 計時器與自發的跳轉都帶一個「代號」（遞增整數）。任何 `state`、`epoch`、`config` 改變都讓舊代號失效；計時器到期或 `seeked` 時，若代號已失效就什麼都不做，否則**重新評估**狀態機，不直接 `play()`。
-- `play()` 被自動播放政策拒絕時，回到「點擊開始觀看」，不重試。
-- 這張表取代原型最早的「±5% 調速」：原型只調速時跳轉後最多 15 秒才收斂（附錄 A §1）。
+- `play()` 被自動播放政策拒絕：回到「點擊開始觀看」，不重試。
+- 原型只做了這張表的一部分（沒有可取消的工作與逾時），附錄 A 的 1～6 秒是原型的結果。
 
 **等所有人**（房主選項，T-143 之後）：
 
 - 參與者：已按「開始觀看」、在線、第一或第二層的收看者。第三層與尚未開始的人不參與。
-- 觸發：任一參與者 `buffering` 超過 2 秒，或房主跳轉。房主暫停全房，直到所有參與者在應在時間位置有 ≥ 1 秒緩衝，或等滿 8 秒。
-- 等待中房主再次跳轉：作廢這次等待，以新 epoch 重新開始。
-- 8 秒逾時後，同一位收看者 60 秒內不能再觸發等待（避免反覆停頓）。
-- 開啟時入口一律選「前一個」（§3），因為房主暫停時到不了下一個入口。
+- 觸發：參與者 `buffering` 超過 2 秒，或房主跳轉。房主記下「暫停原因 = 等人」再暫停。
+- 結束：全部參與者在 E 位置有 `min(1, 剩餘片長)` 秒緩衝，或等滿 8 秒。只有暫停原因仍是「等人」才自動繼續；等待中房主手動暫停或播放、或再次跳轉，都覆蓋這次等待（跳轉則以新 epoch 重新等）。
+- 8 秒逾時後，同一位收看者 60 秒內不能再觸發。
+- 開啟時入口一律選 Kp（§3），因為房主暫停時到不了下一個入口。
 
 ## §3 入口選擇與重新定位
 
-符號：`t` 房主目前媒體時間（秒）、`ρ` 房主播放速率（暫停時為 0）、`b` 片源位元率、`r` 這位收看者此刻可用的追趕速率（§5）、`X = 1` 秒（開播前要的緩衝）、`Kp ≤ t` 前一個入口、`Kn > t` 下一個入口。
+符號：`t` 房主目前媒體時間、`ρ` 房主播放速率（暫停時 0）、`b` 片源位元率、`r` 這位收看者此刻的追趕速率（§5）、`X = min(1, 片尾 − t)`、`Kp ≤ t` 前一個入口、`Kn > t` 下一個入口。模型：從入口 K 起送，經過 T 秒已送 `r·T / b` 秒的媒體；開播條件是已送量涵蓋「房主位置之後 X 秒」。
 
-- **從 Kp 開始**：要送 `t − Kp + X` 秒的資料，同時目標以 ρ 前進。所需時間 `Tp = (t − Kp + X) × b / (r − ρ × b)`；`r ≤ ρ × b` 時 `Tp = ∞`。
-- **從 Kn 開始**：房主到達 Kn 需 `d = (Kn − t) / ρ`（ρ = 0 時 `d = ∞`）。期間送出 `r × T / b` 秒資料，需求是 `T × ρ − (Kn − t) + X`。所需時間 `Tn = max(d, (X − (Kn − t)) × b / (r − ρ × b))`；括號內為負時只取 `d`；`r ≤ ρ × b` 且 `X > Kn − t` 時 `Tn = ∞`。
-- 取 `Tp`、`Tn` 較小者。片尾沒有 Kn 時只看 Kp；「等所有人」開啟時只用 Kp。
-- 兩者都是 ∞，或估計 > 10 秒：這位收看者降一層（第一層 → 第二層 → 第三層）。開始傳送後 10 秒仍沒開播也降層。
-- 範例（GPT 審查）：`Kn − t = 0.1`、`r = 1.1 b`、`ρ = 1`、`X = 1` → `Tn = max(0.1, 0.9 / 0.1) = 9` 秒；舊公式誤估為 0.91 秒。
+- **從 Kp**：需要 `r·T/b ≥ (t − Kp) + ρ·T + X`。`r > ρ·b` 時 `Tp = (t − Kp + X) · b / (r − ρ·b)`，否則 `Tp = ∞`。（`ρ = 0` 時為 `(t − Kp + X) · b / r`。）
+- **從 Kn**：房主到達 Kn 需 `d = (Kn − t) / ρ`（`ρ = 0` 時 `d = ∞`、`Tn = ∞`）。
+  1. 若 `r·d/b ≥ X`：到達 Kn 時已有 X 秒，`Tn = d`。
+  2. 否則若 `r > ρ·b`：需要 `r·T/b ≥ ρ·(T − d) + X`，`Tn = (X − ρ·d) · b / (r − ρ·b)`（此值必 ≥ d）。
+  3. 否則 `Tn = ∞`。
+- 取較小者；片尾沒有 Kn 時只看 Kp；「等所有人」開啟時只用 Kp。
+- 兩者皆 ∞ 或 > 10 秒：這位收看者降一層。送出入口後 10 秒仍沒開播也降層。
+- 範例：`Kn − t = 0.1`、`r = 1.1b`、`ρ = 1`、`X = 1` → 情況 2，`Tn = 0.9 / 0.1 = 9` 秒。`Kn − t = 1.5`、`r = 0.5b`、`ρ = 1` → `r·d/b = 0.75 < 1` 且 `r ≤ ρb` → `Tn = ∞`。`r = ρb`、`Kn − t = X` → 情況 1，`Tn = d`。
 
-**重新定位**：收看者回報的畫面時間落後應在時間 3 秒以上且持續 2 秒（例如網路卡住後），房主為這位收看者開新的 epoch（只對他），照上面重選入口，收看端清緩衝後重新接上。
+**重新定位**：收看端回報 `stuck`，或回報的畫面時間落後 E 超過 3 秒且持續 2 秒，房主只對這位收看者開新 epoch，照上面重選入口（附錄 B §4 `position` 握手）。
 
 ## §4 雙邊背壓
 
-**房主端（每位收看者）**送下一塊之前，下列條件全部成立：
+收看端 `status` 回報三個**累計值**（在同一 `(config, epoch, dataId)` 內單調遞增）：`receivedBytes`（已收到的資料塊位元組，含組裝中）、`appendedBytes`（已成功附加進 SourceBuffer）、以及 `aheadBytes`、`aheadSeconds`（SourceBuffer 中 E 之後的量）與各 SourceBuffer 的 `buffered`（最多 4 段）。房主檢查：`receivedBytes ≥ appendedBytes`、兩者都 ≤ 本輪已送量；違反即協定錯誤（附錄 B §7）。
 
-1. 配速：`l.vt`（虛擬送出時間）不超前現在 15 ms 以上；每塊送出後 `vt += bytes × 8 / rate`，`vt` 最多落後現在 50 ms（限制瞬間爆量）。
+**房主送下一塊之前**，下列全部成立：
+
+1. **配速**：`vt`（毫秒）不超前 `performance.now()` 15 ms 以上；每塊送出後 `vt += bytes × 8 / rate × 1000`；`vt` 最多落後現在 50 ms。
 2. `bufferedAmount ≤ 1 MiB`（否則等 `bufferedamountlow`，門檻 256 KiB）。
-3. **在途位元組** = 已送出 − 收看端回報已附加 ≤ 8 MiB。
-4. **超前位元組** = 收看端回報的 SourceBuffer 中「應在時間之後」的位元組 + 在途位元組 ≤ `LEAD_BYTES`（80 MiB）；**超前秒數**：下一塊的開始時間 ≤ `min(房主應在時間, 收看端畫面時間 + 3 秒) + LEAD_S`，`LEAD_S = min(20, LEAD_BYTES × 8 / b)`。後者確保收看端卡住時不會繼續往前灌。
-5. 收看端沒有回報 `streaming { on: false }`（ManagedMediaSource 的 `endstreaming`）。恢復 `startstreaming` 時，依收看端回報的實際緩衝範圍決定從哪裡續送；範圍已被回收就重新定位（§3）。
+3. **網路在途** = 已送 − `receivedBytes` ≤ 8 MiB。
+4. **收看端待處理** = `receivedBytes` − `appendedBytes` ≤ 16 MiB。
+5. **超前**：`aheadBytes` + 在途 + 待處理 ≤ `LEAD_BYTES`；下一塊的開始時間 ≤ `L + LEAD_S`，其中
+   - 收看端在本 epoch **尚未開播**：`L = max(入口時間, E)`（中途加入、跳轉後的第一批資料以入口為準，不會被收看端舊位置卡住）；
+   - 已開播：`L = min(E, 收看端畫面時間 + 3)`（收看端卡住時不會繼續往前灌）。
+   - `LEAD_S = min(20, LEAD_BYTES × 8 / b)`，`LEAD_BYTES` 預設 80 MiB（40 Mbps 時約 16.8 秒）。
+6. 收看端沒有回報 `streaming { on: false }`。
+
+**片段大小**：影像片段 ≤ `min(2 秒, 4 MiB)`（續接片段可在任何 sample 邊界切開）；單一 sample 超過 4 MiB 時，該 sample 自成一段、上限 16 MiB，只在在途為 0 時送。所以條件 3、4 不會卡住合法片段。
 
 **收看端**：
 
-- 收到的片段先進待附加佇列；佇列總量 > 16 MiB 時回報 `buffering` 並暫停讀取以外的處理（房主會因第 3 條自然停下）。
-- 每 250 ms 回報 `status { appendedBytes, aheadBytes, aheadSeconds, presentedTime, state }`（欄位見附錄 B §4）。
-- 清已播緩衝：基準 `min(currentTime, 應在時間) − 10 秒` 之前的範圍。原型只用 `currentTime` 時，往回跳後把剛收到的資料清掉了。
-- `QuotaExceededError`：(1) 清掉基準 − 1 秒以前的資料後重試；(2) 連續 3 次仍失敗，回報 `quota`，房主把這位收看者的 `LEAD_BYTES` 減半（下限 16 MiB）；(3) 已到下限仍失敗，或沒有可清的歷史資料 → 重新定位（§3），再失敗就降層。
+- 組裝中、待附加、尚未宣告的暫存（附錄 B §2）**共用 16 MiB 硬上限**；超過就是協定錯誤（房主不應送出超過條件 4 的量）。
+- 每 250 ms 回報 `status`；`pt-ctl` 的 `bufferedAmount` > 16 KiB 時不送新的，只保留最新一份，等降下來再送（可替換的狀態合併成一則）。
+- 清已播緩衝：`min(currentTime, E) − 10 秒` 之前的範圍。
+- `QuotaExceededError`：(1) 清掉 `min(currentTime, E) − 1 秒` 之前的資料，等 `updateend` 後重試一次；(2) 仍失敗就回報 `quota`，停止附加、等房主處理；同一 epoch 最多 3 次。
+- 房主收到 `quota`：把這位收看者的 `LEAD_BYTES` 減半（下限 16 MiB），等下一份 `status` 顯示 `appendedBytes` 有前進再繼續送；3 次後或已到下限，重新定位（§3）；重新定位後的 epoch 再遇到 3 次就降層。
+- ManagedMediaSource：`endstreaming` 時回報 `streaming { on: false }`，房主停送；`startstreaming` 時回報 `on: true` 與實際 `buffered`，房主從 E 之後的緩衝末端續送；E 不在緩衝內就重新定位。
 
-**跳轉時已排入 SCTP 的舊資料**：最多 1 MiB（第 2 條），排空時間 ≤ 1 MiB ÷ 速率；新 epoch 開始 2 秒內 `bufferedAmount` 沒有降到 256 KiB 以下，就關閉 `pt-data`、開一條新的（附錄 B §1），收看端丟棄舊頻道的資料。
+**跳轉時已排入 SCTP 的舊資料**：應用層配速不能保證 SCTP 何時排空。新 epoch 開始後 2 秒內 `bufferedAmount` 沒降到 256 KiB 以下，房主開一條新的 `pt-data`，以 `position { dataId }` 交接（附錄 B §1），舊頻道關閉。
 
-**停滯偵測**：`bufferedAmount > 0` 且 3 秒沒有下降，或收看端回報的 `appendedBytes` 3 秒沒有增加而房主有資料要送，判定停滯：把這位收看者的速率降為一半並記一次「卡住」（D8 降層依據）。
+**停滯偵測**：`bufferedAmount > 0` 且 3 秒沒有下降，或房主有資料待送而收看端 `receivedBytes` 3 秒沒前進：這位收看者的速率減半並記一次「卡住」（降層依據）。
 
 ## §5 房間預算分配
 
-- `預算 B = 房主選的上傳頻寬 × 0.7`。
-- 每位收看者的**穩態預留**（含約 10% 協定開銷）：
-  - 第一層：`1.1 × b`；
-  - 第二層：`1.1 × 轉碼位元率`（每位第二層收看者各一份，轉碼只做一次但上傳是每人一份）；
-  - 第三層：`現行 P2P 的 maxBitrate + 128 kbps 音訊`。
-- **分配順序**（收看者加入、離開、換片、改畫質時重算）：
-  1. 依加入順序，能播原片的收看者先放第一層，直到第一層與其他已決定的預留總和超過 `0.8 B`；
-  2. 剩下的收看者放第二層（第二層可用時），直到超過 `0.8 B`；
-  3. 其餘放第三層。第三層的總量照現行 P2P 規則（超過提醒線時提示，不強制）。
-- **追趕速率**：`餘額 = B − 所有穩態預留`。正在追趕（加入、跳轉、重新定位後超前 < 5 秒）的收看者平分餘額，每人的速率 `r = min(穩態預留 + 餘額份額, 6 × b)`；平常的速率 `= min(1.5 × b, 穩態預留 + 餘額份額)`。`MIN_PACE`（8 Mbps）只在預算容許時套用。
-- 範例：上傳 110 Mbps → `B = 77`。4K 40 Mbps 片、3 位收看者：第一位第一層（預留 44）；第二位再放第一層會到 88 > 61.6，改第二層 1080P 8 Mbps（預留 8.8，合計 52.8）；第三位第二層（合計 61.6）。追趕餘額 15.4 Mbps。
-- 收看端的第三層媒體只在第三層時送：第一、二層的收看者，房主對他的 video／audio sender `replaceTrack(null)`；改到第三層時 `replaceTrack(當下的 track)`，不重新協商。
+- `預算 B = 房主選的上傳頻寬 × 0.7`，涵蓋**全部上傳**：DataChannel 與第三層的 RTP。
+- 每位收看者的穩態預留（含 10% 協定開銷）：
+  - 第一層：`1.1 × b`（b 是檔案平均位元率，已含音軌）；
+  - 第二層：`1.1 × (轉碼影像位元率 + 原音軌位元率)`；
+  - 第三層：`1.1 × (現行 P2P 的 maxBitrate + 128 kbps)`。
+- **分配**（加入、離開、換片、改畫質時重算）：依加入順序，每位收看者的候選層 = `max(能力允許的最高層, 降層紀錄)`（降層紀錄在「重試原片」前不會被重算覆蓋）。依序放進候選層，若總預留超過 `0.8 B` 就改放下一層；第二層不可用（T-144 前）就直接第三層。第三層一定放得下名額，但總預留可能超過 B。
+- **追趕餘額** `A = max(0, B − 總預留)`。正在追趕（尚未開播，或超前 < 5 秒）的收看者平分 A：`r = min(穩態預留 + A 份額, 6 × b)`；其他人 `rate = min(1.5 × b, 穩態預留 + A 份額)`。`A = 0` 時追趕速率就是穩態預留，§3 的估計可能為 ∞，該收看者會降層。`MIN_PACE`（8 Mbps）只在不超過 `穩態預留 + A 份額` 時套用。
+- 第三層的總量照現行 P2P 規則（超過提醒線時提示，不強制）；第三層的 WebRTC 頻寬估計自行調整，不由這裡配速。
+- 範例：上傳 110 → `B = 77`、`0.8 B = 61.6`。4K 40 Mbps（含音軌）× 3 人，第二層 1080P 8 Mbps＋原音軌 0.19 Mbps：
+  - 第一位第一層 `1.1 × 40 = 44`；
+  - 第二位放第一層會到 88 > 61.6 → 第二層 `1.1 × 8.19 ≈ 9.0`，合計 53.0；
+  - 第三位放第二層會到 62.0 > 61.6 → 第三層 `1.1 × 8.128 ≈ 8.9`，合計 61.9；
+  - `A = 77 − 61.9 = 15.1`。若再加 5 位第三層，總預留 `61.9 + 5 × 8.9 = 106.6 > 77`，`A = 0`。
+- **停送 RTP**：第一、二層的收看者，房主 transport 對該 peer 設「媒體暫停」旗標並 `replaceTrack(null)`；**所有**會更新 track 的路徑（換片、播完重播的 `addtrack`、`setQuality`、重新協商）都要先看這個旗標（現行 `transport/p2p/host-peer.ts` 的 track 更新需配合，T-141 契約）。改回第三層時清旗標並 `replaceTrack(當下的 track)`，不重新協商。
 
 ## §6 常數
 
@@ -106,13 +118,15 @@
 | 追趕週期 | 100 ms |
 | 不調整／暫停等待／落後跳轉／超前跳轉 | 15 ms／80 ms／300 ms／3 s |
 | 速率調整上限、增益 | ±5%、0.5 |
-| 跳轉間隔、跳轉提前量上限 | 1 s、1 s |
-| `X`（開播前緩衝）、入口估計上限、開播期限 | 1 s、10 s、10 s |
-| 重新定位 | 落後 > 3 s 持續 2 s |
-| `bufferedAmount` 高／低水位 | 1 MiB／256 KiB |
-| 在途上限、收看端待附加上限 | 8 MiB／16 MiB |
+| 跳轉間隔、跳轉提前量上限、跳轉逾時 | 1 s、1 s、5 s |
+| `X`、開播所需緩衝 | `min(1 s, 剩餘片長)`、`min(0.5 s, 剩餘片長)` |
+| 入口估計上限、開播期限 | 10 s、10 s |
+| 重新定位 | `stuck`，或落後 > 3 s 持續 2 s |
+| `bufferedAmount` 高／低水位、`pt-ctl` 上限 | 1 MiB／256 KiB、16 KiB |
+| 網路在途、收看端待處理（硬上限） | 8 MiB、16 MiB |
+| 片段上限 | `min(2 s, 4 MiB)`；單一大 sample 16 MiB |
 | `LEAD_BYTES`、`LEAD_S` | 80 MiB（quota 後減半，下限 16 MiB）、`min(20, LEAD_BYTES × 8 / b)` |
 | 已播保留 | 10 s |
-| 配速倍數（平常／追趕）、追趕門檻 | 1.5／6、超前 < 5 s |
-| 停滯判定 | 3 s |
+| 配速倍數（平常／追趕）、追趕門檻 | 1.5／6、尚未開播或超前 < 5 s |
+| 停滯判定、舊資料排空期限 | 3 s、2 s |
 | 等所有人：觸發、上限、冷卻 | 緩衝 > 2 s、8 s、60 s |
