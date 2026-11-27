@@ -6,7 +6,8 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const webDirectory = fileURLToPath(new URL("../apps/web", import.meta.url));
 const env = loadEnv("development", webDirectory, "WEB_PORT");
 const baseURL = `http://localhost:${env.WEB_PORT ?? 5173}`;
-const chromeSpecs = /(source|layout|p2p-[\w-]+|relay-[\w-]+)\.spec\.ts$/;
+const chromeSpecs =
+  /(source(?:-[\w-]+)?|layout|p2p-[\w-]+|relay-[\w-]+)\.spec\.ts$/;
 
 export default defineConfig({
   testDir: ".",

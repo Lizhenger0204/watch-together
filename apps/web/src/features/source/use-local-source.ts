@@ -8,6 +8,13 @@ import {
   sourceFailure,
 } from "./browser-source";
 import {
+  buildZeroCopyHevcProfileFix,
+  inspectHevcProfile,
+  toHevcProfileDiagnostic,
+  type HevcContainerInspection,
+  type InitialTrialFailure,
+} from "./hevc-header";
+import {
   classifyCapturedTracks,
   SourceCheckError,
   type SourceCheckCode,
@@ -28,12 +35,14 @@ type SourceCheck =
       code: "OK" | "NO_AUDIO";
       frameFormat: string | null;
       converted: boolean;
+      headerFixed: boolean;
     }
   | {
       status: "warning";
       code: "NO_AUDIO";
       frameFormat: string | null;
       converted: boolean;
+      headerFixed: boolean;
     }
   | {
       status: "error";
@@ -45,6 +54,17 @@ interface PendingSource {
   stream: MediaStream;
   frameFormat: string | null;
   converted: boolean;
+  headerFixed: boolean;
+}
+
+interface PendingLoad {
+  file: File;
+  sourceBlob: Blob;
+  selectionId: number;
+  headerFixed: boolean;
+  inspection: HevcContainerInspection | null;
+  allowAutoFix: boolean;
+  initialAttempt?: InitialTrialFailure | null;
 }
 
 /** 片源的高度與估計的平均位元率（streaming.md §2「原片位元率」）。 */
@@ -58,9 +78,7 @@ export function useLocalSource(
   const release = useRef<() => void>(undefined);
   const pendingSource = useRef<PendingSource | null>(null);
   const activeStreamRef = useRef<MediaStream | null>(null);
-  const pendingLoadRef = useRef<{ file: File; selectionId: number } | null>(
-    null,
-  );
+  const pendingLoadRef = useRef<PendingLoad | null>(null);
   const selectionIdRef = useRef(0);
   const [videoKey, setVideoKey] = useState(0);
   const [check, setCheck] = useState<SourceCheck>({ status: "idle" });
@@ -94,18 +112,27 @@ export function useLocalSource(
     };
   }, [stream]);
 
-  async function loadFileOnVideo(
-    file: File,
-    video: HTMLVideoElement,
-    selectionId: number,
-  ) {
-    if (selectionId !== selectionIdRef.current) return;
+  function scheduleLoad(load: PendingLoad, video: HTMLVideoElement) {
+    // Chrome 會持續把同一個 <video> 的新片源軌道塞進先前 captureStream() 產生的舊 stream，
+    // 而且停掉舊 stream 的音軌會把同一 <video> 共用的音訊擷取源也一起靜音。
+    // 換檔或重試前若該 <video> 已擷取過，先掛載全新的 <video>（同時對舊 stream 執行 retireCapturedStream）。
+    if (capturedVideoRef.current === video) {
+      pendingLoadRef.current = load;
+      setVideoKey((current) => current + 1);
+      return;
+    }
+    void loadFileOnVideo(load, video);
+  }
+
+  async function loadFileOnVideo(load: PendingLoad, video: HTMLVideoElement) {
+    if (load.selectionId !== selectionIdRef.current) return;
 
     const controller = new AbortController();
     const { signal } = controller;
-    const url = URL.createObjectURL(file);
+    let url: string | undefined;
     let captured: MediaStream | undefined;
     let disposeConverter: (() => void) | undefined;
+    let inspection = load.inspection;
 
     let released = false;
     release.current = () => {
@@ -121,10 +148,17 @@ export function useLocalSource(
       video.loop = false;
       video.removeAttribute("src");
       video.load();
-      URL.revokeObjectURL(url);
+      if (url) URL.revokeObjectURL(url);
     };
 
     try {
+      // 試播前僅以 File.slice() 輕量記錄檔頭資訊，不預先擋下（ADR 0006）。
+      if (inspection === null && load.allowAutoFix) {
+        inspection = await inspectHevcProfile(load.file);
+        signal.throwIfAborted();
+      }
+
+      url = URL.createObjectURL(load.sourceBlob);
       await loadMetadata(video, url, signal);
       signal.throwIfAborted();
       if (video.videoWidth <= 0 || video.videoHeight <= 0) {
@@ -132,7 +166,7 @@ export function useLocalSource(
       }
       setInfo({
         height: video.videoHeight,
-        bitrate: estimateSourceBitrate(file.size, video.duration),
+        bitrate: estimateSourceBitrate(load.file.size, video.duration),
       });
       const capturedStream = captureVideo(video);
       captured = capturedStream;
@@ -250,26 +284,130 @@ export function useLocalSource(
           stream: outputStream,
           frameFormat,
           converted,
+          headerFixed: load.headerFixed,
         };
-        setCheck({ status: "warning", code, frameFormat, converted });
+        setCheck({
+          status: "warning",
+          code,
+          frameFormat,
+          converted,
+          headerFixed: load.headerFixed,
+        });
         return;
       }
 
       activeStreamRef.current = outputStream;
       setStream(outputStream);
-      setCheck({ status: "ready", code, frameFormat, converted });
+      setCheck({
+        status: "ready",
+        code,
+        frameFormat,
+        converted,
+        headerFixed: load.headerFixed,
+      });
     } catch (error) {
-      if (signal.aborted) return;
+      if (signal.aborted || load.selectionId !== selectionIdRef.current) return;
+      const rawCode =
+        error instanceof SourceCheckError ? error.code : "VIDEO_UNDECODABLE";
+      const baseDiagnostic =
+        error instanceof SourceCheckError ? error.diagnostic : undefined;
+
       release.current?.();
       release.current = undefined;
       setInfo(null);
-      const code =
-        error instanceof SourceCheckError ? error.code : "VIDEO_UNDECODABLE";
+
+      const isDecodeFailure =
+        rawCode === "VIDEO_UNDECODABLE" || rawCode === "PLAYBACK_FAILED";
+
+      // 原生試播失敗且偵測為 Main 10／8-bit 標頭矛盾：先嘗試零複製 Blob 修補重試一次。
+      if (
+        load.allowAutoFix &&
+        isDecodeFailure &&
+        inspection?.info.mismatchMain10On8Bit
+      ) {
+        const initialAttempt: InitialTrialFailure | null = baseDiagnostic
+          ? {
+              stage: baseDiagnostic.stage,
+              mediaError: baseDiagnostic.mediaError,
+              failure: baseDiagnostic.failure,
+              decodedFrames: baseDiagnostic.decodedFrames,
+              currentTime: baseDiagnostic.currentTime,
+            }
+          : null;
+        const fix = await buildZeroCopyHevcProfileFix(load.file, inspection);
+        if (load.selectionId !== selectionIdRef.current) return;
+        if (fix.ok) {
+          scheduleLoad(
+            {
+              file: load.file,
+              sourceBlob: fix.blob,
+              selectionId: load.selectionId,
+              headerFixed: true,
+              inspection,
+              allowAutoFix: false,
+              initialAttempt,
+            },
+            video,
+          );
+          return;
+        }
+        const hevcProfile = toHevcProfileDiagnostic(
+          inspection,
+          "skipped",
+          fix.reason,
+        );
+        setCheck({
+          status: "error",
+          code: "HEVC_PROFILE_MISMATCH",
+          diagnostic: baseDiagnostic
+            ? { ...baseDiagnostic, hevcProfile }
+            : undefined,
+        });
+        return;
+      }
+
+      // 零複製修補後重試：僅解碼失敗才歸類為 HEVC_PROFILE_MISMATCH 並保留兩次試播診斷；
+      // 擷取失敗或逾時等非解碼錯誤保留原錯誤碼，不誤導為 HEVC 標頭矛盾。
+      if (load.headerFixed && inspection?.info.mismatchMain10On8Bit) {
+        if (isDecodeFailure) {
+          const hevcProfile = toHevcProfileDiagnostic(
+            inspection,
+            "retry-failed",
+            null,
+            load.initialAttempt ?? null,
+          );
+          setCheck({
+            status: "error",
+            code: "HEVC_PROFILE_MISMATCH",
+            diagnostic: baseDiagnostic
+              ? { ...baseDiagnostic, hevcProfile }
+              : undefined,
+          });
+          return;
+        }
+        const hevcProfile = toHevcProfileDiagnostic(
+          inspection,
+          "applied",
+          null,
+          load.initialAttempt ?? null,
+        );
+        setCheck({
+          status: "error",
+          code: rawCode,
+          diagnostic: baseDiagnostic
+            ? { ...baseDiagnostic, hevcProfile }
+            : undefined,
+        });
+        return;
+      }
+
+      const hevcProfile = toHevcProfileDiagnostic(inspection, "none", null);
       setCheck({
         status: "error",
-        code,
-        diagnostic:
-          error instanceof SourceCheckError ? error.diagnostic : undefined,
+        code: rawCode,
+        diagnostic: baseDiagnostic
+          ? { ...baseDiagnostic, hevcProfile }
+          : undefined,
       });
     }
   }
@@ -281,7 +419,7 @@ export function useLocalSource(
       return;
     }
     pendingLoadRef.current = null;
-    void loadFileOnVideo(pending.file, video, pending.selectionId);
+    void loadFileOnVideo(pending, video);
   });
 
   useEffect(() => {
@@ -302,16 +440,17 @@ export function useLocalSource(
     setTitle(file.name.replace(/\.[^.]+$/, "") || file.name);
     setCheck({ status: "checking" });
 
-    // Chrome 會持續把同一個 <video> 的新片源軌道塞進先前 captureStream() 產生的舊 stream，
-    // 而且停掉舊 stream 的音軌會把同一 <video> 共用的音訊擷取源也一起靜音。
-    // 換檔時為新片源掛載全新的 <video>（同時對舊 stream 執行 retireCapturedStream）。
-    if (capturedVideoRef.current === video) {
-      pendingLoadRef.current = { file, selectionId };
-      setVideoKey((current) => current + 1);
-      return;
-    }
-
-    await loadFileOnVideo(file, video, selectionId);
+    scheduleLoad(
+      {
+        file,
+        sourceBlob: file,
+        selectionId,
+        headerFixed: false,
+        inspection: null,
+        allowAutoFix: true,
+      },
+      video,
+    );
   }
 
   function continueWithoutAudio() {
@@ -325,6 +464,7 @@ export function useLocalSource(
       code: "NO_AUDIO",
       frameFormat: pending.frameFormat,
       converted: pending.converted,
+      headerFixed: pending.headerFixed,
     });
   }
 

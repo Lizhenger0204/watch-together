@@ -1,8 +1,11 @@
+import type { HevcProfileDiagnostic } from "./hevc-header";
+
 export const SOURCE_ACCEPT = "video/mp4,video/quicktime,.mp4,.m4v,.mov,.mkv";
 
 export type SourceCheckCode =
   | "TIMEOUT"
   | "VIDEO_UNDECODABLE"
+  | "HEVC_PROFILE_MISMATCH"
   | "NO_AUDIO"
   | "CAPTURE_UNSUPPORTED"
   | "CAPTURE_FAILED"
@@ -23,6 +26,7 @@ export interface SourceDiagnostic {
   audioTracks: number | null;
   frameFormat: string | null;
   converted: boolean;
+  hevcProfile?: HevcProfileDiagnostic | null;
 }
 
 export class SourceCheckError extends Error {

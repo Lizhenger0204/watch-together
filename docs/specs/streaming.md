@@ -106,6 +106,42 @@ Windows、多位收看者、實際送滿 8 Mbps、分頁在背景時的表現列
 - 8-bit 片源沿用既有案例，並斷言 `converted: false`。
 - 單元測試涵蓋格式判斷與畫布尺寸計算（純函式）。
 
+### HEVC 標頭矛盾偵測與零複製自動修正（T-138，ADR 0006）
+
+**問題**：部分壓制或轉檔工具（如 `animejanai` + `hevc_nvenc`）產生的 8-bit HEVC 影片，其容器設定（MP4 `hvcC`／MKV `CodecPrivate`）與 VPS／SPS 的 `profile_tier_level` 誤標為 **Main 10**（`general_profile_idc = 2`），但實際位元深度是 **8-bit**（`bit_depth_luma_minus8 = 0`、`bit_depth_chroma_minus8 = 0`）。Windows D3D11 硬體解碼器會拒絕此矛盾組態（`PIPELINE_ERROR_DECODE: GetVideoDecoderConfigCount failed (0x80070057)`）；macOS VideoToolbox 較寬鬆可直接播，且首幀 `VideoFrame.format` 為 `NV12`。
+
+**與 BUG-004 互不誤判**：不可只依 `general_profile_idc === 2` 判斷是否為 10-bit。真正的 Main 10 片源（`bit_depth = 10`）走既有 BUG-004 流程；標頭矛盾片（`profile_idc = 2` 且實際 8-bit）不得被當成真 10-bit 送去轉 8-bit。
+
+**檔頭偵測（選檔時以 `File.slice()` 只讀檔頭，不載入整支檔案）**：
+
+1. **支援容器**：
+   - MP4／M4V／MOV：走訪頂層 box（支援 64-bit box size 與檔尾 `moov`），讀 `moov/trak/mdia/minf/stbl/stsd` → `hvc1`／`hev1` → `hvcC`。
+   - MKV：解析 EBML `Tracks`（支援 `SeekHead` 指向檔尾的 `Tracks`），找 `CodecID === "V_MPEGH/ISO/HEVC"` 的 `CodecPrivate`，並排除帶有 `ContentEncodings` 壓縮或加密的軌道。
+2. **嚴格安全邊界（全部符合才認定為可修補的標頭矛盾 `mismatchMain10On8Bit`）**：
+   - `HEVCDecoderConfigurationRecord` 的 `general_profile_space === 0`、`general_profile_idc === 2`、`bitDepthLumaMinus8 === 0`、`bitDepthChromaMinus8 === 0`、`chromaFormat === 1`（4:2:0）。
+   - 解析 `hvcC`／`CodecPrivate` 內**全部** SPS（NAL type 33，經 EBSP→RBSP 去除防偽零位元組 `0x00 0x00 0x03`；若容器設定缺少 SPS 則再讀第一個關鍵幀的 in-band SPS），確認全部 SPS 皆為 `general_profile_space === 0`、`general_profile_idc === 2`、`chroma_format_idc === 1`、`bit_depth_luma_minus8 === 0`、`bit_depth_chroma_minus8 === 0`，且無 sub-layer 宣告 Main 10 profile。
+3. **關鍵幀抽查**：檢查第一個關鍵幀開頭（有索引時一併抽查第二個／中段關鍵幀）是否含 in-band VPS（32）／SPS（33）。
+
+**試播、零複製自動修正與降級診斷**：
+
+1. **試播前不擋下**：照既有流程先以原檔進行開播前試播（macOS 等可播平台直接進入 `ready`／`warning`，`converted: false`）。
+2. **失敗時自動零複製修補重試（不重新編碼、不複製整檔）**：
+   - 當原生試播失敗（`VIDEO_UNDECODABLE` 或 `PLAYBACK_FAILED`）且偵測為 `mismatchMain10On8Bit` 時，自動嘗試零複製修補：
+     - 將 `hvcC`／`CodecPrivate` 標頭與其中的 VPS／SPS 的 `general_profile_idc` 由 `2` 改為 `1`（Main）、`general_profile_compatibility_flags` 開啟 Main 相容位（`b1 | 0x40`，常見 `0x20000000 → 0x60000000`）。
+     - 每個改寫後的 VPS／SPS NALU 均須經 **EBSP → RBSP → 改寫 → RBSP → EBSP** 並執行嚴格往返斷言（只改變目標 profile／相容旗標位元組、無非法 `00 00 00/01/02/03`）。
+     - 若改寫後長度不變，直接以 `new Blob([file.slice(0, start), patched, file.slice(end)])` 原地零複製拼接：
+       - **MP4 `hvc1`**：依 ISO/IEC 14496-15 參數集僅存於 `hvcC`，抽查無異常 in-band 時原地修補 `hvcC`；若為 **`hev1`** 或檢出 in-band 參數集，則須為非分段 MP4 且依 `stsz`/`stsc`/`stco`/`co64` 完整走訪並等長修補全部樣本（總樣本數超過安全上限或分段 MP4 則降級）。
+       - **MKV ≤ 4 MB**：無論抽查是否命中，一律完整走訪全部 Cluster（含 RFC 8794 §6.2 未知長度 Cluster 終止）與所有視訊 block，對每份參數集套用相同安全條件並驗證原 EBML `CRC-32` 後同步重算受影響的 `CRC-32`。
+       - **MKV > 4 MB**：因 Matroska 無 `hvc1`/`hev1` 區隔且多 GB 全檔掃描耗時過長（ADR 0006 §4 實測 34 GB 需 75 秒、15 部實片皆為 0 in-band），採多點關鍵幀抽查（首個 Cluster 與 25%/50%/75%/末段 Cues）：若抽查檢出 in-band VPS／SPS 或 lacing 則保守降級；若抽查全數乾淨，則執行僅修補標頭（`CodecPrivate` 與驗證後重算之 `TrackEntry`/`Tracks` `CRC-32`）的盡力零複製修補。
+     - 若 MP4 `hvcC` 改寫後長度變動：僅支援非分段且無須掃描樣本的 `hvc1` MP4，保留各箱原始 8/16-byte 標頭長度重建 `moov`（僅替換選中 `hvcC` 並逐筆更新 `stco`／`co64` offset）再與原檔 `mdat` 零複製拼接；分段 MP4（含 `mvex`/`moof`/`sidx`/`mfra`）一律拒絕變長重建並降級。
+     - 若遇到無法安全原地修補的情況（如分段 MP4 變長、無完整樣本表或樣本數過多的 `hev1` MP4、大於 4 MB 且檢出 in-band 的 MKV、MKV 改寫變長或原 `CRC-32` 已損毀／無法安全更新、任一後段 VPS／SPS 違反嚴格安全條件、EPB 往返斷言失敗），拒絕硬改並記錄拒改原因，直接降級至下方診斷。
+   - 產生修補後的 `Blob` 後，先釋放原試播的 Object URL 並清理舊擷取 stream（沿用既有 `retireCapturedStream()` 與試播／10-bit 轉換流程，不另寫一份），再以修補後的 Object URL 重試一次開播前檢查。換檔或卸載時撤銷所有已建立的 Object URL。
+   - 重試通過時進入 `ready`／`warning`，附加 `headerFixed: true`，於介面擷取資訊旁標註「已自動修正 HEVC 標頭（Main 10 → Main，8-bit）」，且仍由首幀 `VideoFrame.format` 決定 `converted`（8-bit 為 `false`）。
+3. **無法修補或重試仍失敗（`HEVC_PROFILE_MISMATCH`）**：
+   - `SourceCheckCode` 新增 `"HEVC_PROFILE_MISMATCH"`；`SourceDiagnostic` 新增 `hevcProfile`（含宣告的 profile、實際位元深度、是否為標頭矛盾、自動修正狀態與拒改原因）。
+   - 介面明確提示「這支影片的 HEVC 標頭有誤（標成 Main 10／10-bit，實際畫面是 8-bit），瀏覽器硬體解碼器拒絕這種矛盾設定」，不得只顯示「影像無法解碼」。
+   - 提供一鍵複製的 FFmpeg 轉檔指令（NVIDIA GPU `hevc_nvenc` 與 CPU `libx265`，音訊 `-c:a copy`），並於 `docs/guides/deploy.md` 同步記錄。
+
 ## 2. 編碼與畫質（`features/transport/common/`）
 
 ### 畫質（三條分段滑桿，T-126）
