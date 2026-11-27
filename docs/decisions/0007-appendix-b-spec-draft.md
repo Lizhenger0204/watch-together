@@ -118,7 +118,7 @@
 
 **第二層輸出**：`VideoEncoder` 設 `avc: { format: 'avc' }`（length-prefixed，與 MP4 樣本格式相同；原型用的 Annex B 只是為了解析 QP）。`avcC` 與 codec 字串取自輸出 metadata 的 `decoderConfig`；`decoderConfig` 中途改變（例如編碼器重設）就開新 config。
 
-**音訊**：選第一條收看端支援的音軌；AC-3／E-AC-3／DTS／TrueHD 依 ADR 待決 2 處理；全部不支援就只送影像並提示。
+**音訊**：選第一條收看端支援的音軌；AC-3／E-AC-3／DTS／TrueHD 不解碼（ADR D5，使用者 2026-11-27 決定先不做）；全部不支援就只送影像並提示。
 
 ## §6 房主上傳（P2P，Mbps，穩態 1.0～1.5 倍）
 
