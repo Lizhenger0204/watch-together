@@ -27,7 +27,7 @@
 
 **`epoch`**：收看端的定位世代。**定位一律走同一個流程**：收看端開新 epoch（加入、自己跳轉到已附加與已請求範圍之外、quota、ManagedMediaSource 恢復時 E 不在緩衝內，或收到房主的 `reposition`）→ 取消舊 epoch 的全部請求、釋放預留、照 B §4 第 4 步清緩衝與重設 append window → 送 `ready { config, epoch }` → 房主依 C §3 選入口，回 `position { config, epoch, entry, rateHint }` → 收看端從 `entry` 那一段開始要。雙方的入口因此一致；房主從送出 `position` 起算 C §3 的定位期限，並從那一刻開始為這個 epoch 發公告與指派。之後的 `req`、`status` 都帶 epoch，房主丟掉舊 epoch 的請求。**每個 epoch 的位元組計數（`reservedBytes`、`receivedBytes`、`appendedBytes`）歸零**；`reqId` 不歸零（見下）。
 
-**`reqId`**：收看端配發，**在同一條 `RTCPeerConnection`（同一條 `pt-ctl` 或 `sw-ctl`）內跨 epoch、跨資料頻道遞增，不重複**；換 `pt-data` 也不重來，所以控制訊息裡的 `reqId` 不需要再帶 `dataId`。`ready` 送出後 2 秒沒收到對應的 `position` 就**以同一個 `(config, epoch)` 重送**；房主對同一組永遠回同一個 `position`（冪等）。連續 3 次都沒有，收看端送 `fail { config, reason: 'position' }`（`pt-ctl` 不通時由房主那邊的握手逾時判定），房主照 B §7 把他改第三層：清掉「媒體暫停」旗標並 `replaceTrack(當下的 track)`（附錄 C §5）、送 `config { tier: 'live' }`，收看端改用 `srcObject`。**房主端期限**：從送出 `config` 或 `reposition` 起 5 秒內沒收到 `ready`，房主直接照上面改第三層（不必等 `fail`）。**收看端的本機條件**：`pt-ctl` 關閉，或 5 秒沒收到任何 `state`／`pong`（平時每秒一則 `state`、每 2 秒一次 `ping`），收看端自己切回 `srcObject`，等房主恢復的 RTP 軌道。兩邊各自判斷，所以 `pt-ctl` 中途斷掉時第三層也一定有畫面；T-142 驗收「`ready` 沒到房主、`pt-ctl` 已斷」。
+**`reqId`**：收看端配發，**在同一條 `RTCPeerConnection`（同一條 `pt-ctl` 或 `sw-ctl`）內跨 epoch、跨資料頻道遞增，不重複**；換 `pt-data` 也不重來，所以控制訊息裡的 `reqId` 不需要再帶 `dataId`。`ready` 送出後 2 秒沒收到對應的 `position` 就**以同一個 `(config, epoch)` 重送**；房主對同一組永遠回同一個 `position`（冪等）。連續 3 次都沒有，收看端送 `fail { config, reason: 'position' }`（`pt-ctl` 不通時由房主那邊的握手逾時判定），房主照 B §7 把他改第三層：清掉「媒體暫停」旗標並 `replaceTrack(當下的 track)`（附錄 C §5）、送 `config { tier: 'live' }`，收看端改用 `srcObject`。**房主端期限**：從送出 `config` 或 `reposition` 起 5 秒內沒收到 `ready`，房主直接照上面改第三層（不必等 `fail`）。**收看端的本機條件**：`pt-ctl` 關閉，或 5 秒沒收到任何 `state`／`pong`（平時每秒一則 `state`、每 2 秒一次 `ping`），收看端自己切回 `srcObject`，等房主恢復的 RTP 軌道。**播放中**：房主那邊 `pt-ctl` 關閉，或 5 秒沒收到這位收看者的任何 `status`／`ping`（平時每 250 ms 一則 `status`），也照上面恢復 RTP、改第三層。兩邊各自判斷，所以 `pt-ctl` 不論何時斷掉，第三層都一定有畫面；T-142 驗收「`ready` 沒到房主、`pt-ctl` 已斷」與「正常播放中 `pt-ctl` 斷線後重新出現畫面」。
 
 **`seekId`**：房主每次自己跳轉加 1，放在 `state` 裡。收看端用它判斷「房主意圖改變」（C §2），不用來丟資料。
 
@@ -37,7 +37,7 @@
 
 **接收空間預留**（以**請求的小塊位元組**記帳）：送出 `req` 前，收看端預留這次要的小塊大小總和。所有來源合計「已預留＋已收到未附加」≤ 16 MiB。其中**保留區**＝尚未附加的 INIT（每軌）＋**每一軌**本 epoch 最早還沒附加的那一段，大小依公布值計算；保留區的請求永遠可以送，其他請求只能用 `16 MiB − 保留區`。INIT 每軌 ≤ 1 MiB（超過就停用該片源的第一、二層），所以保留區最多 `2 × (1 + 4)` MiB。所以後段收齊等著依序附加時，各軌缺的那一段一定還能補請。每個來源最多 2 個請求在途；急件需要空間時先取消預讀的請求。房主端另檢查：同一收看者向房主在途的請求 ≤ 16 MiB，超過算協定錯誤。
 
-**超前限制**（取代 C §4 條件 6 的房主端判斷，數值不變）：收看端只要「開始時間 ≤ `L + LEAD_S`」的段，而且「SourceBuffer 中 E 之後的位元組＋已預留＋已收到未附加 ≤ `LEAD_BYTES`」。**例外只給「解鎖播放或定位所需的段」**：**狀態機此刻等待的範圍**是——`waitData` 時 `[E, E + 0.5 秒)`；`seek` 等落點時 `[S, S + 0.5 秒)`（C §2 第 6 列的 `S`）；定位中（本 epoch 尚未對齊）時 `[入口, E(T) + X)`（附錄 D §4 的追趕範圍）。每一軌與這個範圍重疊、還沒附加的段，請求不受這兩道超前限制；其他段照常受限制。例外造成的超額最多 `4 MiB + INIT`，超過就不再放行。所以「另一軌已滿、這一軌缺洞」時仍能補，兩軌都完整時預讀會停在上限；T-142 各驗收一次，補洞的案例包含跳轉落點（例如 `E = 100`、`S = 101`，101 秒起的音訊段缺、影像已用滿超前預算）。`L` 照 C §4（本 epoch 開播前 `max(入口, E)`，開播後 `min(E, 畫面時間 + 3)`）。
+**超前限制**（取代 C §4 條件 6 的房主端判斷，數值不變）：收看端只要「開始時間 ≤ `L + LEAD_S`」的段，而且「SourceBuffer 中 E 之後的位元組＋已預留＋已收到未附加 ≤ `LEAD_BYTES`」。**例外只給「解鎖播放或定位所需的段」**：**狀態機此刻等待的範圍**是——`waitData` 時 `[E, E + 0.5 秒)`；`seek` 等落點時 `[S, S + 0.5 秒)`（C §2 第 6 列的 `S`）；定位中（本 epoch 尚未對齊）時 `[entry, until)`（`position` 帶來的範圍，等於附錄 D §4 房主排程算出的 `[入口, E(T) + X)`）。每一軌與這個範圍重疊、還沒附加的段，請求不受這兩道超前限制；其他段照常受限制。例外造成的超額最多 `4 MiB + INIT`，超過就不再放行。所以「另一軌已滿、這一軌缺洞」時仍能補，兩軌都完整時預讀會停在上限；T-142 各驗收一次，補洞的案例包含定位中（`until` 之前）與跳轉落點（例如 `E = 100`、`S = 101`，101 秒起的音訊段缺、影像已用滿超前預算）。`L` 照 C §4（本 epoch 開播前 `max(入口, E)`，開播後 `min(E, 畫面時間 + 3)`）。
 
 **取消與遲到的資料**：`cancel { reqId }`，來源丟掉佇列中的部分。收看端收到的每一則資料，只有「`reqId` 是本 epoch、這條頻道上**仍有效**的請求」才收；其他一律丟棄、不計入、不算違規。只有 `reqId` **大於**這條頻道上發出過的最大值（從沒發出過）才算違規。ICE 恢復後晚到的舊資料因此直接丟掉。來源（包括房主）收到 `cancel` 後在**下一個小塊邊界**停止。
 
@@ -61,7 +61,7 @@
 
 **ManagedMediaSource**：`endstreaming` 時取消所有預讀請求、停止發新請求；`startstreaming` 時若 E 仍在緩衝內，從緩衝末端繼續要，否則開新 epoch、依 C §3 選入口。
 
-**C §3 的 `r`**：配額合計 = 房主直送的配速（`position` 的 `rateHint`）＋各收看者來源的 `edgeRateBps`（同一條邊只算一次）。有請求在途時 `r = min(過去 3 秒實際收到的速率, 配額合計)`；沒有請求在途（緩衝已滿、零流量）時不用量測值，直接用配額合計；剛加入沒有量測時用房主給的 `rateHint`。
+**C §3 的 `r`**：配額合計 = 房主直送的配速＋各收看者來源的 `edgeRateBps`（同一條邊只算一次）。初值來自 `position` 的 `rateHint` 與 `seg.sources`；房主直送的配速或任何一條指向他的邊的配額改變時，房主送 `rate { config, epoch, hostRateBps, edges: [{ from, edgeRateBps }] }` 給這位接收者，收看端用新值重算（T-147 驗收同一 epoch 內改配額後 `r` 跟著變）。有請求在途時 `r = min(過去 3 秒實際收到的速率, 配額合計)`；沒有請求在途（緩衝已滿、零流量）時不用量測值，直接用配額合計；剛加入沒有量測時用房主給的 `rateHint`。
 
 **片段必須可重現**：第一層的封裝器必須是確定的（不寫時間、亂數），T-141 以「同一段封裝兩次位元組相同」驗收。第二層的轉碼不保證可重現：房主保留已公布的轉碼片段 `[E − 30 秒, E + LEAD_S]`；需要重新產生已公布的段（快取已清、編碼器重設、往回跳出保留範圍）時，改開新的 config（新的轉碼世代），收看者在下一個入口段切換。
 
@@ -101,7 +101,8 @@
 | | `nack` | `{ reqId }`：房主當來源時拒絕請求（例如 config 已換） |
 | | `reposition` | `{ config }`：請收看端開新 epoch（`stuck` 或房主重選入口） |
 | | `revoke` | `{ grantId }` |
-| | `position` | `{ config, epoch, entry, rateHint }`：回應 `ready` |
+| | `position` | `{ config, epoch, entry, until, rateHint }`：回應 `ready`；`until` 是追趕範圍的終點 |
+| | `rate` | `{ config, epoch, hostRateBps, edges: [{ from, edgeRateBps }] }`：給接收端的配額更新 |
 | | `state` | B §4 的欄位，以 `seekId` 取代 `epoch` |
 | | `dataSwitch` | `{ dataId }` |
 | | `drop` | `{ peer }`：不要再向他拿 |
