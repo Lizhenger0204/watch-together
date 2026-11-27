@@ -36,7 +36,7 @@
 
 - 收看端只接受目前 `dataId` 頻道上、`(config, epoch)` 等於目前已 `ready` 那一組的塊（init 也一樣）；其他一律丟棄，也不計入累計值。**房主只在收到對應的 `ready` 之後才送資料**（§4），所以正常情況不會有資料先於宣告到達。
 - 同一片段的塊必須連續、`index` 依序、`count` 不變；`index = count − 1` 即完成。片段未完成就換了 `(kind, track, seq)` → 丟棄未完成部分（房主跳轉時會中途放棄）。
-- 片段上限（封裝後，含 `moof`／`mdat`）：一般 `min(4 MiB, 256 × (每則大小 − 16))`。單一 sample 超過時自成一段，封裝後仍須 ≤ `256 × (每則大小 − 16)`（每則 64 KiB 時約 16 MiB − 4 KiB；`maxMessageSize` 較小時跟著變小）；放不下就停用該片源的第一、二層。
+- 片段上限（封裝後，含 `moof`／`mdat`）：**所有片段**都 ≤ `min(4 MiB, 256 × (每則大小 − 16))`，沒有例外；影像片段另限 2 秒。單一 sample 封裝後超過這個值就停用該片源的第一、二層（4K 的單張 I 幀通常遠小於 4 MiB）。
 - 收看端的組裝中與待附加資料共用 16 MiB 硬上限。標頭不合法、`count` 超限、`index` 跳號、超過硬上限 → 協定錯誤（§7）。
 
 ## §3 輸出時間軸
@@ -45,15 +45,15 @@
 
 - **MP4／MOV**：從 `stts`／`ctts` 取每個 sample 的來源 DTS、CTS 與 duration。只支援下列 edit list，其他（多段、`media_rate ≠ 1`、中間空白段）該片源停用第一、二層：
   - 沒有 edit list：`偏移 M = 0`；
-  - 一段 media edit（`media_time = M`、長度 `U`），前面可有一段起始空白（長 `E`）：`輸出 PTS = CTS − M + E`、`輸出 DTS = DTS − M + E`。**第一版只接受「只平移、不裁掉影像畫面」的 edit**：影像的 edit 起點必須落在第一個入口上（起點之前只能有該入口的前導畫面）、終點不早於最後一個 sample 的呈現結束減一格；否則（會裁掉中間或尾端的影像，可能刪掉範圍內畫面的解碼參照）停用該片源的第一、二層。音訊每個 sample 獨立，可依 edit 裁頭尾（見下方 priming）。
+  - 一段 media edit（`media_time = M`、長度 `U`），前面可有一段起始空白（長 `E`）：`輸出 PTS = CTS − M + E`、`輸出 DTS = DTS − M + E`。**第一版只接受「只平移、不裁掉影像畫面」的 edit**：以容器 timescale 精確比較（不留容差），影像 edit 的起點必須等於第一個入口的 PTS（起點之前只能有該入口的前導畫面，而前導畫面的入口本來就不用），且 edit 涵蓋**所有**影像 sample 的完整呈現區間 `[PTS, PTS + duration)`；否則停用該片源的第一、二層。例如每格 40 ms、解碼順序 `I(0) → P(80) → B(40)`、edit 終點 80 ms：P 會被裁掉，而 B 參照 P，必須降層。影像 SourceBuffer 的 `appendWindowEnd` 不設（`Infinity`）。音訊每個 sample 獨立，可依 edit 裁頭尾（見下方 priming）。
   - 影像與音訊各自依自己的 edit 計算。mediabunny 的 `packet.timestamp` 應等於輸出 PTS，T-141 以單元測試核對兩者，不一致時以本節為準。
 - **MKV**：容器只有 PTS（區塊時間），視為輸出 PTS。DTS 推導：依解碼順序第 i 個 sample 的 `DTS_i = 全軌 PTS 由小到大排序後的第 i 個值 − D`。重排深度上限 16，所以只需往後看 16 個 sample；`D` = 使前 5 個 GOP 都滿足 `DTS ≤ PTS` 的最小值，之後固定。可接受條件（每個片段都檢查）：沒有重複 PTS（否則會出現零長度 sample）、`DTS_i ≤ PTS_i`、`DTS_i + duration_i = DTS_{i+1}`（誤差 ≤ 1 ms，含跨片段的最後一個與下一段第一個）、重排深度 ≤ 16。不符合就停用該片源的第一、二層。
 - **封裝時間與位移**：`O = max(0, −全片最小輸出 DTS)`，取 timescale 的整數。**封裝時間 = 輸出時間 + O**，寫進 `tfdt`（解碼時間）；`trun` 的 composition offset = `PTS − DTS`（O 互相抵銷）。收看端每個 SourceBuffer 設 `timestampOffset = −O`；`appendWindowStart`／`appendWindowEnd` 一律以**輸出時間**表示（不含 O）。
 - **音訊 priming**：輸出 PTS < 0 的音訊 sample（AAC priming）由 `appendWindowStart = 0` 去掉；跨過 0 的 sample 由瀏覽器裁切（Chrome 會做部分裁切；Safari 未驗證，列入 T-113）。這與房主 `<video>` 的行為一致。
-- **入口**：H.264 只用 IDR（open GOP 的非 IDR I 幀不當入口）；HEVC 用 IDR、BLA，以及**後面沒有前導畫面的 CRA**。帶前導畫面（RASL／RADL）的 CRA 第一版不當入口：移除前導畫面會讓同一段的 DTS 出現空隙（例如 CRA 在 0 ms、移除 40／80 ms 兩個前導後下一格是 120 ms），超過 MSE 的兩格門檻時後續畫面會被丟掉。片源在 10 秒內找不到可用入口就停用第一、二層。T-141 可研究「移除前導後把空隙併入 CRA 的 sample duration」等做法，用含兩個以上前導畫面的 CRA 跨片段驗收後再放寬。
-- **不用 `appendWindowStart` 裁影像**：MSE 丟棄視窗外的畫面時會設「需要隨機進入點」，連後面有效的畫面也一起丟掉（[MSE coded frame processing](https://w3c.github.io/media-source/#sourcebuffer-coded-frame-processing)）。所以入口一律選沒有前導畫面的（上一條），影像 SourceBuffer 的 `appendWindowStart` 一律為 0、`appendWindowEnd` 為片尾。
+- **入口**：H.264 只用 IDR（open GOP 的非 IDR I 幀不當入口）。HEVC 的 IDR、BLA、CRA **一律要求後面沒有前導畫面**：依解碼順序在入口之後、PTS 早於入口的 sample 不存在（`IDR_N_LP`、`BLA_N_LP` 一定符合；`IDR_W_RADL`、帶 RADL／RASL 的 BLA 與 CRA 要實際檢查）。帶前導畫面的入口第一版不用：移除前導會讓同一段的 DTS 出現空隙（例如入口在 0 ms、移除 40／80 ms 兩個前導後下一格是 120 ms），超過 MSE 的兩格門檻時後續畫面會被丟掉。片源在 10 秒內找不到可用入口就停用第一、二層。T-141 可研究「移除前導後把空隙併入入口的 sample duration」等做法，用帶 RADL 的 IDR／BLA 與含兩個以上前導畫面的 CRA 跨片段驗收後再放寬。
+- **不用 `appendWindowStart` 裁影像**：MSE 丟棄視窗外的畫面時會設「需要隨機進入點」，連後面有效的畫面也一起丟掉（[MSE coded frame processing](https://w3c.github.io/media-source/#sourcebuffer-coded-frame-processing)）。所以入口一律選沒有前導畫面的（上一條），影像 SourceBuffer 的 `appendWindowStart` 一律為 0、`appendWindowEnd` 不設。
 - **續接片段**：GOP 內的後續 sample，不必以關鍵影格開頭。音訊片段約 1 秒，每個都可當入口。
-- **驗收**：T-141 用 VFR＋B 幀的 H.264、open GOP 的 HEVC（確認帶前導的 CRA 不被選為入口）、AAC priming、帶 edit list 的 MP4（含一支會裁掉影像而必須降層的）四種素材，在 Chrome 實際附加後檢查 `buffered` 連續、入口後沒有畫面被丟（`totalVideoFrames` 與預期相同）、首格時間與房主 `<video>` 相同、影音對齊誤差 < 1 格。
+- **驗收**：T-141 用 VFR＋B 幀的 H.264、open GOP 的 HEVC（確認帶前導的 CRA 不被選為入口）、AAC priming、帶 edit list 的 MP4（含一支 `I → P → B` 順序、終點裁到 P 而必須降層的）、帶 RADL 的 HEVC IDR（確認不被選為入口）五種素材，在 Chrome 實際附加後檢查 `buffered` 連續、入口後沒有畫面被丟（`totalVideoFrames` 與預期相同）、首格時間與房主 `<video>` 相同、影音對齊誤差 < 1 格。
 
 ## §4 `pt-ctl` 訊息與握手
 
