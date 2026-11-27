@@ -28,15 +28,15 @@
 | 1 | 1 | `track` | 0 = 影像，1 = 音訊 |
 | 2 | 2 | `count` | 這個片段共幾塊，1～256 |
 | 4 | 4 | `config` | |
-| 8 | 4 | `epoch` | init 為 0 |
+| 8 | 4 | `epoch` | init 也帶當次 epoch（§4 第 5 步） |
 | 12 | 2 | `seq` | 片段序號（16 位元，回繞）；同一片段的塊相同 |
 | 14 | 2 | `index` | 0 起 |
 
 規則：
 
-- 收看端只接受目前 `dataId` 頻道上、`(config, epoch)` 等於目前已 `ready` 的那一組（init 則為目前 config）的塊；其他一律丟棄。**房主只在收到對應的 `ready` 之後才送資料**（§4），所以正常情況不會有資料先於宣告到達。
+- 收看端只接受目前 `dataId` 頻道上、`(config, epoch)` 等於目前已 `ready` 那一組的塊（init 也一樣）；其他一律丟棄，也不計入累計值。**房主只在收到對應的 `ready` 之後才送資料**（§4），所以正常情況不會有資料先於宣告到達。
 - 同一片段的塊必須連續、`index` 依序、`count` 不變；`index = count − 1` 即完成。片段未完成就換了 `(kind, track, seq)` → 丟棄未完成部分（房主跳轉時會中途放棄）。
-- 片段上限：4 MiB；只有單一 sample 超過 4 MiB 時，該 sample 自成一段，上限 16 MiB（附錄 C §4）。
+- 片段上限：一般 4 MiB。單一 sample 超過 4 MiB 時自成一段，上限 = `256 × (每則大小 − 16)`（每則 64 KiB 時約 16 MiB − 4 KiB）；更大的 sample 無法送出，該片源停用第一、二層。
 - 收看端的組裝中與待附加資料共用 16 MiB 硬上限。標頭不合法、`count` 超限、`index` 跳號、超過硬上限 → 協定錯誤（§7）。
 
 ## §3 輸出時間軸
@@ -45,14 +45,15 @@
 
 - **MP4／MOV**：從 `stts`／`ctts` 取每個 sample 的來源 DTS、CTS 與 duration。只支援下列 edit list，其他（多段、`media_rate ≠ 1`、中間空白段）該片源停用第一、二層：
   - 沒有 edit list：`偏移 M = 0`；
-  - 一段 media edit（`media_time = M`），前面可有一段起始空白（長 `E`）：`輸出 PTS = CTS − M + E`、`輸出 DTS = DTS − M + E`。
+  - 一段 media edit（`media_time = M`、長度 `U`），前面可有一段起始空白（長 `E`）：`輸出 PTS = CTS − M + E`、`輸出 DTS = DTS − M + E`。只送輸出 PTS 落在 `[E, E + U)` 的 sample：PTS < E 的影像 sample 視為入口前導（見下方入口規則）處理，PTS ≥ E + U 的不送；音訊照下方 priming 規則。
   - 影像與音訊各自依自己的 edit 計算。mediabunny 的 `packet.timestamp` 應等於輸出 PTS，T-141 以單元測試核對兩者，不一致時以本節為準。
-- **MKV**：容器只有 PTS（區塊時間），視為輸出 PTS。DTS 以整條軌的固定重排延遲 `D` 推導（掃描前 5 個 GOP，`D` = 使「依解碼順序第 i 個 sample 的 DTS = 已見 PTS 排序後第 i 個值 − D」滿足 `DTS ≤ PTS` 的最小值）。可接受條件（每個片段都檢查）：DTS 嚴格遞增（**不允許重複 PTS 造成零長度 sample**）、`DTS ≤ PTS`、相鄰 sample 的 DTS 差 > 0、片段之間解碼時間連續（差 ≤ 1 ms）。不符合就停用該片源的第一、二層。
-- **封裝時間與位移**：`O = max(0, −全片最小輸出 DTS)`，取 timescale 的整數。**封裝時間 = 輸出時間 + O**（寫進 `tfdt` 與 composition offset）。收看端每個 SourceBuffer 設 `timestampOffset = −O`；`appendWindowStart`／`appendWindowEnd` 一律以**輸出時間**表示（不含 O）。
+- **MKV**：容器只有 PTS（區塊時間），視為輸出 PTS。DTS 推導：依解碼順序第 i 個 sample 的 `DTS_i = 全軌 PTS 由小到大排序後的第 i 個值 − D`。重排深度上限 16，所以只需往後看 16 個 sample；`D` = 使前 5 個 GOP 都滿足 `DTS ≤ PTS` 的最小值，之後固定。可接受條件（每個片段都檢查）：沒有重複 PTS（否則會出現零長度 sample）、`DTS_i ≤ PTS_i`、`DTS_i + duration_i = DTS_{i+1}`（誤差 ≤ 1 ms，含跨片段的最後一個與下一段第一個）、重排深度 ≤ 16。不符合就停用該片源的第一、二層。
+- **封裝時間與位移**：`O = max(0, −全片最小輸出 DTS)`，取 timescale 的整數。**封裝時間 = 輸出時間 + O**，寫進 `tfdt`（解碼時間）；`trun` 的 composition offset = `PTS − DTS`（O 互相抵銷）。收看端每個 SourceBuffer 設 `timestampOffset = −O`；`appendWindowStart`／`appendWindowEnd` 一律以**輸出時間**表示（不含 O）。
 - **音訊 priming**：輸出 PTS < 0 的音訊 sample（AAC priming）由 `appendWindowStart = 0` 去掉；跨過 0 的 sample 由瀏覽器裁切（Chrome 會做部分裁切；Safari 未驗證，列入 T-113）。這與房主 `<video>` 的行為一致。
-- **入口片段**：以可隨機進入的 sample 開頭（H.264 IDR，或 recovery point 為 0 的 I 幀；HEVC IRAP）。收看端從入口開始附加前設 `appendWindowStart = 入口的輸出 PTS`，去掉 open GOP 與 HEVC CRA 的前導畫面（RASL）；之後**每個**後續片段附加前把 `appendWindowStart` 設回 0（音訊 SourceBuffer 一律 0）。
+- **入口**：H.264 只用 IDR（open GOP 的非 IDR I 幀不當入口，因為其前導 B 幀可能被後面的畫面參照）；HEVC 用 IDR、BLA、CRA。
+- **前導畫面在封裝時就去掉，不靠 `appendWindowStart`**：從入口開始的那一段，依解碼順序在入口之後、輸出 PTS 早於入口 PTS 的影像 sample（HEVC 的 RASL／RADL、H.264 IDR 不會有）**不放進片段**。HEVC 規範保證後續畫面不參照前導畫面，所以可以安全移除；若用 `appendWindowStart` 讓 MSE 丟棄，MSE 會設「需要隨機進入點」，連後面有效的畫面也一起丟掉（[MSE coded frame processing](https://w3c.github.io/media-source/#sourcebuffer-coded-frame-processing)）。影像 SourceBuffer 的 `appendWindowStart` 一律為 0、`appendWindowEnd` 為片尾。
 - **續接片段**：GOP 內的後續 sample，不必以關鍵影格開頭。音訊片段約 1 秒，每個都可當入口。
-- **驗收**：T-141 用 VFR＋open GOP 的 H.264、HEVC CRA、AAC priming 三種素材，在 Chrome 實際附加後檢查 `buffered` 連續、首格時間與房主 `<video>` 相同、影音對齊誤差 < 1 格。
+- **驗收**：T-141 用 VFR＋B 幀的 H.264、含 RASL 的 HEVC CRA（從 CRA 入口開始）、AAC priming、帶 edit list 的 MP4 四種素材，在 Chrome 實際附加後檢查 `buffered` 連續、入口後沒有畫面被丟（`totalVideoFrames` 與預期相同）、首格時間與房主 `<video>` 相同、影音對齊誤差 < 1 格。
 
 ## §4 `pt-ctl` 訊息與握手
 
@@ -62,7 +63,7 @@
 2. 房主送 `probe { config, video, audio }` → 收看端 3 秒內回 `probeResult`。快速連換片時，只有最後一個 config 的回覆有效。
 3. 房主決定層級後送 `config { config, tier, video?, audio?, offset }`（`live` 時沒有 MIME，收看端改用 `srcObject`）。收看端建立 MediaSource 與該 config 的 SourceBuffer。
 4. 房主送 `position { config, epoch, dataId, entry }`（`entry` = 入口的輸出時間，附錄 C §3）。收看端清掉該 config 的緩衝、套用 `appendWindowStart`，然後回 `ready { config, epoch, dataId }`。新 config 為 5 秒內，同一 config 的新 epoch 為 3 秒內。
-5. 房主收到相符的 `ready` 才開始送這組資料（先送 init，若該 config 尚未送過）。
+5. 房主收到相符的 `ready` 才開始送這組資料，**每次都先送一份帶當次 `(config, epoch)` 的 init segment**，再送入口片段。重複附加相同的 init 對 MSE 無害；這樣跳轉或換頻道時，送到一半的舊 init 被丟棄也不會漏掉。
 6. 收看端建立 MediaSource、SourceBuffer 或附加失敗時送 `fail { config, reason }`；房主把這位收看者降一層。
 
 任一步逾期 → 降一層（第一、二層 → 第三層）。換 `pt-data` 也走第 4 步（新的 `dataId`），收看端收到 `position` 後才接受新頻道的資料。

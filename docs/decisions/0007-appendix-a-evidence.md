@@ -107,7 +107,7 @@ WebCodecs：mediabunny 取封包 → `VideoDecoder` → `OffscreenCanvas` 縮到
 補充：
 
 - iOS ManagedMediaSource 必須設 `video.disableRemotePlayback = true` 或提供 AirPlay 替代來源，否則 `sourceopen` 不會觸發；瀏覽器可隨時清掉緩衝，要依 `startstreaming`／`endstreaming` 決定何時送資料（MDN）。
-- Safari 對 `hev1` 的支援沒有官方文件；StaZhu 的整理指出 Apple 播放器不收 `hev1`，所以 Safari 收看者遇到 `hev1` 片源走第二或第三層（附錄 B §5）。
+- Safari 對 `hev1` 的支援沒有官方文件；StaZhu 的整理指出 Apple 播放器不收 `hev1`，所以 Safari 收看者另用一個 `hvc1` config（逐樣本剝除與 `hvcC` 相同的參數集）；做不到時才走第二或第三層（附錄 B §5）。
 - Chrome 的 MSE 記憶體上限：影像 150 MiB、音訊 12 MiB（`demuxer_memory_limit.h`），Android 低記憶體裝置更低（影像 15～30 MiB）。Android 收看端的超前量要依 `QuotaExceededError` 自動縮小。
 - Chrome 的 MediaSource 在任一 SourceBuffer 收到 init segment 後就不能再加新的 SourceBuffer（本機錯誤訊息：「reached the limit of SourceBuffer objects」）。影音兩個 SourceBuffer 要先一起建立。
 - `file://` 頁面在 Chrome 是安全環境（`isSecureContext === true`），WebCodecs、WebRTC、從 CDN 載入 ES module 都可以用（本機實測）。
