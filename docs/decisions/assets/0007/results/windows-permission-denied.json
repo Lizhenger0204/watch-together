@@ -1,0 +1,66 @@
+{
+  "page": "T-140 encoder-lab v3",
+  "at": "2026-11-27T06:46:38.736Z",
+  "permission": {
+    "status": "denied",
+    "attempts": [
+      {
+        "kind": "audio",
+        "name": "NotAllowedError",
+        "message": "測試拒絕權限"
+      },
+      {
+        "kind": "video",
+        "name": "NotAllowedError",
+        "message": "測試拒絕權限"
+      }
+    ]
+  },
+  "file": {
+    "name": "h264-aac.mp4",
+    "mb": 0.1,
+    "format": "MP4",
+    "codec": "avc1.64000a",
+    "w": 160,
+    "h": 90,
+    "fps": 24,
+    "duration": 6,
+    "mbps": 0.2,
+    "tenBit": false
+  },
+  "settings": {
+    "height": 1080,
+    "bitrate": 8000000,
+    "wcs": 1,
+    "rtcs": 3
+  },
+  "results": [
+    {
+      "test": "webrtc-42001f",
+      "profile": "42001f",
+      "boost": false,
+      "targetKbps": 8000,
+      "qpMethod": "穩態區間 outbound-rtp 的 ΔqpSum ÷ ΔframesEncoded（Chrome 每張畫面的 QP 累計值）",
+      "status": "skipped",
+      "reason": "因權限被拒而未跑"
+    },
+    {
+      "test": "webrtc-42e01f",
+      "profile": "42e01f",
+      "boost": false,
+      "targetKbps": 8000,
+      "qpMethod": "穩態區間 outbound-rtp 的 ΔqpSum ÷ ΔframesEncoded（Chrome 每張畫面的 QP 累計值）",
+      "status": "skipped",
+      "reason": "因權限被拒而未跑"
+    },
+    {
+      "test": "webrtc-42001f-boost",
+      "profile": "42001f",
+      "boost": true,
+      "targetKbps": 8000,
+      "qpMethod": "穩態區間 outbound-rtp 的 ΔqpSum ÷ ΔframesEncoded（Chrome 每張畫面的 QP 累計值）",
+      "status": "skipped",
+      "reason": "因權限被拒而未跑"
+    }
+  ]
+}

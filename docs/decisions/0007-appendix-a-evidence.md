@@ -145,13 +145,15 @@ W3C 規格對 `latencyMode: 'quality'` 只說「SHOULD optimize for encoding qua
 - 加 DataChannel 是否要重新協商、能否和媒體軌共用同一條連線，文件沒說清楚。GPT 另讀 [DataChannels（features 版）](https://developers.cloudflare.com/realtime/sfu/features/datachannels/)：已接通的 DataChannel transport 可以再新增應用頻道；一個發布頻道只允許一位訂閱者回傳；`waitForAck` 的 readiness gate 不提供重播。
 - 來源：[DataChannels](https://developers.cloudflare.com/realtime/sfu/datachannels/)、[Connection API](https://developers.cloudflare.com/realtime/sfu/https-api/)、[Limits](https://developers.cloudflare.com/realtime/sfu/limits/)、[Pricing](https://developers.cloudflare.com/realtime/sfu/pricing/)。
 
-## §7 Windows 實驗頁（使用者要做的事）
+## §7 Windows 實驗頁
 
-1. 取得 `docs/decisions/assets/0007/encoder-lab.html`（可直接從 GitHub 分支下載這一個檔案）。
-2. 在 Windows 上用 **Chrome 或 Edge 直接開檔**（雙擊，網址會是 `file:///…`）。本機已確認 `file://` 下 WebCodecs 與 WebRTC 都能用；需要網路，因為會從 jsDelivr 載入 mediabunny 1.65.2。
-3. 選一支本機片（建議先用「1080P 衝不上 8 Mbps」那支，再用一支 4K），解析度 1080、位元率 8 Mbps，按「開始」。約 4～6 分鐘，不要切走分頁。跳出麥克風或鏡頭權限時按「允許」（不允許也能跑，只是讀不到 `encoderImplementation`）。
-4. 完成後按「複製 JSON」貼回來。內容包含：GPU 名稱、每組測試的 `encoderImplementation`、實際位元率、平均 QP、編碼 fps、轉碼倍速、有沒有 B 幀，以及 WebRTC 每秒位元率。
-5. 先不要關頁，開新分頁到 `chrome://webrtc-internals`（Edge 是 `edge://webrtc-internals`），按「Create dump」存檔。
-6. 另外在**正式網站**用 P2P 開播同一支片 60 秒（有一位收看者），再到 `chrome://webrtc-internals` 按「Create dump」另存一份。兩份 dump 一起傳回。
+將 [原型資料夾](assets/0007/README.md) 的 `encoder-lab.html` 和四個 `encoder-lab*.js` 檔放在一起。用桌面 Chrome 或 Edge 雙擊 HTML。手動執行時，頁面會從 jsDelivr 載入 mediabunny 1.65.2。
 
-測試組合：WebCodecs quality／realtime（硬體）、quality（軟體）；WebRTC 預設 `42001f`（硬體）、Safari 模式 `42e01f`（軟體）、方案 A（硬體＋上限 1.5 倍＋SDP 提示）。
+1. 先開 `chrome://webrtc-internals`（Edge 使用 `edge://webrtc-internals`）。回到實驗頁，選片、設定解析度與目標位元率，再按「開始」。
+2. 允許麥克風或鏡頭，讓 Chrome 提供 WebRTC 編碼器統計。權限串流不會送入測試連線。權限遭拒時，每組 WebRTC 結果都會記為跳過並附原因。
+3. WebCodecs 矩陣為 quality／realtime × prefer-hardware／prefer-software × VBR／CBR／QP 22／QP 26。WebRTC 量測 `42001f`、`42e01f` 和 `42001f-boost`。新版 boost 只把 `maxBitrate` 調成 1.5 倍。
+4. 手動匯出 dump 時，從另一個視窗操作，並在 WebRTC 組仍在執行時匯出。測完按「複製 JSON」取結果。Playwright 腳本可用虛擬麥克風自動授權，並在每組連線仍開啟時匯出 dump。
+
+數據與 D6、D12 的修改建議見 [Windows 實測](assets/0007/windows-findings.md)。
+
+正式網站的對照可用同一支片、由一位收看者加入，P2P 播放 60 秒後另存一份 WebRTC Internals dump。
