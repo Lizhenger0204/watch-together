@@ -90,7 +90,7 @@ WebRTC 是通話用的即時編碼：先顧延遲、位元率只是上限、沒�
 ## D9. 安全
 
 - DataChannel 與媒體一樣走 DTLS，P2P 直連不經伺服器；開播、切模式、踢人照舊由伺服器驗證角色。
-- **收看者之間的信令（規則改變）**：現行「收看者的 `signal` 只能送給房主」改為：只有房主登記、綁定雙方當下連線與直播工作階段的配對，伺服器才轉送（附錄 G §3）。
+- **收看者之間的信令**：既有 `signal` 維持原規則（收看者只能送給房主）；收看者之間改用新的 `peer:signal`，只有房主登記、綁定雙方當下連線與直播世代的配對，伺服器才轉送（附錄 G §3）。
 - **使用者決定（2026-11-27）**：同房成員可以互相看到 IP；沒進房的人絕不能拿到。可驗收的承諾：**本產品只把成員的 IP、SDP 與 candidate 交給已驗證、且當下對這個房間與目標連線有授權的房主或收看者**（STUN／TURN 伺服器本來就看得到連線來源，與現在相同）。授權以伺服器轉送信令的那一刻為準；踢出、離開、斷線即撤銷；邀請碼防暴力猜測是第一道防線；檢查點與 E2E 見附錄 G §4。
 - 其他收看者轉來的片段一律以房主公布的 SHA-256 驗證（D13）。
 - **與現行直播不同**：收看端拿到的是原片的壓縮資料，包含尚未播出的預讀內容（最多約 20 秒），技術上可以完整存下，畫質等於原片；踢人只能停止之後的交付。這點要在房主開啟原片直送時說明。
@@ -100,12 +100,12 @@ WebRTC 是通話用的即時編碼：先顧延遲、位元率只是上限、沒�
 ## D10. 與現有架構的關係
 
 - **重用**：房間、邀請碼、信令、ICE、P2P 連線、`features/source/`、第三層 `transport/`、播放器控制列與「點擊開始觀看」。
-- **新增 `apps/web/src/features/passthrough/`**（純 TS）：`demux/`、`mux/`、`timeline/`、`sync/`、`send/`、`receive/`、`transcode/`、`select/`。
+- **新增 `apps/web/src/features/passthrough/`**（純 TS，依功能分子目錄）。
 - **跨目錄契約**（T-141 先定案，Claude 與 GPT 共同）：
   - `transport/p2p/`（GPT）：房主端每位收看者的 DataChannel 掛勾與 sender `replaceTrack(null)`；收看端暴露 DataChannel（現行 `ViewerTransport` 只有 `remoteStream`）。
   - `features/source/`（GPT）：對外提供實際採用的 Blob（含 T-138 修正）與 T-138 偵測結果。
   - `features/player/`、`features/room/`（Claude）：`<video>` 在 MSE 與 `srcObject` 間切換、成員列表標籤。
-  - 伺服器（Claude）：`apps/signal/src/signaling/process.ts` 目前逐欄重組 `member:status`，要加 `tier`、`driftMs` 才轉得到房主；種子式散布另加配對登記（存 RoomDO storage）與收看者之間 `peer:signal` 的轉送條件（附錄 G）；`packages/shared` 同步更新。`memberStatusSchema` 與 `roomInfoSchema` 都是 `z.object`（舊版略過新的選填欄位），不必升版；改動 strict 的 `Quality` 或舊版會誤判的欄位才升 v3。
+  - 伺服器（Claude）：`apps/signal/src/signaling/process.ts` 目前逐欄重組 `member:status`，要加 `tier`、`driftMs` 才轉得到房主；種子式散布另加配對登記（存 RoomDO storage）與收看者之間 `peer:signal` 的轉送條件（附錄 G）；`packages/shared` 同步更新。新欄位都是選填（`z.object` 舊版略過），不必升版；改動 strict 的 `Quality` 才升 v3（附錄 B §8）。
 - **`runtime/` 邊界不受影響**：伺服器只多轉欄位與信令，沒有新的媒體路徑或 Workers 專屬 API。
 
 ## D11. 分階段實作計畫
@@ -113,7 +113,7 @@ WebRTC 是通話用的即時編碼：先顧延遲、位元率只是上限、沒�
 | 任務 | 內容 | 驗收與 E2E |
 | --- | --- | --- |
 | T-141 | 跨目錄契約（D10）與向後相容掛勾；`passthrough/` 純函式：片段表與請求流程（附錄 F）、時間軸、fMP4（確定性）、對時與追趕狀態機、入口選擇、預算分配、分框驗證；hls.js 採用門檻（附錄 E §2） | Vitest：時間軸以 VFR＋open GOP 等九種素材驗證（附錄 B §3）；狀態機每個轉換、預算表每列各一個案例。掛勾預設不啟用，既有 E2E 全過 |
-| T-142 | 第一層端到端（房主開關「原片直送（實驗）」預設關閉）：片段表＋收看端主動要（來源只有房主）、T-141 選定的播放路徑（hls.js 或自寫 MSE）、同步、跳轉、中途加入、房主重連；不支援就第三層 | E2E（`channel: 'chrome'`）：新增 ≤ 1 MB、約 30 秒、GOP 2 秒的 H.264＋AAC fixture（與房主差 < 100 ms、跳轉 5 秒內恢復、第二位中途加入）；quota 與 ManagedMediaSource 恢復照附錄 F §2；HEVC 依 BUG-003 規則 |
+| T-142 | 第一層端到端（房主開關「原片直送（實驗）」預設關閉）：片段表＋收看端主動要（來源只有房主）、T-141 選定的播放路徑（hls.js 或自寫 MSE）、同步、跳轉、中途加入、房主重連、原片閘門（經 TURN 或路徑未知不送原片，附錄 H）；不支援就第三層 | E2E（`channel: 'chrome'`）：新增 ≤ 1 MB、約 30 秒、GOP 2 秒的 H.264＋AAC fixture（與房主差 < 100 ms、跳轉 5 秒內恢復、第二位中途加入）；quota 與 ManagedMediaSource 恢復照附錄 F §2；HEVC 依 BUG-003 規則 |
 | T-143 | 能力回報、房間預算選層、降到第三層、UI 標籤、`member:status` 新欄位；預設改為開啟 | E2E：收看端停用 HEVC 解碼時 HEVC 片走第三層；`tier` 轉給房主。不依賴 T-144 |
 | T-144 | 第二層轉碼（試速、降層） | E2E：`h264-2160p-aac.mp4` 選 1080P，收看端 `videoHeight = 1080`；注入慢速時走第三層 |
 | T-146 | 收看者之間的信令與配對（先改 `protocol.md`、`packages/shared`）：`swarm:*` 訊息、伺服器轉送條件、撤銷 | 伺服器單元測試＋附錄 G §4 #5 的 E2E（合法配對收得到；未 `auth`、無效 token、被踢出、離開、舊 `pairId`、舊邀請碼都收不到 candidate） |

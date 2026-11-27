@@ -27,7 +27,7 @@
 
 **`epoch`**：收看端的定位世代。**定位一律走同一個流程**：收看端開新 epoch（加入、自己跳轉到已附加與已請求範圍之外、quota、ManagedMediaSource 恢復時 E 不在緩衝內，或收到房主的 `reposition`）→ 取消舊 epoch 的全部請求、釋放預留、照 B §4 第 4 步清緩衝與重設 append window → 送 `ready { config, epoch }` → 房主依 C §3 選入口，回 `position { config, epoch, entry, rateHint }` → 收看端從 `entry` 那一段開始要。雙方的入口因此一致；房主從送出 `position` 起算 C §3 的定位期限，並從那一刻開始為這個 epoch 發公告與指派。之後的 `req`、`status` 都帶 epoch，房主丟掉舊 epoch 的請求。**每個 epoch 的位元組計數（`reservedBytes`、`receivedBytes`、`appendedBytes`）歸零**；`reqId` 不歸零（見下）。
 
-**`reqId`**：收看端配發，**在同一條 `RTCPeerConnection`（同一條 `pt-ctl` 或 `sw-ctl`）內跨 epoch、跨資料頻道遞增，不重複**；換 `pt-data` 也不重來，所以控制訊息裡的 `reqId` 不需要再帶 `dataId`。`ready` 送出後 2 秒沒收到對應的 `position` 就重送，連續 3 次都沒有就照 B §7 改第三層。
+**`reqId`**：收看端配發，**在同一條 `RTCPeerConnection`（同一條 `pt-ctl` 或 `sw-ctl`）內跨 epoch、跨資料頻道遞增，不重複**；換 `pt-data` 也不重來，所以控制訊息裡的 `reqId` 不需要再帶 `dataId`。`ready` 送出後 2 秒沒收到對應的 `position` 就**以同一個 `(config, epoch)` 重送**；房主對同一組永遠回同一個 `position`（冪等）。連續 3 次都沒有，收看端送 `fail { config, reason: 'position' }`（`pt-ctl` 不通時由房主那邊的握手逾時判定），房主照 B §7 把他改第三層：清掉「媒體暫停」旗標並 `replaceTrack(當下的 track)`（附錄 C §5）、送 `config { tier: 'live' }`，收看端改用 `srcObject`，所以第三層一定有畫面。
 
 **`seekId`**：房主每次自己跳轉加 1，放在 `state` 裡。收看端用它判斷「房主意圖改變」（C §2），不用來丟資料。
 
@@ -37,7 +37,7 @@
 
 **接收空間預留**（以**請求的小塊位元組**記帳）：送出 `req` 前，收看端預留這次要的小塊大小總和。所有來源合計「已預留＋已收到未附加」≤ 16 MiB。其中**保留區**＝尚未附加的 INIT（每軌）＋**每一軌**本 epoch 最早還沒附加的那一段，大小依公布值計算；保留區的請求永遠可以送，其他請求只能用 `16 MiB − 保留區`。INIT 每軌 ≤ 1 MiB（超過就停用該片源的第一、二層），所以保留區最多 `2 × (1 + 4)` MiB。所以後段收齊等著依序附加時，各軌缺的那一段一定還能補請。每個來源最多 2 個請求在途；急件需要空間時先取消預讀的請求。房主端另檢查：同一收看者向房主在途的請求 ≤ 16 MiB，超過算協定錯誤。
 
-**超前限制**（取代 C §4 條件 6 的房主端判斷，數值不變）：收看端只要「開始時間 ≤ `L + LEAD_S`」的段，而且「SourceBuffer 中 E 之後的位元組＋已預留＋已收到未附加 ≤ `LEAD_BYTES`」。**保留區的請求不受這兩道超前限制**（例如影像超前量已滿、音訊缺段時仍可補請），所以不會因為某一軌佔滿預算而停住；`L` 照 C §4（本 epoch 開播前 `max(入口, E)`，開播後 `min(E, 畫面時間 + 3)`）。
+**超前限制**（取代 C §4 條件 6 的房主端判斷，數值不變）：收看端只要「開始時間 ≤ `L + LEAD_S`」的段，而且「SourceBuffer 中 E 之後的位元組＋已預留＋已收到未附加 ≤ `LEAD_BYTES`」。**例外只給「解鎖播放或定位所需的段」**：某一軌最早未附加的段，若它的開始時間 ≤ `max(E, 入口) + 0.5 秒`（也就是 C §2 `waitData` 或定位正在等它），這個請求不受這兩道超前限制；其他保留區的段照常受限制。例外造成的超額最多 `4 MiB + INIT`，超過就不再放行。所以「另一軌已滿、這一軌缺洞」時仍能補，兩軌都完整時預讀會停在上限；T-142 兩種情況各驗收一次。`L` 照 C §4（本 epoch 開播前 `max(入口, E)`，開播後 `min(E, 畫面時間 + 3)`）。
 
 **取消與遲到的資料**：`cancel { reqId }`，來源丟掉佇列中的部分。收看端收到的每一則資料，只有「`reqId` 是本 epoch、這條頻道上**仍有效**的請求」才收；其他一律丟棄、不計入、不算違規。只有 `reqId` **大於**這條頻道上發出過的最大值（從沒發出過）才算違規。ICE 恢復後晚到的舊資料因此直接丟掉。來源（包括房主）收到 `cancel` 後在**下一個小塊邊界**停止。
 
@@ -45,7 +45,7 @@
 
 | 情況 | 急件 | 預讀 |
 | --- | --- | --- |
-| 送出 `req` 後還沒收到第一則 | 1.5 秒 | 3 秒 |
+| 送出 `req` 後還沒收到第一則（從 `max(送出時刻, seg.sources 的 firstAt)` 起算） | 1.5 秒 | 3 秒 |
 | 收到過資料後停住（沒有新資料） | 1.5 秒 | 3 秒 |
 | 來源回 `nack`（沒有這段、不再轉送、沒有有效指派） | 立即 | 立即 |
 
@@ -53,7 +53,7 @@
 
 **換 `pt-data`**：房主送出新的 `position` 後 2 秒內，這位收看者的 `pt-data` `bufferedAmount` 沒降到 256 KiB 以下（舊 epoch 的資料還塞在 SCTP 裡），房主開新頻道並送 `dataSwitch { dataId }`。收看端收到 `dataSwitch` 時，**立刻**把舊頻道上的請求全部視為取消、釋放預留；新頻道 `open` 後回 `dataReady { dataId }`，再以新的 `reqId` 在新頻道重發仍需要的請求。房主收到 `dataReady` 才關閉舊頻道。5 秒內沒收到 `dataReady`：照 B §7 的協定錯誤處理（這位收看者改第三層）。
 
-**ICE restart**：識別碼不變，逾時的請求照上表重發；中斷超過 5 秒才恢復時，收看端開新 epoch。
+**ICE restart**：識別碼不變；原片的請求要等附錄 H 的原片閘門重新確認為開才重發（閘門關著時房主回 `nack`，收看端照附錄 H 改層），其他逾時的請求照上表重發；中斷超過 5 秒才恢復時，收看端開新 epoch。
 
 **片尾**：`segtable` 最後一頁帶 `last: true`，最後一段的 `flags` 標示結尾。**本 epoch 從入口到最後一段的每一段、每一軌都已依序附加完成**，待附加佇列為空、所有 SourceBuffer 都不在 `updating`，才呼叫 `endOfStream()`；C §2 的 `ended` 分支等同一個條件成立後，跳到最後一個有效影格並暫停。C §1 其餘規則（不設 `duration`、影音共同有效區間）不變。
 
@@ -94,8 +94,8 @@
 | --- | --- | --- |
 | 房主 → 收看者（`pt-ctl`） | `config` | B §4 的欄位，另加 `chunk`、`init: [{ track, size, pieces }]` |
 | | `segtable` | `{ config, page, segs: [[start, end, flags], …], last }` |
-| | `seg` | `{ config, index, tracks: [{ track, size, pieces: [sha256, …] }], sources: [{ from: 'host' \| memberId, grantId?, expiresAt?, track, pieces: [a, b) }, …] }`（公布＋指派；改派時再送） |
-| | `grant` | `{ grantId, to, config, index, track, pieces: [a, b), expiresAt }`：給**來源端**的出站指派（附錄 D §4） |
+| | `seg` | `{ config, index, tracks: [{ track, size, pieces: [sha256, …] }], sources: [{ from: 'host' \| memberId, grantId?, expiresAt?, firstAt?, track, pieces: [a, b) }, …] }`（公布＋指派；改派時再送；`grantId`／`expiresAt`／`firstAt` 只在來源是收看者時出現） |
+| | `grant` | `{ grantId, to, config, index, track, pieces: [a, b), rateBps, expiresAt }`：給**來源端**的出站指派（附錄 D §4）；同一 `grantId` 再送一次表示更新配額 |
 | | `nack` | `{ reqId }`：房主當來源時拒絕請求（例如 config 已換） |
 | | `reposition` | `{ config }`：請收看端開新 epoch（`stuck` 或房主重選入口） |
 | | `revoke` | `{ grantId }` |
@@ -120,4 +120,4 @@
 | | `cancel`／`nack` | `{ reqId }` |
 | 資料 | — | 二進位，§3。`pt-data` 房主 → 收看者送 `kind` 1、2；收看者 → 房主**只允許** `kind = 3`（抽查回覆），且只在有效的 `audit` 期間（5 秒內、一塊）；`sw-data` 雙向送 `kind` 1、2 |
 
-- 來源只服務「帶有效 `grantId`、請求者與範圍都符合、未過期」的請求，其他回 `nack`。速率上限、單則大小、可替換訊息的規則同 B §4。
+- **收看者當來源**：只服務「帶有效 `grantId`、請求者與範圍都符合、未過期」的請求，其他回 `nack`。**房主當來源**：不需要 `grantId`，服務本 epoch、目前 config 的任何請求（INIT、急件補拿、散布關閉時的全部請求），只有 config 已換、原片閘門關著（附錄 H）或超過 16 MiB 在途時回 `nack`。速率上限、單則大小、可替換訊息的規則同 B §4。

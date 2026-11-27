@@ -10,7 +10,7 @@
 
 - **連線 ID**：伺服器在每條 WebSocket 完成 `auth` 時配發隨機的 `connId`（128 位元），和 `memberId` 一起寫進該 WebSocket 的休眠 attachment。每條已驗證的連線一個，不重複使用。`connId` 不是憑證：伺服器在給房主的成員上線資訊（`room:snapshot`、成員狀態更新）裡附上每位收看者目前的 `connId`，房主下配對指令時要帶上。
 - **能力宣告**：新版收看端在 `auth` 成功後送 `swarm:hello { version: 1 }`，伺服器記在該連線的 attachment；沒宣告的連線（舊版）不會被配對，也永遠收不到 `peer:signal`。
-- RoomDO 的房間狀態記 `swarm = { on, liveId, pairs: [{ pairId, a, b, aConn, bConn }] }`：`liveId` 是**直播世代**，房主每次成功開播（`stream:status { live: true }` 被接受）就配發新的，並在回給房主的 `ack` 與 `stream:status` 裡告知；停播、房主重新連線都讓它失效，`aConn`／`bConn` 是登記當下雙方的 `connId`，`pairId` 在房內遞增不重複。全部在既有的 `changes` 佇列內讀寫，與席位同一筆交易提交。
+- RoomDO 的房間狀態記 `swarm = { on, liveId, pairs: [{ pairId, a, b, aConn, bConn }] }`：`liveId` 是**直播世代**，只在「未開播 → 開播」的轉換被接受時配發新的（直播中更新片名等 `live: true` 的訊息**不**換世代），並在回給房主的 `ack` 與 `stream:status` 裡告知；停播、房主重新連線讓它失效。**每次世代改變，在同一筆交易撤銷所有舊配對**（每筆配對也記下它的 `liveId`）。`aConn`／`bConn` 是登記當下雙方的 `connId`，`pairId` 在房內遞增不重複。全部在既有的 `changes` 佇列內讀寫，與席位同一筆交易提交。
 - **配對只在「P2P 模式、正在直播」時有效**；`swarm.on` 也只在這段期間可以為真。
 
 ## §3 處理順序
@@ -19,9 +19,9 @@
 2. `swarm:pair` 在佇列內檢查：模式已開、P2P 且正在直播、`liveId` 等於目前的直播世代、`aConn`／`bConn` 等於兩人**此刻**的連線且都宣告過 `swarm:hello`、兩人都是本房在線且已 `auth` 的收看者。任一不符就回 `ack { ok: false }`、不建立配對——延遲到達的舊指令（同一條連線停播再開後、對方重連後）因此不會建立房主沒有指定的配對。**先提交**，提交後回房主 `ack { ok: true, pairId }`，再送 `swarm:paired { peer, pairId }` 給雙方。房主 15 秒內沒收到雙方的 `peerOpen` 就 `swarm:unpair` 清掉這一對。
 3. **送到已核對的實體連線**：`swarm:paired`、`peer:signal`、`swarm:unpaired`、`swarm:valid` 都只送到配對紀錄裡那條 `connId` 的 WebSocket，不是「這位成員目前的任一連線」。
 4. 收看者 X → Y 的 `peer:signal { to, pairId, data }`：在佇列內、**實際送出前**確認：配對存在且 `pairId` 相符；X 這條連線的 `connId` 等於登記的那一個；Y 的登記連線仍在線；模式仍開；P2P、正在直播、直播世代沒變。轉送時帶 `pairId`；收看端只接受與目前配對相符的 `pairId`，舊配對的 SDP／candidate 直接丟掉。
-5. **誰發 offer**：`memberId` 較小的一方。雙方的 `sw-ctl`、`sw-data` 都開啟、而且各自確認選中的 candidate pair 不是 relay（附錄 H）後，各自在 `pt-ctl` 向房主送 `peerOpen { peer, pairId }`，關閉時送 `peerClosed`；房主只把雙方都回報 `peerOpen` 的配對當作可指派的鄰居（附錄 D §4）。
+5. **誰發 offer**：`memberId` 較小的一方；3 秒、8 秒還沒收到 answer 就重送同一份 offer（對方可能因為還沒收到 `swarm:paired` 而先丟掉）。雙方的 `sw-ctl`、`sw-data` 都開啟、而且各自確認選中的 candidate pair 不是 relay（附錄 H）後，各自在 `pt-ctl` 向房主送 `peerOpen { peer, pairId }`，關閉時送 `peerClosed`；房主只把雙方都回報 `peerOpen` 的配對當作可指派的鄰居（附錄 D §4）。
 6. **撤銷**，與觸發的變更**同一筆交易**：踢出、離開、**任何原因的斷線**（正常關閉、WebSocket 錯誤、心跳逾時 `4410`、新連線取代 `4000`）、房主重新連線（撤銷全部）、停播、關閉模式、切到轉發、房主 `swarm:unpair`（`pairId` 必須等於目前那一對，否則忽略，避免延遲的撤銷取消新配對）。提交後送 `swarm:unpaired { peer, pairId }` 給雙方仍在線的登記連線，收到的一方關閉對應的 PeerConnection。
-7. **通知遺失時的自我核對**：收看端每 30 秒、以及 `pt-ctl` 或 WebSocket 恢復時，送 `swarm:check`；伺服器回 `swarm:valid { pairs: [{ peer, pairId }] }`——**這條連線此刻獲授權的全部配對**（不只收看端知道的），所以漏收 `swarm:paired` 的一方也能補回。收看端關閉不在清單裡的 PeerConnection，清單裡還沒建立的照第 5 點建立。收看端自己的 WebSocket 一重連（新的 `connId`），就關閉所有收看者之間的連線，因為舊配對都已撤銷。
+7. **通知遺失時的自我核對**：收看端收到 `pairId` 不認得的 `peer:signal` 時**立刻**送 `swarm:check`（這則先暫存 2 秒，核對通過就處理），另外每 30 秒、以及 `pt-ctl` 或 WebSocket 恢復時也送；房主的 15 秒清理期限因此晚於補回。伺服器回 `swarm:valid { pairs: [{ peer, pairId }] }`——**這條連線此刻獲授權的全部配對**，判斷條件與第 4 點轉送 `peer:signal` 完全相同（不只收看端知道的），所以漏收 `swarm:paired` 的一方也能補回。收看端關閉不在清單裡的 PeerConnection，清單裡還沒建立的照第 5 點建立。收看端自己的 WebSocket 一重連（新的 `connId`），就關閉所有收看者之間的連線，因為舊配對都已撤銷。
 8. **Durable Object 喚醒**：配對在 storage 裡，但喚醒後要用休眠 WebSocket 的 attachment 確認 `aConn`／`bConn` 仍是活著的連線；任一方對不上，該配對一律撤銷。
 9. **統一的拒絕**：`peer:signal` 凡是授權不通過（對方不存在、不在線、沒配對、`pairId` 過期、`connId` 不符、沒宣告 `swarm:hello`、模式已關、不在直播）一律回 `error { code: 'FORBIDDEN' }`、同一句訊息，不透露原因。只有與對象無關的格式錯誤回 `BAD_REQUEST`。現行「房主 ↔ 收看者」的回應不變。
 
@@ -38,7 +38,7 @@
 
 | # | 檢查點 | 驗證 |
 | --- | --- | --- |
-| 1 | 只有用邀請碼進房、持有效 token 並完成 `auth` 的連線收得到 SDP 或 candidate | 伺服器單元測試 |
+| 1 | 每條會帶出 SDP／candidate 的路徑都有自己的授權條件，未授權者收不到：**既有 `signal`**（房主 ↔ 收看者，規則不變）——送方與收方都是本房、已完成 `auth`（房主 `hostToken`、收看者 `memberToken`）、目前在線的成員，收看者只能送給房主，送到收方此刻的那條連線；**`peer:signal`**——§3 第 4 點；**WHIP／WHEP**（第三層轉發）——REST Bearer（房主的 WHIP 用 `hostToken`、收看者的 WHEP 用 `memberToken`）且房間相符，回應裡只有 Cloudflare 伺服器的位址 | 伺服器單元測試：每條路徑各測「未 `auth`／無效 token／別房／目標不在線（或非配對對象）」 |
 | 2 | 公開或未驗證的端點（REST 房間資訊、加入前的查詢）、錯誤訊息、關閉原因、log 都不帶 IP、SDP 或 candidate；伺服器不記錄 `signal.data` | 測試檢查 JSON、獨立的 SDP 文字（`a=candidate`、`c=IN IP4`／`IP6`）、IPv4 與 IPv6 位址樣式、關閉原因與 log 內容，不只看欄位名稱 |
 | 3 | 被踢出、離開或斷線：從撤銷提交起，兩個方向都不再轉送；其他人關閉與他的連線。重新產生邀請碼後舊碼不能進房 | 伺服器測試；E2E #5 |
 | 4 | **第一道防線是邀請碼**：沿用防暴力猜測（限流、錯誤一律同一種訊息、可重新產生，room-and-invite.md） | 既有測試 |
