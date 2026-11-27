@@ -168,20 +168,17 @@ export function parseSingleBlockElement(
   const idInfo = readEbmlId(buf, 0);
   if (!idInfo) return null;
   const sizeInfo = readEbmlVint(buf, idInfo.length);
-  if (!sizeInfo) return null;
+  if (!sizeInfo || sizeInfo.unknown) return null;
   const start = idInfo.length + sizeInfo.length;
-  // 若已知所屬 Cluster 剩餘空間，block 宣告長度絕不可越出 Cluster 邊界
+  // 若已知所屬 Cluster 或檔案剩餘空間，block 宣告長度絕不可越界
   if (
     maxElementBytes !== undefined &&
-    !sizeInfo.unknown &&
     start + sizeInfo.value > maxElementBytes
   ) {
     return null;
   }
-  const truncated = sizeInfo.unknown || start + sizeInfo.value > buf.length;
-  const end = sizeInfo.unknown
-    ? buf.length
-    : Math.min(buf.length, start + sizeInfo.value);
+  const truncated = start + sizeInfo.value > buf.length;
+  const end = Math.min(buf.length, start + sizeInfo.value);
 
   if (idInfo.id === EBML_ID_SIMPLE_BLOCK) {
     return decodeMkvBlockPayload(
@@ -195,7 +192,6 @@ export function parseSingleBlockElement(
     );
   }
   if (idInfo.id === EBML_ID_BLOCK_GROUP) {
-    if (sizeInfo.unknown) return null;
     const parsed = parseBlockGroupElement(
       buf,
       start,
@@ -215,28 +211,46 @@ export function extractVideoBlocksFromCluster(
   clusterFileOffset: number,
   targetTrack: number,
   maxBlocks: number,
+  fileSize?: number,
 ): MkvBlockPayload[] {
   const idInfo = readEbmlId(clusterBuf, 0);
   if (!idInfo || idInfo.id !== EBML_ID_CLUSTER) return [];
   const sizeInfo = readEbmlVint(clusterBuf, idInfo.length);
   if (!sizeInfo) return [];
   const start = idInfo.length + sizeInfo.length;
+  const remainingInFile =
+    fileSize !== undefined
+      ? Math.max(0, fileSize - clusterFileOffset)
+      : undefined;
   const declaredClusterEnd = sizeInfo.unknown
     ? undefined
     : start + sizeInfo.value;
-  const end = sizeInfo.unknown
-    ? clusterBuf.length
-    : Math.min(clusterBuf.length, start + sizeInfo.value);
+  if (
+    declaredClusterEnd !== undefined &&
+    remainingInFile !== undefined &&
+    declaredClusterEnd > remainingInFile
+  ) {
+    return [];
+  }
+  const maxChildEnd = declaredClusterEnd ?? remainingInFile;
+  const end =
+    declaredClusterEnd !== undefined
+      ? Math.min(clusterBuf.length, declaredClusterEnd)
+      : clusterBuf.length;
 
   const results: MkvBlockPayload[] = [];
-  const clusterTruncated =
-    sizeInfo.unknown || start + sizeInfo.value > clusterBuf.length;
+  const reachedEof =
+    remainingInFile !== undefined && clusterBuf.length >= remainingInFile;
+  const clusterTruncated = sizeInfo.unknown
+    ? !reachedEof
+    : declaredClusterEnd! > clusterBuf.length;
   let pos = start;
-  while (pos < end && results.length < maxBlocks) {
+  // 持續驗證已讀視窗內全部子元素邊界，避免收滿 maxBlocks 後漏掉後方越界或損毀元素
+  while (pos < end) {
     const cid = readEbmlId(clusterBuf, pos);
     if (!cid) {
       return clusterTruncated &&
-        isEbmlHeaderCutByWindow(clusterBuf, pos, 4, declaredClusterEnd, 1)
+        isEbmlHeaderCutByWindow(clusterBuf, pos, 4, maxChildEnd, 1)
         ? results
         : [];
     }
@@ -248,39 +262,35 @@ export function extractVideoBlocksFromCluster(
           clusterBuf,
           pos + cid.length,
           8,
-          declaredClusterEnd,
+          maxChildEnd,
           0,
           true,
         )
         ? results
         : [];
     }
+    if (csize.unknown) return [];
     const dataStart = pos + cid.length + csize.length;
-    if (
-      declaredClusterEnd !== undefined &&
-      !csize.unknown &&
-      dataStart + csize.value > declaredClusterEnd
-    ) {
+    if (maxChildEnd !== undefined && dataStart + csize.value > maxChildEnd) {
       return [];
     }
-    const blockTruncated = csize.unknown || dataStart + csize.value > end;
-    const dataEnd = csize.unknown
-      ? end
-      : Math.min(end, dataStart + csize.value);
+    const blockTruncated = dataStart + csize.value > end;
+    const dataEnd = Math.min(end, dataStart + csize.value);
 
     if (cid.id === EBML_ID_SIMPLE_BLOCK) {
-      const payload = decodeMkvBlockPayload(
-        clusterBuf,
-        dataStart,
-        dataEnd,
-        clusterFileOffset,
-        targetTrack,
-        null,
-        blockTruncated,
-      );
-      if (payload) results.push(payload);
+      if (results.length < maxBlocks) {
+        const payload = decodeMkvBlockPayload(
+          clusterBuf,
+          dataStart,
+          dataEnd,
+          clusterFileOffset,
+          targetTrack,
+          null,
+          blockTruncated,
+        );
+        if (payload) results.push(payload);
+      }
     } else if (cid.id === EBML_ID_BLOCK_GROUP) {
-      if (csize.unknown) return [];
       const parsed = parseBlockGroupElement(
         clusterBuf,
         dataStart,
@@ -291,9 +301,10 @@ export function extractVideoBlocksFromCluster(
         targetTrack,
       );
       if (parsed.corrupt) return [];
-      if (parsed.block) results.push(parsed.block);
+      if (results.length < maxBlocks && parsed.block) {
+        results.push(parsed.block);
+      }
     }
-    if (csize.unknown) break;
     pos = dataEnd;
   }
   return results;

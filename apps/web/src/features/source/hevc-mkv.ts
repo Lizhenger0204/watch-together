@@ -271,6 +271,7 @@ export async function inspectMkvHevc(
       firstClusterOffset,
       foundTrack.trackNumber,
       2,
+      file.size,
     );
     if (
       file.size <= SMALL_MKV_SCAN_LIMIT &&
@@ -287,6 +288,7 @@ export async function inspectMkvHevc(
         firstClusterOffset,
         foundTrack.trackNumber,
         2,
+        file.size,
       );
     }
     if (firstBlocks.length === 0) probeTargetUnreadable = true;
@@ -387,26 +389,28 @@ async function readCueTargetBlock(
   const sizeInfo = readEbmlVint(clusterHdr, idInfo.length);
   if (!sizeInfo) return null;
   const clusterDataStart = cue.clusterOffset + idInfo.length + sizeInfo.length;
+  if (!sizeInfo.unknown && clusterDataStart + sizeInfo.value > file.size) {
+    return null;
+  }
 
   if (cue.relativePosition !== null) {
-    // 嚴格限制 CueRelativePosition 必須落在該 Cluster 的實際範圍內，不可越界讀到下一個 Cluster
+    // 嚴格限制 CueRelativePosition 必須落在該 Cluster 與檔案實際範圍內，不可越界讀到下一個 Cluster 或 EOF
     if (sizeInfo.unknown) {
       if (cue.relativePosition > 0) return null;
     } else if (cue.relativePosition >= sizeInfo.value) {
       return null;
     }
     const blockOffset = clusterDataStart + cue.relativePosition;
+    if (blockOffset >= file.size) return null;
+    const remainingInFile = file.size - blockOffset;
     const remainingInCluster = sizeInfo.unknown
-      ? undefined
-      : sizeInfo.value - cue.relativePosition;
+      ? remainingInFile
+      : Math.min(sizeInfo.value - cue.relativePosition, remainingInFile);
     const maxWindow =
       file.size <= SMALL_MKV_SCAN_LIMIT
         ? SMALL_MKV_SCAN_LIMIT
         : BLOCK_PREFIX_READ_BYTES;
-    const readBytes =
-      remainingInCluster !== undefined
-        ? Math.min(maxWindow, remainingInCluster)
-        : maxWindow;
+    const readBytes = Math.min(maxWindow, remainingInCluster);
     if (readBytes <= 0) return null;
     const blockBuf = await sliceBlobBytes(file, blockOffset, readBytes);
     return parseSingleBlockElement(
@@ -431,6 +435,7 @@ async function readCueTargetBlock(
       cue.clusterOffset,
       targetTrack,
       1,
+      file.size,
     )[0] ?? null
   );
 }
