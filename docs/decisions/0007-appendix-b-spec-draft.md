@@ -24,7 +24,7 @@
 
 | 位移 | 長度 | 欄位 | 說明 |
 | --- | --- | --- | --- |
-| 0 | 1 | `kind` | 1 = init segment，2 = 入口片段，3 = 續接片段 |
+| 0 | 1 | `kind` | 1 = init segment，2 = 入口片段，3 = 續接片段，4 = 送完標記（該軌在本 `(config, epoch)` 已送到結尾，`count = 1`、沒有資料） |
 | 1 | 1 | `track` | 0 = 影像，1 = 音訊 |
 | 2 | 2 | `count` | 這個片段共幾塊，1～256 |
 | 4 | 4 | `config` | |
@@ -54,7 +54,7 @@
 - **入口**：H.264 只用 IDR（open GOP 的非 IDR I 幀不當入口）。HEVC 的 IDR、BLA、CRA **一律要求後面沒有前導畫面**：依解碼順序在入口之後、PTS 早於入口的 sample 不存在（`IDR_N_LP`、`BLA_N_LP` 一定符合；`IDR_W_RADL`、帶 RADL／RASL 的 BLA 與 CRA 要實際檢查）。帶前導畫面的入口第一版不用：移除前導會讓同一段的 DTS 出現空隙（例如入口在 0 ms、移除 40／80 ms 兩個前導後下一格是 120 ms），超過 MSE 的兩格門檻時後續畫面會被丟掉。片源在 10 秒內找不到可用入口就停用第一、二層。T-141 可研究「移除前導後把空隙併入入口的 sample duration」等做法，用帶 RADL 的 IDR／BLA 與含兩個以上前導畫面的 CRA 跨片段驗收後再放寬。
 - **不用 `appendWindowStart` 裁影像**：MSE 丟棄視窗外的畫面時會設「需要隨機進入點」，連後面有效的畫面也一起丟掉（[MSE coded frame processing](https://w3c.github.io/media-source/#sourcebuffer-coded-frame-processing)）。所以入口一律選沒有前導畫面的（上一條），影像 SourceBuffer 的 `appendWindowStart` 一律為 0、`appendWindowEnd` 不設。
 - **續接片段**：GOP 內的後續 sample，不必以關鍵影格開頭。音訊片段約 1 秒，每個都可當入口。
-- **驗收**：T-141 用 VFR＋B 幀的 H.264、open GOP 的 HEVC（確認帶前導的 CRA 不被選為入口）、AAC priming、帶 edit list 的 MP4（含一支 `I → P → B` 順序、終點裁到 P 而必須降層的）、帶 RADL 的 HEVC IDR（確認不被選為入口）、音訊 edit 比影像早結束的 MP4（必須降層）、影音在容差內不同長度的片（自然播完、`duration` 不被截斷）、等長片的片尾跳轉（落點在 `end` 前 0.15 秒仍能開播）、有起始空白的音訊 edit 八種素材，在 Chrome 實際附加後檢查 `buffered` 連續、入口後沒有畫面被丟（`totalVideoFrames` 與預期相同）、首格時間與房主 `<video>` 相同、影音對齊誤差 < 1 格。
+- **驗收**：T-141 用 VFR＋B 幀的 H.264、open GOP 的 HEVC（確認帶前導的 CRA 不被選為入口）、AAC priming、帶 edit list 的 MP4（含一支 `I → P → B` 順序、終點裁到 P 而必須降層的）、帶 RADL 的 HEVC IDR（確認不被選為入口）、最後一段延遲到達（`endOfStream()` 不提早、跳轉不落在沒有資料的位置）、音訊 edit 比影像早結束的 MP4（必須降層）、影音在容差內不同長度的片（自然播完、`duration` 不被截斷）、等長片的片尾跳轉（落點在 `end` 前 0.15 秒仍能開播）、有起始空白的音訊 edit（含跳轉後音訊裁切仍有效）九種素材，在 Chrome 實際附加後檢查 `buffered` 連續、入口後沒有畫面被丟（`totalVideoFrames` 與預期相同）、首格時間與房主 `<video>` 相同、影音對齊誤差 < 1 格。
 
 ## §4 `pt-ctl` 訊息與握手
 
@@ -63,7 +63,7 @@
 1. 頻道開啟 → 收看端 5 秒內送 `hello`。
 2. 房主送 `probe { config, video, audio }` → 收看端 3 秒內回 `probeResult`。快速連換片時，只有最後一個 config 的回覆有效。
 3. 房主決定層級後送 `config`（欄位以下方訊息表為準；`live` 時沒有 MIME，收看端改用 `srcObject`）。收看端建立 MediaSource 與該 config 的 SourceBuffer。
-4. 房主送 `position`（欄位以下方訊息表為準；`entry` = 入口的輸出時間，附錄 C §3；`chunk` 見 §2）。收看端清掉該 config 的緩衝、套用 `appendWindowStart`，然後回 `ready { config, epoch, dataId }`。新 config 為 5 秒內，同一 config 的新 epoch 為 3 秒內。
+4. 房主送 `position`（欄位以下方訊息表為準；`entry` = 入口的輸出時間，附錄 C §3；`chunk` 見 §2）。收看端清掉該 config 的緩衝（`abort()` 會重設 append window），**重新套用兩軌的 append window**：影像 `[0, ∞)`、音訊 `[audioStart, audioEnd)`，然後回 `ready { config, epoch, dataId }`。新 config 為 5 秒內，同一 config 的新 epoch 為 3 秒內。
 5. 房主收到相符的 `ready` 才開始送這組資料，**每次都先送一份帶當次 `(config, epoch)` 的 init segment**，再送入口片段。重複附加相同的 init 對 MSE 無害；這樣跳轉或換頻道時，送到一半的舊 init 被丟棄也不會漏掉。
 6. 收看端建立 MediaSource、SourceBuffer 或附加失敗時送 `fail { config, reason }`；房主把這位收看者降一層。
 
@@ -91,7 +91,7 @@
 | `probe` | `{ config, video, audio }`（候選 MIME，含 codecs；無聲片沒有 `audio`） |
 | `config` | `{ config, tier: 'passthrough' \| 'transcode' \| 'live', reason?, video?, audio?, offset, start, end, audioStart?, audioEnd? }`；`start`／`end` 為影音共同有效區間（輸出時間，§3），只用於收看端的緩衝與片尾判定（附錄 C §1「片尾」），不設 `MediaSource.duration`；有音軌時另帶 `audioStart`／`audioEnd`（音訊有效區間，用來設音訊 append window），無音軌時省略 |
 | `position` | `{ config, epoch, dataId, entry, chunk }` |
-| `state` | `{ config, epoch, playing, mediaTime, hostClock, rate }` |
+| `state` | `{ config, epoch, playing, ended, mediaTime, hostClock, rate }`；`ended` = 房主 `<video>` 已自然播完 |
 
 - 房主只採用 `(config, epoch, dataId)` 都是目前值的 `status`；累計值的檢查見附錄 C §4。
 - **控制頻道背壓**：單則 ≤ 16 KiB。`pt-ctl` 的 `bufferedAmount` > 16 KiB 時，雙方都不再排入可替換的訊息（`status`、例行 `state`、`ping`），只保留最新一份待送；不可替換的訊息（`config`、`position`、`ready`、`fail`、`quota`）照送。

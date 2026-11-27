@@ -15,9 +15,9 @@
 - 錨點 = 最近一次 `requestVideoFrameCallback` 的 `{ p: expectedDisplayTime, m: mediaTime }`。
 - 「正在播放、不在 `seeking`／`waiting`、錨點距今 < 250 ms、錨點之後沒有 `pause`／`seeking`／`waiting`／`ratechange`／換來源」時，畫面時間 = `m + (performance.now() − p) / 1000 × playbackRate`；否則用 `currentTime`。上述事件發生時立即作廢錨點（`expectedDisplayTime` 是預估值，作廢規則避免在暫停或卡住時繼續外插）。
 
-**房主 `state { config, epoch, playing, mediaTime, hostClock, rate }`**：`playing` = 沒暫停、不在 `seeking`、`readyState ≥ 3`；`mediaTime` = 房主畫面時間；`hostClock` = 讀取當下的房主時鐘。`play`、`pause`、`playing`、`waiting`、`seeking`（送 `playing: false`）、`seeked`、`ratechange` 時送，另每秒一次。
+**房主 `state { config, epoch, playing, ended, mediaTime, hostClock, rate }`**：`playing` = 沒暫停、不在 `seeking`、`readyState ≥ 3`；`mediaTime` = 房主畫面時間；`hostClock` = 讀取當下的房主時鐘。`play`、`pause`、`playing`、`waiting`、`seeking`（送 `playing: false`）、`seeked`、`ratechange` 時送，另每秒一次。
 
-**片尾**：`end` = 影音共同終點（`config.end`，附錄 B §4）。收看端不用自己看到的緩衝判斷片尾（分不出「已送完」與「還沒到」）。從位置 P 起「需要的緩衝」= `[P, min(P + 門檻, end))`；`P ≥ end − 1 格` 時視為已到片尾，不需要緩衝。`end` 只用於緩衝判定，**不拿來設 `MediaSource.duration`**：房主送完最後一段後送 `state`，收看端附加完畢就呼叫 `endOfStream()`，片長由 MSE 依實際附加的資料決定（影音在容差內不等長時以較長軌為準，不會被延長後又截斷）。到達片尾時，收看端跟著房主的 `ended`（房主 `state.playing = false`、`mediaTime ≥ end`）停在最後一格，不做落後重新定位。
+**片尾**：`end` = 影音共同終點（`config.end`，附錄 B §4）。收看端不用自己看到的緩衝判斷片尾（分不出「已送完」與「還沒到」）。從位置 P 起「需要的緩衝」= `[P, min(P + 門檻, end))`，而且**位置 P 本身一定要有兩軌的資料**（只有影像或音訊已在該軌結尾時例外）。「已到片尾、不需要後續緩衝」的豁免，**只在本 `(config, epoch)` 已收到兩軌的送完標記（附錄 B §2 `kind = 4`）且全部附加完成後**才適用；最後一段延遲到達時，收看端照常留在 `waitData`。`end` 只用於緩衝判定，**不設 `MediaSource.duration`**：收到兩軌的送完標記、待附加佇列都清空、所有 SourceBuffer 都不在 `updating` 之後，才呼叫 `endOfStream()`，片長由 MSE 依實際附加的資料決定（影音在容差內不等長時以較長軌為準）。房主自然播完以 `state.ended = true` 表示，收看端停在最後一格，不做落後重新定位。
 
 **應在時間** `E = playing ? mediaTime + (本機時鐘 + offset − hostClock) / 1000 × rate : mediaTime`。
 
@@ -36,7 +36,7 @@
 | 3 | `seeking` | 自發跳轉尚未 `seeked`（未逾 5 秒） | 等待（房主暫停也一樣：進行中的跳轉先等完或逾時，再依房主狀態決定） |
 | 4 | `hostPaused` | `playing = false` | 暫停；`\|drift\| > 50 ms` 且 E 已緩衝時跳到 E；不排 hold |
 | 5 | `waitData` | 從 E 起需要的緩衝（門檻 0.5 秒，見 §1「片尾」）未齊，影音取較短者 | 暫停，回報 `buffering` |
-| 6 | `seek` | 落後 ≥ 300 ms 或超前 ≥ 3 秒；距上次跳轉 ≥ 1 秒 | 目標 `S = E + seekLead × R`；S 夾在 `end − 1 格` 以內；**從 S 起需要的緩衝（門檻 0.5 秒）都已齊**才跳，否則留在 `waitData`。`seekLead` = 上次 `seeking→seeked` 耗時 + 50 ms，夾在 0～1 秒 |
+| 6 | `seek` | 落後 ≥ 300 ms 或超前 ≥ 3 秒；距上次跳轉 ≥ 1 秒 | 目標 `S = E + seekLead × R`；S 夾在 `end − 1 格` 以內；**S 本身有兩軌資料、且從 S 起需要的緩衝（門檻 0.5 秒）都已齊**才跳（片尾豁免的條件同 §1），否則留在 `waitData`。`seekLead` = 上次 `seeking→seeked` 耗時 + 50 ms，夾在 0～1 秒 |
 | 7 | `hold` | 80 ms ≤ 超前 < 3 秒 | 暫停，排 `drift / R` 秒的計時器 |
 | 8 | `play` | 其他 | 若暫停中就 `play()`（這是從 `hold`、`waitData`、`hostPaused` 恢復的唯一路徑）；`playbackRate = R × (1 − sign(drift) × min(0.05, 0.5 × \|drift\|))`，`\|drift\| ≤ 15 ms` 時 `= R` |
 
