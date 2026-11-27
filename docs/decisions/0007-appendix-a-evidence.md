@@ -1,7 +1,7 @@
 # ADR 0007 附錄 A：實驗與查證（T-140）
 
 - 環境：Apple M1、macOS、Google Chrome 158（Playwright `channel: 'chrome'`、非 headless），2026-11-27。
-- 原型與量測腳本：`docs/decisions/assets/0007/`（用法見該資料夾 README）。
+- 原型與量測腳本：`docs/decisions/assets/0007/`（用法見該資料夾 README）；原始結果 JSON 在其中的 `results/`。
 - 限制：房主與兩位收看者在**同一台機器、同一個 Chrome**，走 loopback；收看端解碼也佔用同一顆 GPU。真實網路（RTT、掉包、跨境）、Windows／Android／iOS 收看端都沒有在本機驗證，列入 T-113。
 
 ## §1 原片直送（第一層）
@@ -17,7 +17,16 @@
 
 **流程**（`run-passthrough.mjs`）：房主開播 → 3 秒後收看者 A 加入 → 8 秒時 B 加入 → 量 20 秒穩態 → 房主往後跳 25 秒（4K 片為 13 秒）→ 10 秒後往回跳 15 秒 → 10 秒後暫停 3 秒、繼續 → 量 10 秒。參數：總預算 100 Mbps、平常 1.5 倍、追趕 6 倍、超前 20 秒、分塊 64 KiB。
 
-**同步誤差的算法**：雙方都用 `requestVideoFrameCallback` 記錄每張畫面的（`expectedDisplayTime`, `mediaTime`）。對收看端每張畫面，以房主最近一張畫面往後推算同一時刻的媒體時間，取差值。同一台機器的時鐘相同，所以這是畫面上的真實誤差（解析度受螢幕更新率限制，約 8～17 ms）。
+**同步誤差的算法**：雙方都用 `requestVideoFrameCallback` 記錄每張畫面的（`expectedDisplayTime`, `mediaTime`）。對收看端每張畫面，以房主最近一張畫面往後推算同一時刻的媒體時間，取差值。同一台機器的時鐘相同，所以這是畫面上的誤差（解析度受螢幕更新率限制，約 8～17 ms）。
+
+**量測的界線**（GPT 審查指出）：
+
+- 只統計有回呼的畫面；與參考畫面相隔超過 100 ms 的樣本略過，所以**沒有畫面的時段（卡住）不在 p95 內**。
+- 「穩態」從 B 加入後 4 秒開始量 20 秒；「事件後」從暫停恢復後 8 秒才開始量 10 秒，不含恢復過程。
+- 「跳轉恢復」是從收看端收到新 epoch 起，到它自己估計的誤差第一次 < 100 ms 的時間。
+- `expectedDisplayTime` 是瀏覽器的預估值，不是實際上螢幕的時間。
+- 測試片都是固定幀率、封閉 GOP（x264 預設、VideoToolbox）。原型封裝器在 VFR＋open GOP 會算錯 DTS（附錄 B §3），**表中數字不代表那類片源**。
+- 原始 JSON 在 `docs/decisions/assets/0007/results/`。
 
 **結果**（最終版原型，`final7`）：
 
@@ -28,19 +37,20 @@
 | 4K Main 10 30 Mbps | 2.41／1.97 秒 | 33／50；33／50 ms | 18 ms | 6.4／4.9 秒 | 1.9／1.9 秒 | 35～50 ms | 3～4／1,400 格 |
 | 4K 實拍 12 Mbps | 1.20／0.71 秒 | 33／50；9／34 ms | 36 ms | 4.2／4.3 秒 | 3.2／3.2 秒 | 35～48 ms | 0～3／1,450 格 |
 
+- **GPT 複跑**（另生成 120 秒 1080P 8.24 Mbps CBR 樣片）：加入 0.72／0.45 秒；穩態 p50／p95 18.5／49.8、17.4／48.3 ms；收看者之間 p95 25.1 ms；往後、往回跳後 < 100 ms 為 0.97～1.13 秒。與上表同一量級。
 - 兩位收看者都沒有遇到 `QuotaExceededError`；收看端緩衝維持在「已播 10 秒＋超前約 20 秒」。
 - 穩態誤差約有 −17～−33 ms 的固定偏差（收看端稍慢），可在正式版以初次對時校正。
 - 4K Main 10 往後跳較慢：10-bit 4K 跳轉需要較長的解碼時間，第一次跳轉的提前量估得不夠，要多跳一兩次。
 
 **原型踩到、已寫進 ADR 規則的問題**（每一項都有修正前後的量測紀錄）：
 
-1. 收看端第一次換 epoch 時把還在佇列的 init segment 一起清掉 → 一位收看者永遠收不到畫面。改為 init segment 一律保留（附錄 B §3）。
+1. 收看端第一次換 epoch 時把還在佇列的 init segment 一起清掉 → 一位收看者永遠收不到畫面。改為 init segment 依 config 保留（附錄 B §2）。
 2. 爆量送出 → SCTP 停滯 2～30 秒以上（§2）。改為配速。
 3. 用收看者回報的 `currentTime` 算超前量 → 跳轉後誤用慢速配速，加入要 11 秒。改用房主媒體時間後降到 1.3～2.0 秒。
 4. 跳轉後舊位置 `readyState` 停在 2，判斷順序錯誤 → 收看端永遠不跳轉。
-5. 清緩衝以 `currentTime` 為準 → 往回跳後把剛收到的資料清掉（ADR D2 第 6 點）。
-6. 只從前一個關鍵影格開始送 → 4K 40 Mbps 加入 17 秒、跳轉 >10 秒。改為 ADR D3 的估算後 1.8 秒、約 3 秒。
-7. 只用 `currentTime` 對時 → 20～50 ms 固定偏差；改用已顯示畫面時間。只用 ±5% 調速 → 跳轉後要 7～15 秒才收斂；改為 ADR D2 的追趕表後 1～6 秒。
+5. 清緩衝以 `currentTime` 為準 → 往回跳後把剛收到的資料清掉（附錄 C §4）。
+6. 只從前一個關鍵影格開始送 → 4K 40 Mbps 加入 17 秒、跳轉 >10 秒。改為入口估算後 1.8 秒、約 3 秒（原型用的是舊公式，正式公式見附錄 C §3）。
+7. 只用 `currentTime` 對時 → 20～50 ms 固定偏差；改用已顯示畫面時間。只用 ±5% 調速 → 跳轉後要 7～15 秒才收斂；改為附錄 C §2 的追趕表後 1～6 秒（原型沒有實作可取消的狀態機）。
 
 **格式涵蓋**（`run-formats.mjs`，拆檔 → fMP4 → MSE，播 1.5 秒）：`e2e/fixtures/` 的 `h264-aac.mp4`、`h264-silent.mp4`、`hevc-aac.mp4`、`hevc-hev1-aac.mp4`、`hevc-aac.mkv`、`hevc-main10-aac.mp4`、`hevc-main10-aac.mkv`、`h264-2160p-aac.mp4` 全部可以附加並播放、畫面前進。mediabunny 對這些 HEVC 片一律回報 `hev1.*` 的 codec 字串（包括 `hvc1` 片源）。另做的 `h264-ac3-20s.mkv`：影像可以，AC-3 音訊 MSE 與 WebCodecs 都不支援。
 
@@ -60,7 +70,9 @@
 | 配速 50 Mbps | 3 | 50 | 0～23 Mbps（停滯） |
 | 配速 100 Mbps | 1／2 | 100／78＋94 | 99／1 Mbps |
 
-結論：分塊大小與高水位都救不了爆量；**配速**才有效。同一台機器（兩端都在本機）總量超過約 150 Mbps 會停滯，真實網路的上限不同，要在 T-113 量。原型在 4K 40 Mbps 追趕時曾用 6 倍（每人 240 Mbps），兩位收看者都停滯超過 40 秒，加上總預算後才正常。
+結論：分塊大小與高水位都救不了爆量；**配速**能讓短窗吞吐穩定。同一台機器總量超過約 150 Mbps 時本次量到停滯；原型在 4K 40 Mbps 追趕時曾用 6 倍（每人 240 Mbps），兩位收看者都停滯超過 40 秒，加上總預算後才正常。
+
+GPT 複跑：配速 50 Mbps × 2 最低窗 48.1～49.1 Mbps（一致）；不配速 64 KiB × 2 平均 119／94 Mbps、最低窗 1.0～3.1 Mbps，**四次都沒有低於 0.5 Mbps 的窗**。所以「爆量會長時間停滯」與「約 150 Mbps 臨界」只在本次重現，成因（掉包後重傳逾時，或其他）未確認，列為待驗。另外 `bufferedAmount` 不降只代表 SCTP 沒送出，不能區分是網路、對端接收或對端 JS 處理慢；正式版要把房主 `bufferedAmount`、收看端收到速率、收看端附加速率分開記錄（附錄 C §4）。
 
 ## §3 第二層轉碼與 WebRTC 對照（`encoder-lab.html`，與 Windows 實驗頁是同一頁）
 
@@ -73,7 +85,7 @@ WebCodecs：mediabunny 取封包 → `VideoDecoder` → `OffscreenCanvas` 縮到
 | 4K Main 10 30 Mbps | 8 Mbps | 6.8 倍，7.78，20.9 | 4.5 倍，7.90，19.9 | 6.6 倍，7.97，19.7 | 8.00，19.8 | 7.73，18.4 |
 | 1080P 8 Mbps（不縮放） | 8 Mbps | 8.1 倍，8.05，25.1 | 4.6 倍，7.95，24.1 | 6.8 倍，7.98，25.2 | 7.89，25.8 | 7.88，26.5 |
 
-- 所有 WebCodecs 設定的輸出時間戳都依序，**沒有 B 幀**。
+- 所有 WebCodecs 設定的輸出時間戳都依序：**未觀察到輸出重排**（即沒有 B 幀的跡象；這只能說明本次輸出，不是規格保證）。`hardwareAcceleration: 'prefer-hardware'` 只是偏好，WebCodecs 不回報實際用的是不是硬體。
 - WebRTC 的 `encoderImplementation` 只在頁面「正在擷取」時才提供：權限串流拿到後立刻停掉就讀不到，要保持開啟到測完（實驗頁已處理）。
 - Main 10 片源直接 `captureStream()` 交給 WebRTC 會讓分頁崩潰（BUG-004，實驗頁第一次跑就崩潰）；實驗頁比照房主端先經畫布轉成 8-bit。
 - WebRTC 從 0 爬到 8 Mbps 約 14 秒（只有影像的 loopback）。
@@ -95,7 +107,7 @@ WebCodecs：mediabunny 取封包 → `VideoDecoder` → `OffscreenCanvas` 縮到
 補充：
 
 - iOS ManagedMediaSource 必須設 `video.disableRemotePlayback = true` 或提供 AirPlay 替代來源，否則 `sourceopen` 不會觸發；瀏覽器可隨時清掉緩衝，要依 `startstreaming`／`endstreaming` 決定何時送資料（MDN）。
-- Safari 對 `hev1` 的支援沒有官方文件；StaZhu 的整理指出 Apple 播放器不收 `hev1`，所以 ADR D5 一律優先寫 `hvc1`。
+- Safari 對 `hev1` 的支援沒有官方文件；StaZhu 的整理指出 Apple 播放器不收 `hev1`，所以 Safari 收看者遇到 `hev1` 片源走第二或第三層（附錄 B §5）。
 - Chrome 的 MSE 記憶體上限：影像 150 MiB、音訊 12 MiB（`demuxer_memory_limit.h`），Android 低記憶體裝置更低（影像 15～30 MiB）。Android 收看端的超前量要依 `QuotaExceededError` 自動縮小。
 - Chrome 的 MediaSource 在任一 SourceBuffer 收到 init segment 後就不能再加新的 SourceBuffer（本機錯誤訊息：「reached the limit of SourceBuffer objects」）。影音兩個 SourceBuffer 要先一起建立。
 - `file://` 頁面在 Chrome 是安全環境（`isSecureContext === true`），WebCodecs、WebRTC、從 CDN 載入 ES module 都可以用（本機實測）。
@@ -130,7 +142,7 @@ W3C 規格對 `latencyMode: 'quality'` 只說「SHOULD optimize for encoding qua
 - 支援：「A publisher creates a named channel. Multiple subscribers can receive its messages, and one selected subscriber can reply on that publisher channel.」發布用 `location: "local"`、訂閱用 `location: "remote"`＋發布者的 `sessionId`，瀏覽器端 `createDataChannel(name, { negotiated: true, id })`。
 - 「DataChannels use reliable, ordered delivery by default」，可設 `maxRetransmits`／`maxPacketLifeTime`。「Asymmetric reliability between a publisher and its subscribers is outside the supported contract.」
 - 沒有寫訊息大小、吞吐上限；計費頁只寫「$0.05 per GB of egress」、每月 1,000 GB 免費，沒提 DataChannel。
-- 加 DataChannel 是否要重新協商、能否和媒體軌共用同一條連線，文件沒說清楚。
+- 加 DataChannel 是否要重新協商、能否和媒體軌共用同一條連線，文件沒說清楚。GPT 另讀 [DataChannels（features 版）](https://developers.cloudflare.com/realtime/sfu/features/datachannels/)：已接通的 DataChannel transport 可以再新增應用頻道；一個發布頻道只允許一位訂閱者回傳；`waitForAck` 的 readiness gate 不提供重播。
 - 來源：[DataChannels](https://developers.cloudflare.com/realtime/sfu/datachannels/)、[Connection API](https://developers.cloudflare.com/realtime/sfu/https-api/)、[Limits](https://developers.cloudflare.com/realtime/sfu/limits/)、[Pricing](https://developers.cloudflare.com/realtime/sfu/pricing/)。
 
 ## §7 Windows 實驗頁（使用者要做的事）
