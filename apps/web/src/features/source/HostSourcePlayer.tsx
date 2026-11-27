@@ -14,6 +14,8 @@ const CHECK_MESSAGES: Record<SourceCheckCode, string> = {
   TIMEOUT: "影片載入或試播逾時，請重新選檔。",
   VIDEO_UNDECODABLE:
     "影像無法解碼。瀏覽器可能不支援此 HEVC 影片或容器，請試用 H.264 MP4。",
+  HEVC_PROFILE_MISMATCH:
+    "這支影片的 HEVC 標頭有誤（標成 Main 10／10-bit，實際畫面是 8-bit），瀏覽器硬體解碼器拒絕這種矛盾設定。",
   NO_AUDIO: "音訊無法解碼或影片沒有音軌。要繼續播放無聲影片嗎？",
   CAPTURE_UNSUPPORTED: "此瀏覽器無法擷取影片，請使用桌面版 Chrome 或 Edge。",
   CAPTURE_FAILED:
@@ -216,13 +218,18 @@ export function HostSourcePlayer({
               data-testid="source-conversion"
               data-converted={String(check.converted)}
               data-frame-format={check.frameFormat ?? ""}
+              data-header-fixed={String(check.headerFixed)}
               className="mt-1.5 text-xs text-zinc-500"
             >
-              {check.converted
-                ? `10-bit 片源，送出前轉為 8-bit（${check.frameFormat ?? "opaque"}）`
-                : check.frameFormat
-                  ? `直接送出（${check.frameFormat}）`
-                  : "直接送出"}
+              {check.headerFixed
+                ? check.converted
+                  ? `已自動修正 HEVC 標頭（Main 10 → Main，8-bit）；送出前轉為 8-bit（${check.frameFormat ?? "opaque"}）`
+                  : `已自動修正 HEVC 標頭（Main 10 → Main，8-bit${check.frameFormat ? `，${check.frameFormat}` : ""}）`
+                : check.converted
+                  ? `10-bit 片源，送出前轉為 8-bit（${check.frameFormat ?? "opaque"}）`
+                  : check.frameFormat
+                    ? `直接送出（${check.frameFormat}）`
+                    : "直接送出"}
             </span>
           )}
           {check.status === "warning" && (
@@ -236,7 +243,7 @@ export function HostSourcePlayer({
           )}
         </div>
         {check.status === "error" && check.diagnostic && (
-          <SourceDiagnostics diagnostic={check.diagnostic} />
+          <SourceDiagnostics diagnostic={check.diagnostic} code={check.code} />
         )}
         {controlError && (
           <p role="alert" className="mt-1.5 text-xs text-red-600">

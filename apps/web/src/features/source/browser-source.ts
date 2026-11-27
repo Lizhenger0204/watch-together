@@ -1,3 +1,4 @@
+import type { HevcProfileDiagnostic } from "./hevc-header";
 import {
   SourceCheckError,
   type SourceCheckCode,
@@ -15,6 +16,7 @@ function decodedFrames(video: HTMLVideoElement) {
 export interface SourceDiagnosticExtra {
   frameFormat?: string | null;
   converted?: boolean;
+  hevcProfile?: HevcProfileDiagnostic | null;
 }
 
 export interface PreparedCapture {
@@ -58,6 +60,7 @@ export function sourceFailure(
     audioTracks: stream?.getAudioTracks().length ?? null,
     frameFormat: extra?.frameFormat ?? null,
     converted: extra?.converted ?? false,
+    hevcProfile: extra?.hevcProfile ?? null,
   });
 }
 
